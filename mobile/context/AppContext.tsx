@@ -360,7 +360,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             console.log("Fetching call history for:", userId);
             // Simple OR query
             const { data, error } = await supabase
-                .from('calls')
+                .from('call_logs')
                 .select('*')
                 .or(`caller_id.eq.${userId},callee_id.eq.${userId}`)
                 .order('created_at', { ascending: false })
@@ -398,10 +398,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     useEffect(() => {
         if (!currentUser) return;
 
-        // Listen for new CALLS (Persistence)
+        // Listen for new CALL_LOGS (Persistence)
         const callSub = supabase
-            .channel('public:calls')
-            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'calls' }, (payload) => {
+            .channel('public:call_logs')
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'call_logs' }, (payload) => {
                 const newLog = payload.new as any;
                 if (newLog.caller_id === currentUser.id || newLog.callee_id === currentUser.id) {
                     const isOutgoing = newLog.caller_id === currentUser.id;
@@ -777,7 +777,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 const newLog: CallLog = { ...call, id: tempId };
                 setCalls(prev => [newLog, ...prev]);
 
-                const { error } = await supabase.from('calls').insert({
+                const { error } = await supabase.from('call_logs').insert({
                     caller_id: callerId,
                     callee_id: calleeId,
                     call_type: call.callType,
