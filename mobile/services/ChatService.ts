@@ -50,8 +50,8 @@ class ChatService {
         await this.fetchMissedMessages();
 
         // Subscribe to database changes (Realtime)
-        // We listen for INSERTs (new messages) and UPDATEs (status/reactions)
-        const channelName = `chat_${[userId, partnerId].sort().join('_')}`;
+        // We simplified this to remove filters that were causing "mismatch" errors on some Postgres setups
+        const channelName = `chat_global_${userId}`; // Use a more stable channel name
         this.channel = supabase.channel(channelName);
 
         this.channel
@@ -61,15 +61,14 @@ class ChatService {
                     event: 'INSERT',
                     schema: 'public',
                     table: 'messages',
-                    filter: `receiver=eq.${this.userId}`, // Listen for messages sent TO us
                 },
                 (payload) => {
                     const newMessage = this.mapDbMessageToChatMessage(payload.new);
-                    console.log('Received new message from DB:', newMessage);
-
-                    if (newMessage.sender_id === this.partnerId) {
+                    
+                    // Filter messages sent TO us by the CURRENT partner
+                    if (newMessage.receiver_id === this.userId && newMessage.sender_id === this.partnerId) {
+                        console.log('[ChatService] Received new message for current chat:', newMessage);
                         this.onNewMessage?.(newMessage);
-                        // Mark as delivered immediately
                         this.updateMessageStatus(newMessage.id, 'delivered');
                     }
                 }
@@ -80,11 +79,11 @@ class ChatService {
                     event: 'UPDATE',
                     schema: 'public',
                     table: 'messages',
-                    filter: `sender=eq.${this.userId}`, // Listen for updates to messages WE sent (e.g. read receipts)
                 },
                 (payload) => {
                     const updated = payload.new;
-                    if (updated.status) {
+                    // Filter updates for messages WE sent
+                    if (updated.sender === this.userId && updated.status) {
                         this.onStatusUpdate?.(updated.id.toString(), updated.status);
                     }
                 }
@@ -92,9 +91,9 @@ class ChatService {
             .subscribe((status, err) => {
                 if (status === 'SUBSCRIBED') {
                     this.isInitialized = true;
-                    console.log('ChatService connected to DB for user:', userId);
+                    console.log('[ChatService] Subscribed to Realtime messages');
                 }
-                if (err) console.error('ChatService subscription error:', err);
+                if (err) console.warn('[ChatService] Realtime subscription warning:', err);
             });
     }
 

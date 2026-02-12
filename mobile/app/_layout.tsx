@@ -5,6 +5,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AppProvider, useApp } from '../context/AppContext';
 import { View } from 'react-native';
 import PipOverlay from '../components/PipOverlay';
@@ -61,11 +62,13 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <AppProvider>
-      <ThemeProvider value={DarkTheme}>
-        <RootContent />
-        <StatusBar style="light" />
-      </ThemeProvider>
-    </AppProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <AppProvider>
+        <ThemeProvider value={DarkTheme}>
+          <RootContent />
+          <StatusBar style="light" />
+        </ThemeProvider>
+      </AppProvider>
+    </GestureHandlerRootView>
   );
 }
