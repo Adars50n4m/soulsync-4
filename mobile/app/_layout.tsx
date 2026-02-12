@@ -1,103 +1,80 @@
-import { DarkTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack, useRouter, useSegments, useRootNavigationState } from 'expo-router';
+import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { useFonts } from 'expo-font';
+import { Stack, useRouter, useSegments } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { useEffect, useState } from 'react';
-
+import { useEffect } from 'react';
+import 'react-native-reanimated';
 import { AppProvider, useApp } from '../context/AppContext';
+import { View } from 'react-native';
 import PipOverlay from '../components/PipOverlay';
+import IncomingCallModal from '../components/IncomingCallModal';
+import '../global.css';
 
-export const unstable_settings = {
-  anchor: '(tabs)',
-};
+// Prevent the splash screen from auto-hiding before asset loading is complete.
+SplashScreen.preventAutoHideAsync();
 
-import { IncomingCallModal } from '../components/IncomingCallModal';
-
-function NavigationGuard({ children }: { children: React.ReactNode }) {
-  const { currentUser, activeCall, endCall, acceptCall, isReady } = useApp();
-  const segments = useSegments();
+function RootContent() {
+  const { activeCall } = useApp();
   const router = useRouter();
-  const navigationState = useRootNavigationState();
-  const [showIncomingCall, setShowIncomingCall] = useState(false);
+  const segments = useSegments();
+
+  // --- TRAFFIC CONTROLLER FOR CALLS ---
   useEffect(() => {
-    if (activeCall && !activeCall.isAccepted && activeCall.isIncoming) {
-      setShowIncomingCall(true);
-    } else {
-      setShowIncomingCall(false);
+    if (!activeCall) return;
+
+    // Check where we are
+    const inCallScreen = segments[0] === 'call';
+
+    // 1. If call is accepted and NOT minimized, force navigation to call screen
+    if (activeCall.isAccepted && !activeCall.isMinimized && !inCallScreen) {
+      console.log('Call active & accepted - Navigating to Call Screen');
+      router.push('/call');
     }
-  }, [activeCall]);
-
-  const handleAccept = () => {
-    setShowIncomingCall(false);
-    acceptCall(); // This should navigate to /call
-  };
-
-  const handleDecline = () => {
-    setShowIncomingCall(false);
-    endCall();
-  };
-
-  // Redirect to login if not authenticated
-  useEffect(() => {
-    if (!isReady || !navigationState?.key) return;
-
-    if (!currentUser && segments[0] !== 'login') {
-      router.replace('/login');
-    }
-  }, [isReady, currentUser, segments, navigationState]);
-
-  // Centralized call navigation: works from any screen
-  useEffect(() => {
-    if (!activeCall || activeCall.isMinimized) return;
-
-    // Check if already on call screen to prevent loop/refresh
-    const isOnCallScreen = (segments as string[]).includes('call');
-    if (isOnCallScreen) return;
-
-    // For incoming calls, navigate only after user accepts.
-    if (activeCall.isIncoming && !activeCall.isAccepted) return;
-
-    router.push('/call');
-  }, [activeCall?.callId, activeCall?.isMinimized, segments]);
+    
+    // 2. If call is incoming (ringing), we don't navigate yet, the Modal handles it.
+  }, [activeCall?.isAccepted, activeCall?.isMinimized, segments]);
 
   return (
-    <>
-      {children}
-      <IncomingCallModal
-        visible={showIncomingCall}
-        callerName={activeCall?.callerName || "Unknown"}
-        callerAvatar={activeCall?.callerAvatar}
-        callType={activeCall?.type || 'audio'}
-        onAccept={handleAccept}
-        onDecline={handleDecline}
-      />
-    </>
+    <View style={{ flex: 1 }}>
+       <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="call" options={{ 
+          presentation: 'fullScreenModal',
+          animation: 'fade',
+          gestureEnabled: false 
+        }} />
+        <Stack.Screen name="+not-found" />
+      </Stack>
+
+      {/* Global Overlays */}
+      <IncomingCallModal />
+      <PipOverlay />
+    </View>
   );
 }
 
 export default function RootLayout() {
+  const [loaded] = useFonts({
+    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
+  });
+
+  useEffect(() => {
+    if (loaded) {
+      SplashScreen.hideAsync();
+    }
+  }, [loaded]);
+
+  if (!loaded) {
+    return null;
+  }
+
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <AppProvider>
-        <ThemeProvider value={DarkTheme}>
-          <NavigationGuard>
-            <Stack screenOptions={{ headerShown: false }}>
-              <Stack.Screen name="login" options={{ headerShown: false }} />
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              <Stack.Screen name="call" options={{ headerShown: false, presentation: 'fullScreenModal' }} />
-              <Stack.Screen name="chat/[id]" options={{ headerShown: false }} />
-              <Stack.Screen name="theme" options={{ headerShown: false }} />
-              <Stack.Screen name="profile" options={{ headerShown: false }} />
-              <Stack.Screen name="profile/[id]" options={{ headerShown: false }} />
-              <Stack.Screen name="add-status" options={{ headerShown: false }} />
-              <Stack.Screen name="view-status" options={{ headerShown: false }} />
-              <Stack.Screen name="music" options={{ headerShown: false, presentation: 'transparentModal', contentStyle: { backgroundColor: 'transparent' } }} />
-            </Stack>
-          </NavigationGuard>
-          <PipOverlay />
-          <StatusBar style="light" />
-        </ThemeProvider>
-      </AppProvider>
-    </GestureHandlerRootView>
+    <AppProvider>
+      <ThemeProvider value={DarkTheme}>
+        <RootContent />
+        <StatusBar style="light" />
+      </ThemeProvider>
+    </AppProvider>
   );
 }
