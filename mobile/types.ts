@@ -1,0 +1,87 @@
+
+export interface Message {
+    id: string;
+    sender: 'me' | 'them';
+    text: string;
+    timestamp: string;
+    status?: 'sent' | 'delivered' | 'read';
+    reactions?: string[];
+    media?: {
+        type: 'image' | 'video' | 'file' | 'status_reply';
+        url: string;
+        name?: string;
+        caption?: string;
+    };
+}
+
+export interface Contact {
+    id: string;
+    name: string;
+    avatar: string;
+    status: 'online' | 'offline' | 'away' | 'busy';
+    lastSeen?: string;
+    bio?: string;
+    lastMessage?: string;
+    unreadCount?: number;
+}
+
+export interface StatusUpdate {
+    id: string;
+    userId: string; // 'me' for own status, or contact id
+    mediaUrl: string;
+    mediaType: 'image' | 'video';
+    caption?: string;
+    timestamp: string;
+    expiresAt: string; // ISO date string, 24h from creation
+    views: string[]; // Array of user IDs who viewed
+    // Legacy fields for backwards compatibility
+    contactName?: string;
+    avatar?: string;
+    time?: string;
+    previewImage?: string;
+}
+
+export interface CallLog {
+    id: string;
+    contactId: string;
+    contactName: string;
+    avatar: string;
+    time: string;
+    previewImage?: string;
+    type: 'incoming' | 'outgoing'; // type can just be direction now
+    status: 'completed' | 'missed' | 'rejected' | 'busy';
+    duration?: number; // in seconds
+    callType: 'audio' | 'video';
+}
+
+export interface ActiveCall {
+    callId?: string;
+    contactId: string;
+    type: 'audio' | 'video';
+    isMinimized: boolean;
+    startTime?: number;
+    isMuted: boolean;
+    isVideoOff?: boolean;
+    isSpeaker?: boolean;
+    isIncoming: boolean;
+    isAccepted: boolean;
+    isRinging?: boolean;
+    callerName?: string;
+    callerAvatar?: string;
+    roomId?: string; // Added for debugging and signaling
+}
+
+export interface Song {
+    id: string;
+    name: string;
+    artist: string;
+    image: string;
+    url: string;
+    duration?: number;
+}
+
+export interface MusicState {
+    currentSong: Song | null;
+    isPlaying: boolean;
+    favorites: Song[];
+}
