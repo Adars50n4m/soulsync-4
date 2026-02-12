@@ -47,11 +47,13 @@ export interface ActiveCall {
   contactId: string;
   type: 'audio' | 'video';
   isMinimized: boolean;
-  startTime: number;
+  startTime?: number;
   isMuted: boolean;
-  isSpeaker: boolean;
+  isSpeaker?: boolean;
+  isVideoOff?: boolean;
   isIncoming?: boolean;
   isAccepted?: boolean;
+  isRinging?: boolean;
   callerName?: string;
   callerAvatar?: string;
   roomId?: string;

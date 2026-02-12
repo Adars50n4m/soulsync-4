@@ -13,7 +13,7 @@ const VideoCallScreen: React.FC = () => {
 
   const contact = contacts.find(c => c.id === id) || contacts.find(c => c.id === activeCall?.contactId);
 
-  const roomId = contact ? `callRoom-${contact.id}` : '';
+  const roomId = activeCall?.roomId || (contact ? `callRoom-${contact.id}` : '');
 
   const { localStream, remoteStream, cleanup } = useWebRTC({
     roomId,

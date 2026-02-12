@@ -139,6 +139,7 @@ export const useWebRTC = ({ roomId, callType, isMuted, active }: UseWebRTCOption
                 // When a new peer joins our room, we are the initiator (create offer)
                 const handlePeerJoined = async () => {
                     if (!pcRef.current) return;
+                    console.log('[WebRTC] Peer joined (user-connected), creating offer...');
                     isInitiator.current = true;
                     try {
                         const offer = await createOffer(pcRef.current);
@@ -151,6 +152,7 @@ export const useWebRTC = ({ roomId, callType, isMuted, active }: UseWebRTCOption
                 // When we receive an offer, create an answer
                 const handleOffer = async ({ offer }: { offer: RTCSessionDescriptionInit }) => {
                     if (!pcRef.current) return;
+                    console.log('[WebRTC] Received offer, creating answer...');
                     try {
                         await setRemoteDescription(pcRef.current, offer);
                         // Flush queued ICE candidates
@@ -169,6 +171,7 @@ export const useWebRTC = ({ roomId, callType, isMuted, active }: UseWebRTCOption
                 // When we receive an answer, set remote description
                 const handleAnswer = async ({ answer }: { answer: RTCSessionDescriptionInit }) => {
                     if (!pcRef.current) return;
+                    console.log('[WebRTC] Received answer');
                     try {
                         await setRemoteDescription(pcRef.current, answer);
                         // Flush queued ICE candidates
@@ -199,19 +202,20 @@ export const useWebRTC = ({ roomId, callType, isMuted, active }: UseWebRTCOption
                     }
                 };
 
-                socket.on('peer-joined', handlePeerJoined);
+                socket.on('user-connected', handlePeerJoined);
                 socket.on('offer', handleOffer);
                 socket.on('answer', handleAnswer);
                 socket.on('ice-candidate', handleIceCandidate);
                 socket.on('call-ended', handleCallEnded);
 
                 // Join the room
+                console.log(`[WebRTC] Joining room: ${roomId}`);
                 socket.emit('join-call', roomId);
                 hasJoined.current = true;
 
                 // Cleanup function stored for unmount
                 return () => {
-                    socket.off('peer-joined', handlePeerJoined);
+                    socket.off('user-connected', handlePeerJoined);
                     socket.off('offer', handleOffer);
                     socket.off('answer', handleAnswer);
                     socket.off('ice-candidate', handleIceCandidate);
