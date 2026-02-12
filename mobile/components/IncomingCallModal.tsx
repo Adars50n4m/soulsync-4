@@ -10,33 +10,28 @@ import Animated, {
     Easing,
     withSequence
 } from 'react-native-reanimated';
+import { useApp } from '../context/AppContext';
 
 const { width } = Dimensions.get('window');
 
-interface IncomingCallModalProps {
-    visible: boolean;
-    callerName: string;
-    callerAvatar?: string;
-    callType: 'audio' | 'video';
-    onAccept: () => void;
-    onDecline: () => void;
-}
+/**
+ * IncomingCallModal - A smart global overlay for handling incoming calls.
+ * Now pulls its state directly from AppContext for seamless integration.
+ */
+export const IncomingCallModal = () => {
+    const { activeCall, contacts, acceptCall, endCall } = useApp();
+    const contact = contacts.find(c => c.id === activeCall?.contactId);
+    
+    // Determine visibility: Incoming and not yet accepted
+    const isVisible = !!activeCall && activeCall.isIncoming && !activeCall.isAccepted;
 
-export const IncomingCallModal = ({
-    visible,
-    callerName,
-    callerAvatar,
-    callType,
-    onAccept,
-    onDecline
-}: IncomingCallModalProps) => {
     const [timeLeft, setTimeLeft] = useState(60);
     const rippleScale = useSharedValue(1);
     const rippleOpacity = useSharedValue(0.8);
     const avatarScale = useSharedValue(1);
 
     useEffect(() => {
-        if (visible) {
+        if (isVisible) {
             setTimeLeft(60);
 
             // Ripple effect
@@ -65,7 +60,7 @@ export const IncomingCallModal = ({
                 setTimeLeft((prev) => {
                     if (prev <= 1) {
                         clearInterval(timer);
-                        onDecline(); // Auto-decline on timeout
+                        endCall(); // Auto-decline on timeout
                         return 0;
                     }
                     return prev - 1;
@@ -78,7 +73,7 @@ export const IncomingCallModal = ({
             rippleOpacity.value = 0.8;
             avatarScale.value = 1;
         }
-    }, [visible]);
+    }, [isVisible]);
 
     const rippleStyle = useAnimatedStyle(() => ({
         transform: [{ scale: rippleScale.value }],
@@ -89,15 +84,14 @@ export const IncomingCallModal = ({
         transform: [{ scale: avatarScale.value }],
     }));
 
-    if (!visible) return null;
+    if (!isVisible || !contact) return null;
 
     return (
-        <Modal visible={visible} transparent animationType="fade">
+        <Modal visible={isVisible} transparent animationType="fade">
             <View style={styles.container}>
                 <BlurView intensity={90} tint="systemThinMaterialDark" style={styles.blurContainer}>
-                    {/* Background Gradient or Image could go here */}
                     <Image
-                        source={{ uri: callerAvatar || 'https://via.placeholder.com/150' }}
+                        source={{ uri: contact.avatar || 'https://via.placeholder.com/150' }}
                         style={[StyleSheet.absoluteFillObject, { opacity: 0.3 }]}
                         blurRadius={50}
                     />
@@ -110,15 +104,15 @@ export const IncomingCallModal = ({
                                 <Animated.View style={[styles.rippleRing, rippleStyle, { animationDelay: '500ms' }]} />
                                 <Animated.View style={[styles.avatarContainer, avatarAnimatedStyle]}>
                                     <Image
-                                        source={{ uri: callerAvatar || 'https://via.placeholder.com/150' }}
+                                        source={{ uri: contact.avatar || 'https://via.placeholder.com/150' }}
                                         style={styles.avatar}
                                     />
                                 </Animated.View>
                             </View>
 
-                            <Text style={styles.name}>{callerName}</Text>
+                            <Text style={styles.name}>{contact.name}</Text>
                             <Text style={styles.status}>
-                                {callType === 'video' ? 'Incoming Video Call...' : 'Incoming Voice Call...'}
+                                {activeCall.type === 'video' ? 'Incoming Video Call...' : 'Incoming Voice Call...'}
                             </Text>
                         </View>
 
@@ -127,7 +121,7 @@ export const IncomingCallModal = ({
                             <View style={styles.actionColumn}>
                                 <Pressable
                                     style={[styles.actionButton, styles.declineButton]}
-                                    onPress={onDecline}
+                                    onPress={endCall}
                                 >
                                     <MaterialIcons name="call-end" size={32} color="white" />
                                 </Pressable>
@@ -137,9 +131,9 @@ export const IncomingCallModal = ({
                             <View style={styles.actionColumn}>
                                 <Pressable
                                     style={[styles.actionButton, styles.acceptButton]}
-                                    onPress={onAccept}
+                                    onPress={acceptCall}
                                 >
-                                    <MaterialIcons name={callType === 'video' ? "videocam" : "call"} size={32} color="white" />
+                                    <MaterialIcons name={activeCall.type === 'video' ? "videocam" : "call"} size={32} color="white" />
                                 </Pressable>
                                 <Text style={styles.actionText}>Accept</Text>
                             </View>

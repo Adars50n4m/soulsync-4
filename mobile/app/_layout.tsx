@@ -8,7 +8,7 @@ import 'react-native-reanimated';
 import { AppProvider, useApp } from '../context/AppContext';
 import { View } from 'react-native';
 import PipOverlay from '../components/PipOverlay';
-import IncomingCallModal from '../components/IncomingCallModal';
+import { IncomingCallModal } from '../components/IncomingCallModal';
 import '../global.css';
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
@@ -55,19 +55,10 @@ function RootContent() {
 }
 
 export default function RootLayout() {
-  const [loaded] = useFonts({
-    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
-  });
-
   useEffect(() => {
-    if (loaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [loaded]);
-
-  if (!loaded) {
-    return null;
-  }
+    // Hide splash screen immediately since we're not waiting for fonts
+    SplashScreen.hideAsync();
+  }, []);
 
   return (
     <AppProvider>
