@@ -7,6 +7,7 @@ import { chatService, ChatMessage } from '../services/ChatService';
 import { callService, CallSignal } from '../services/CallService';
 import { webRTCService } from '../services/WebRTCService';
 import { supabase } from '../config/supabase';
+import { AppState } from 'react-native';
 
 import { socket } from '../src/webrtc/socket';
 
@@ -41,13 +42,13 @@ const USERS: Record<string, User> = {
         id: 'shri',
         name: 'SHRI',
         avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=400&h=400&fit=crop',
-        bio: '✨ Connected through the stars',
+        bio: '笨ｨ Connected through the stars',
     },
     'hari': {
         id: 'hari',
         name: 'HARI',
         avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=400&h=400&fit=crop',
-        bio: '💫 Forever in sync',
+        bio: '牒 Forever in sync',
     },
 };
 
@@ -138,12 +139,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             try {
                 await Audio.setAudioModeAsync({
                     allowsRecordingIOS: false,
-                    playsInSilentModeIOS: true, // Enable audio in silent mode on iOS
-                    staysActiveInBackground: true, // Keep audio playing in background
-                    shouldDuckAndroid: true, // Lower volume of other apps
-                    playThroughEarpieceAndroid: false, // Use speaker by default
+                    playsInSilentModeIOS: true,
+                    staysActiveInBackground: true,
+                    shouldDuckAndroid: true,
+                    playThroughEarpieceAndroid: false,
                 });
-                console.log('Audio mode configured successfully');
             } catch (e) {
                 console.error('Failed to configure audio mode:', e);
             }
@@ -155,10 +155,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     useEffect(() => {
         if (!currentUser) return;
 
-        // Tell server I am online
         socket?.emit('user-online', currentUser.id);
 
-        // Listen for other users coming online
         socket?.on('user-connected', (userId: string) => {
             setOnlineUsers((prev) => [...prev, userId]);
             setContacts(prev => prev.map(c => 
@@ -166,7 +164,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ));
         });
 
-        // Listen for users going offline
         socket?.on('user-disconnected', (userId: string) => {
             setOnlineUsers((prev) => prev.filter(id => id !== userId));
             setContacts(prev => prev.map(c => 
@@ -174,10 +171,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ));
         });
 
-        // Receive full list of currently online users
         socket?.on('online-users-list', (users: string[]) => {
             setOnlineUsers(users);
-            // Update local contacts based on this list
             setContacts(prev => prev.map(c => ({
                 ...c,
                 status: users.includes(c.id) ? 'online' : 'offline'
@@ -195,18 +190,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     useEffect(() => {
         if (currentUser) {
             musicSyncService.initialize(currentUser.id, async (remoteState) => {
-                const currentSound = soundRef.current;
                 const currentMusicState = musicStateRef.current;
-
-                // Handle remote update
                 if (remoteState.currentSong?.id !== currentMusicState.currentSong?.id) {
-                    // Change song
                     if (remoteState.currentSong) {
-                        await playSong(remoteState.currentSong, false); // false = don't broadcast
+                        await playSong(remoteState.currentSong, false);
                     }
                 }
-
-                // Sync play/pause
                 if (remoteState.isPlaying !== currentMusicState.isPlaying) {
                     if (remoteState.isPlaying) {
                         await soundRef.current?.playAsync();
@@ -215,14 +204,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     }
                     setMusicState(prev => ({ ...prev, isPlaying: remoteState.isPlaying }));
                 }
-
-                // Sync position if difference is significant (> 2 seconds)
                 if (soundRef.current && remoteState.isPlaying) {
                     const status = await soundRef.current.getStatusAsync();
                     if (status.isLoaded) {
                         const currentPos = status.positionMillis;
-                        // remoteState.position is usually in ms from our service, but check if your service sends seconds
-                        // Assuming ms for consistency with seekTo
                         if (Math.abs(currentPos - remoteState.position) > 2000) {
                             await soundRef.current.setPositionAsync(remoteState.position);
                         }
@@ -231,7 +216,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
         }
         return () => musicSyncService.cleanup();
-    }, [currentUser]); // Removed sound dependency to prevent re-init loops
+    }, [currentUser]); 
 
     // Load session on mount
     useEffect(() => {
@@ -241,21 +226,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 console.log('[AppContext] Loading session for user:', userId);
                 
                 if (userId) {
-                    // 1. Load cached profile
                     const storedProfileStr = await AsyncStorage.getItem(`@profile_${userId}`);
                     let userObj = USERS[userId];
                     if (storedProfileStr) {
-                        try {
-                            userObj = JSON.parse(storedProfileStr);
-                        } catch (e) {
-                            console.warn('[AppContext] Failed to parse stored profile', e);
-                        }
+                        try { userObj = JSON.parse(storedProfileStr); } catch (e) {}
                     }
                     
                     const otherId = userId === 'shri' ? 'hari' : 'shri';
                     const other = USERS[otherId];
                     
-                    // Set basic state immediately for UI responsiveness
                     setCurrentUser(userObj);
                     setOtherUser(other);
                     
@@ -269,13 +248,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         unreadCount: 0,
                     }]);
 
-                    // Initial fetches
+                    // Fetch data
                     await Promise.all([
                         fetchProfileFromSupabase(userId),
                         fetchMessagesFromSupabase(userId, other.id),
                         fetchCallsFromSupabase(userId),
                         fetchOtherUserProfile(other.id),
-                        fetchStatusesFromSupabase()
+                        fetchStatusesFromSupabase(userId, other.id)
                     ]);
                 }
 
@@ -288,25 +267,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 if (storedFavorites) {
                     try {
                         setMusicState(prev => ({ ...prev, favorites: JSON.parse(storedFavorites) }));
-                    } catch (e) {
-                        console.warn('[AppContext] Failed to parse favorites', e);
-                    }
+                    } catch (e) {}
                 }
                 
-                console.log('[AppContext] Session load complete');
             } catch (e) {
                 console.warn('[AppContext] Failed to load session', e);
             } finally {
-                // Important: Ensure isReady is true even if user is not logged in
                 setIsReady(true);
             }
         };
         loadSession();
     }, []);
 
-    // Save data
     useEffect(() => { AsyncStorage.setItem('ss_messages', JSON.stringify(messages)); }, [messages]);
-    // useEffect(() => { AsyncStorage.setItem('ss_calls', JSON.stringify(calls)); }, [calls]); // Deprecated in favor of DB
     useEffect(() => { AsyncStorage.setItem('ss_theme', theme); }, [theme]);
     useEffect(() => {
         if (currentUser) {
@@ -319,13 +292,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return sound ? () => { sound.unloadAsync(); } : undefined;
     }, [sound]);
 
-    // Initialize Chat Service for real-time messaging
+    // Initialize Chat Service
     useEffect(() => {
         if (currentUser && otherUser) {
             chatService.initialize(
                 currentUser.id,
                 otherUser.id,
-                // On new message from partner
                 (incomingMessage: ChatMessage) => {
                     const newMsg: Message = {
                         id: incomingMessage.id,
@@ -339,16 +311,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         ...prev,
                         [otherUser.id]: [...(prev[otherUser.id] || []), newMsg]
                     }));
-                    // Update contact with new message
                     setContacts(prevContacts => prevContacts.map(c =>
                         c.id === otherUser.id ? {
                             ...c,
-                            lastMessage: incomingMessage.media ? '📎 Attachment' : incomingMessage.text,
+                            lastMessage: incomingMessage.media ? '梼 Attachment' : incomingMessage.text,
                             unreadCount: (c.unreadCount || 0) + 1
                         } : c
                     ));
                 },
-                // On message status update
                 (messageId: string, status: 'delivered' | 'read') => {
                     if (otherUser) {
                         setMessages(prev => {
@@ -367,47 +337,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return () => chatService.cleanup();
     }, [currentUser, otherUser]);
 
-    // Fetch Statuses from Supabase
-    const fetchStatusesFromSupabase = async () => {
+    // --- REFINED DATA FETCHING ---
+
+    const fetchStatusesFromSupabase = async (userId: string, otherId: string) => {
         try {
+            console.log("Fetching statuses...");
             const { data, error } = await supabase
                 .from('statuses')
                 .select('*')
-                .gt('expires_at', new Date().toISOString()) // Only active statuses
+                .gt('expires_at', new Date().toISOString())
                 .order('created_at', { ascending: false });
 
             if (data && !error) {
-                // Map DB columns to App types
-                setStatuses(data.map(mapStatusFromDB));
+                const mappedStatuses = data.map(mapStatusFromDB);
+                setStatuses(mappedStatuses);
             }
         } catch (e) { console.error('Fetch statuses error:', e); }
     };
 
-    // Real-time Subscriptions (Profiles & Calls)
+    const fetchCallsFromSupabase = async (userId: string) => {
+        try {
+            console.log("Fetching call history for:", userId);
+            // Simple OR query
+            const { data, error } = await supabase
+                .from('call_logs')
+                .select('*')
+                .or(`caller_id.eq.${userId},callee_id.eq.${userId}`)
+                .order('created_at', { ascending: false })
+                .limit(50);
+
+            if (error) {
+                console.error("Supabase Call Fetch Error:", error);
+                return;
+            }
+
+            if (data) {
+                const mappedCalls: CallLog[] = data.map((log: any) => {
+                    const isOutgoing = log.caller_id === userId;
+                    const partnerId = isOutgoing ? log.callee_id : log.caller_id;
+                    const partner = USERS[partnerId]; 
+
+                    return {
+                        id: log.id.toString(),
+                        contactId: partnerId,
+                        contactName: partner?.name || 'Unknown',
+                        avatar: partner?.avatar || '',
+                        type: isOutgoing ? 'outgoing' : 'incoming',
+                        status: log.status || 'completed',
+                        duration: log.duration,
+                        callType: log.call_type,
+                        time: new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    };
+                });
+                setCalls(mappedCalls);
+            }
+        } catch (e) { console.error('Fetch calls error:', e); }
+    };
+
+    // Real-time Subscriptions
     useEffect(() => {
         if (!currentUser) return;
 
-        // Subscribe to Profile Changes
-        const profileSub = supabase
-            .channel('public:profiles')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
-                const newData = payload.new as any;
-                // Update self
-                if (newData.id === currentUser.id) {
-                    const updated = { ...currentUser, name: newData.name, bio: newData.bio, avatar: newData.avatar_url };
-                    setCurrentUser(updated);
-                    AsyncStorage.setItem(`@profile_${currentUser.id}`, JSON.stringify(updated));
-                }
-                // Update partner
-                if (otherUser && newData.id === otherUser.id) {
-                    const updatedOther = { ...otherUser, name: newData.name, bio: newData.bio, avatar: newData.avatar_url };
-                    setOtherUser(updatedOther);
-                    setContacts(prev => prev.map(c => c.id === newData.id ? { ...c, name: newData.name, bio: newData.bio, avatar: newData.avatar_url } : c));
-                }
-            })
-            .subscribe();
-
-        // Subscribe to Call Logs
+        // Listen for new CALL LOGS (Persistence)
         const callSub = supabase
             .channel('public:call_logs')
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'call_logs' }, (payload) => {
@@ -415,35 +406,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 if (newLog.caller_id === currentUser.id || newLog.callee_id === currentUser.id) {
                     const isOutgoing = newLog.caller_id === currentUser.id;
                     const partnerId = isOutgoing ? newLog.callee_id : newLog.caller_id;
-                    // Resolve partner info
-                    const partner = partnerId === otherUser?.id ? otherUser : null;
+                    const partner = USERS[partnerId];
                     
-	                    const callItem: CallLog = {
-	                        id: newLog.id.toString(),
-	                        contactId: partnerId,
-	                        contactName: partner?.name || 'Unknown',
-	                        avatar: partner?.avatar || '',
-	                        type: isOutgoing ? 'outgoing' : 'incoming',
-                            status: newLog.status || 'completed',
-                            duration: newLog.duration,
-	                        callType: newLog.call_type,
-	                        time: new Date(newLog.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-	                    };
-                    
+                    const callItem: CallLog = {
+                        id: newLog.id.toString(),
+                        contactId: partnerId,
+                        contactName: partner?.name || 'Unknown',
+                        avatar: partner?.avatar || '',
+                        type: isOutgoing ? 'outgoing' : 'incoming',
+                        status: newLog.status || 'completed',
+                        duration: newLog.duration,
+                        callType: newLog.call_type,
+                        time: new Date(newLog.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    };
                     setCalls(prev => [callItem, ...prev]);
                 }
             })
             .subscribe();
 
-        // Subscribe to Status Changes
+        // Listen for new STATUSES (Sync)
         const statusSub = supabase
             .channel('public:statuses')
             .on('postgres_changes', { event: '*', schema: 'public', table: 'statuses' }, (payload) => {
                 if (payload.eventType === 'INSERT') {
                     const newStatus = payload.new;
-                    // Only add if not expired
+                    // Verify if active
                     if (new Date(newStatus.expires_at) > new Date()) {
-                        setStatuses(prev => [mapStatusFromDB(newStatus), ...prev]);
+                        // Check if we already have it (optimistic update prevention)
+                        setStatuses(prev => {
+                            if (prev.find(s => s.id === newStatus.id.toString())) return prev;
+                            return [mapStatusFromDB(newStatus), ...prev];
+                        });
                     }
                 } else if (payload.eventType === 'DELETE') {
                     setStatuses(prev => prev.filter(s => s.id !== payload.old.id.toString()));
@@ -452,17 +445,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             .subscribe();
 
         return () => {
-            supabase.removeChannel(profileSub);
             supabase.removeChannel(callSub);
             supabase.removeChannel(statusSub);
         };
     }, [currentUser?.id, otherUser]);
 
-    // Send message via ChatService (real-time)
+    // Helpers
+    const mapStatusFromDB = (dbStatus: any): StatusUpdate => ({
+        id: dbStatus.id.toString(),
+        userId: dbStatus.user_id,
+        contactName: dbStatus.user_name || 'Unknown', 
+        avatar: dbStatus.user_avatar || '',
+        mediaUrl: dbStatus.media_url,
+        mediaType: dbStatus.media_type,
+        caption: dbStatus.caption,
+        timestamp: new Date(dbStatus.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        expiresAt: dbStatus.expires_at,
+        views: dbStatus.views || []
+    });
+
     const sendChatMessage = useCallback(async (chatId: string, text: string, media?: Message['media']) => {
         const sentMessage = await chatService.sendMessage(text, media);
         if (sentMessage) {
-            // Add to local messages immediately
             const newMsg: Message = {
                 id: sentMessage.id,
                 sender: 'me',
@@ -475,18 +479,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 ...prev,
                 [chatId]: [...(prev[chatId] || []), newMsg]
             }));
-            // Update contact
             setContacts(prevContacts => prevContacts.map(c =>
                 c.id === chatId ? {
                     ...c,
-                    lastMessage: media ? '📎 Attachment' : text,
+                    lastMessage: media ? '梼 Attachment' : text,
                     unreadCount: 0
                 } : c
             ));
         }
     }, [messages]);
 
-    // Auth Functions
     const login = async (username: string, password: string): Promise<boolean> => {
         const normalizedUser = username.toLowerCase();
         const normalizedPass = password.toLowerCase();
@@ -499,8 +501,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setOtherUser(other);
             await AsyncStorage.setItem('ss_current_user', normalizedUser);
 
-            // Set contact (the other user)
-            console.log('Login success. Setting contacts for:', other.id);
             setContacts([{
                 id: other.id,
                 name: other.name,
@@ -511,35 +511,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 unreadCount: 0,
             }]);
 
-            // Fetch profile and messages from Supabase
+            // Force fetch immediately upon login
             fetchProfileFromSupabase(normalizedUser);
             fetchMessagesFromSupabase(normalizedUser, other.id);
             fetchCallsFromSupabase(normalizedUser);
             fetchOtherUserProfile(other.id);
-            fetchStatusesFromSupabase();
-
-            // Load user-specific favorites from Supabase
-            try {
-                const { data, error } = await supabase
-                    .from('favorites')
-                    .select('*')
-                    .eq('user_id', normalizedUser);
-
-                if (data && !error) {
-                    const dbFavorites: Song[] = data.map((item: any) => item.song_data);
-                    setMusicState(prev => ({ ...prev, favorites: dbFavorites }));
-                    AsyncStorage.setItem(`ss_favorites_${normalizedUser}`, JSON.stringify(dbFavorites));
-                }
-            } catch (e) {
-                console.warn('Failed to load favorites from DB', e);
-            }
+            fetchStatusesFromSupabase(normalizedUser, other.id);
 
             return true;
         }
         return false;
     };
 
-    const fetchProfileFromSupabase = async (userId: string) => {
+    // ... (Keep existing profile fetchers) ...
+     const fetchProfileFromSupabase = async (userId: string) => {
         try {
             const { data, error } = await supabase
                 .from('profiles')
@@ -555,7 +540,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     bio: data.bio || prev.bio
                 } : null);
             }
-        } catch (e) { /* profile might not exist yet */ }
+        } catch (e) { }
     };
 
     const fetchOtherUserProfile = async (userId: string) => {
@@ -592,64 +577,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 }));
                 setMessages(prev => ({ ...prev, [partnerId]: mappedMessages }));
             }
-        } catch (e) {
-            console.error('Failed to fetch history:', e);
-        }
+        } catch (e) {}
     };
-
-    const fetchCallsFromSupabase = async (userId: string) => {
-        try {
-            const { data, error } = await supabase
-                .from('call_logs')
-                .select('*')
-                .or(`caller_id.eq.${userId},callee_id.eq.${userId}`)
-                .order('created_at', { ascending: false })
-                .limit(50);
-
-	            if (data && !error) {
-	                const mappedCalls: CallLog[] = data.map((log: any) => {
-	                    const isOutgoing = log.caller_id === userId;
-	                    const partnerId = isOutgoing ? log.callee_id : log.caller_id;
-	                    return {
-	                        id: log.id.toString(),
-	                        contactId: partnerId,
-	                        contactName: 'Loading...',
-	                        avatar: '',
-	                        type: isOutgoing ? 'outgoing' : 'incoming',
-                            status: log.status || 'completed',
-                            duration: log.duration,
-	                        callType: log.call_type,
-	                        time: new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-	                    };
-	                });
-                
-	                // Resolve names if possible immediately, otherwise the effect/render will handle it if we map correctly
-	                setCalls(mappedCalls.map(c => {
-	                    const pid = c.contactId;
-	                    const partner = pid === otherUser?.id ? otherUser : null;
-	                    return {
-	                        ...c,
-	                        contactName: partner?.name || c.contactName,
-	                        avatar: partner?.avatar || c.avatar
-	                    };
-	                }));
-	            }
-        } catch (e) { console.error('Fetch calls error:', e); }
-    };
-
-    const mapStatusFromDB = (dbStatus: any): StatusUpdate => ({
-        id: dbStatus.id.toString(),
-        userId: dbStatus.user_id,
-        // Ideally we join with profiles table, but for now use stored or fallback
-        contactName: dbStatus.user_name || 'Unknown', 
-        avatar: dbStatus.user_avatar || '',
-        mediaUrl: dbStatus.media_url,
-        mediaType: dbStatus.media_type,
-        caption: dbStatus.caption,
-        timestamp: new Date(dbStatus.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        expiresAt: dbStatus.expires_at,
-        views: dbStatus.views || []
-    });
 
     const logout = async () => {
         setCurrentUser(null);
@@ -658,58 +587,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await AsyncStorage.removeItem('ss_current_user');
     };
 
-    // Music Functions
+    // ... (Keep Music Functions) ...
     const playSong = async (song: Song, broadcast = true) => {
         try {
-            // Validate song URL
-            if (!song.url || song.url.trim() === '') {
-                console.error('Invalid song URL:', song);
-                return;
-            }
-
-            // Unload previous sound
+            if (!song.url || song.url.trim() === '') return;
             if (soundRef.current) {
-                try {
-                    await soundRef.current.unloadAsync();
-                } catch (unloadError) {
-                    console.warn('Error unloading previous sound:', unloadError);
-                }
+                try { await soundRef.current.unloadAsync(); } catch (e) {}
             }
-
-            console.log('Loading song:', song.name, song.url);
-
-            // Create and load the sound with proper options
             const { sound: newSound, status } = await Audio.Sound.createAsync(
                 { uri: song.url },
                 { shouldPlay: true, volume: 1.0 },
                 (playbackStatus) => {
-                    // Handle playback status updates
-                    if (playbackStatus.isLoaded) {
-                        if (playbackStatus.didJustFinish) {
-                            setMusicState(prev => ({ ...prev, isPlaying: false }));
-                            if (broadcast) {
-                                musicSyncService.broadcastUpdate({
-                                    currentSong: song,
-                                    isPlaying: false,
-                                    updatedBy: currentUser?.id || ''
-                                });
-                            }
+                    if (playbackStatus.isLoaded && playbackStatus.didJustFinish) {
+                        setMusicState(prev => ({ ...prev, isPlaying: false }));
+                        if (broadcast) {
+                            musicSyncService.broadcastUpdate({
+                                currentSong: song,
+                                isPlaying: false,
+                                updatedBy: currentUser?.id || ''
+                            });
                         }
-                    } else if (playbackStatus.error) {
-                        console.error('Playback error:', playbackStatus.error);
                     }
                 }
             );
-
-            if (!status.isLoaded) {
-                console.error('Failed to load audio:', song.name);
-                return;
-            }
-
+            if (!status.isLoaded) return;
             setSound(newSound);
             setMusicState(prev => ({ ...prev, currentSong: song, isPlaying: true }));
-            console.log('Now playing:', song.name);
-
             if (broadcast) {
                 musicSyncService.broadcastUpdate({
                     currentSong: song,
@@ -719,8 +622,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 });
             }
         } catch (e) {
-            console.error('Audio play failed:', e);
-            // Reset state on error
             setMusicState(prev => ({ ...prev, isPlaying: false }));
         }
     };
@@ -729,17 +630,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!soundRef.current) return;
         const newIsPlaying = !musicState.isPlaying;
         let currentPos = 0;
-
         try {
             const status = await soundRef.current.getStatusAsync();
             if (status.isLoaded) currentPos = status.positionMillis;
         } catch (e) {}
 
-        if (newIsPlaying) {
-            await soundRef.current.playAsync();
-        } else {
-            await soundRef.current.pauseAsync();
-        }
+        if (newIsPlaying) await soundRef.current.playAsync();
+        else await soundRef.current.pauseAsync();
 
         setMusicState(prev => ({ ...prev, isPlaying: newIsPlaying }));
 
@@ -747,7 +644,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             musicSyncService.broadcastUpdate({
                 currentSong: musicState.currentSong,
                 isPlaying: newIsPlaying,
-                position: currentPos, // Broadcast position to sync up
+                position: currentPos,
                 updatedBy: currentUser?.id || ''
             });
         }
@@ -755,39 +652,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const toggleFavoriteSong = async (song: Song) => {
         if (!currentUser) return;
-
         setMusicState(prev => {
             const isFav = prev.favorites.some(s => s.id === song.id);
-            const newFavs = isFav
-                ? prev.favorites.filter(s => s.id !== song.id)
-                : [...prev.favorites, song];
-
-            // Sync with Supabase asynchronously
+            const newFavs = isFav ? prev.favorites.filter(s => s.id !== song.id) : [...prev.favorites, song];
             const syncDb = async () => {
                 try {
                     if (isFav) {
-                        // Remove
-                        await supabase
-                            .from('favorites')
-                            .delete()
-                            .eq('user_id', currentUser.id)
-                            .eq('song_id', song.id);
+                        await supabase.from('favorites').delete().eq('user_id', currentUser.id).eq('song_id', song.id);
                     } else {
-                        // Add
-                        await supabase
-                            .from('favorites')
-                            .insert({
-                                user_id: currentUser.id,
-                                song_id: song.id,
-                                song_data: song
-                            });
+                        await supabase.from('favorites').insert({ user_id: currentUser.id, song_id: song.id, song_data: song });
                     }
-                } catch (e) {
-                    console.error('Failed to sync favorite:', e);
-                }
+                } catch (e) {}
             };
             syncDb();
-
             return { ...prev, favorites: newFavs };
         });
     };
@@ -795,7 +672,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const seekTo = async (position: number) => {
         if (soundRef.current) {
             await soundRef.current.setPositionAsync(position);
-            // Broadcast new position
             if (musicState.currentSong) {
                 musicSyncService.broadcastUpdate({
                     currentSong: musicState.currentSong,
@@ -810,14 +686,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const getPlaybackPosition = async (): Promise<number> => {
         if (soundRef.current) {
             const status = await soundRef.current.getStatusAsync();
-            if (status.isLoaded) {
-                return status.positionMillis;
-            }
+            if (status.isLoaded) return status.positionMillis;
         }
         return 0;
     };
 
-    // Message Functions
+    // ... (Keep existing message helpers) ...
     const addMessage = (chatId: string, text: string, sender: 'me' | 'them', media?: Message['media']) => {
         const messageId = Date.now().toString();
         const newMessage: Message = {
@@ -828,20 +702,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             status: sender === 'me' ? 'sent' : undefined,
             media,
         };
-
         setMessages((prev) => {
             const newChatMessages = [...(prev[chatId] || []), newMessage];
-            const updatedMessages = { ...prev, [chatId]: newChatMessages };
-
             setContacts(prevContacts => prevContacts.map(c =>
                 c.id === chatId ? {
                     ...c,
-                    lastMessage: media ? (media.type === 'image' ? '📷 Photo' : `📎 ${media.name}`) : text,
+                    lastMessage: media ? (media.type === 'image' ? '胴 Photo' : `梼 ${media.name}`) : text,
                     unreadCount: sender === 'them' ? (c.unreadCount || 0) + 1 : 0
                 } : c
             ));
-
-            return updatedMessages;
+            return { ...prev, [chatId]: newChatMessages };
         });
         return messageId;
     };
@@ -849,20 +719,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updateMessage = (chatId: string, messageId: string, text: string) => {
         setMessages((prev) => {
             const chatMessages = prev[chatId] || [];
-            const updatedMessages = chatMessages.map((msg) =>
-                msg.id === messageId ? { ...msg, text } : msg
-            );
-            return { ...prev, [chatId]: updatedMessages };
+            return { ...prev, [chatId]: chatMessages.map((msg) => msg.id === messageId ? { ...msg, text } : msg) };
         });
     };
 
     const updateMessageStatus = (chatId: string, messageId: string, status: 'sent' | 'delivered' | 'read') => {
         setMessages((prev) => {
             const chatMessages = prev[chatId] || [];
-            const updatedMessages = chatMessages.map((msg) =>
-                msg.id === messageId ? { ...msg, status } : msg
-            );
-            return { ...prev, [chatId]: updatedMessages };
+            return { ...prev, [chatId]: chatMessages.map((msg) => msg.id === messageId ? { ...msg, status } : msg) };
         });
     };
 
@@ -871,14 +735,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const chatMessages = prev[chatId] || [];
             const filteredMessages = chatMessages.filter(m => m.id !== messageId);
             const lastMsg = filteredMessages[filteredMessages.length - 1];
-
             setContacts(prevContacts => prevContacts.map(c =>
                 c.id === chatId ? {
                     ...c,
-                    lastMessage: lastMsg ? (lastMsg.media ? '📎 Attachment' : lastMsg.text) : ''
+                    lastMessage: lastMsg ? (lastMsg.media ? '梼 Attachment' : lastMsg.text) : ''
                 } : c
             ));
-
             return { ...prev, [chatId]: filteredMessages };
         });
     };
@@ -886,38 +748,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const addReaction = (chatId: string, messageId: string, emoji: string) => {
         setMessages((prev) => {
             const chatMessages = prev[chatId] || [];
-            const updatedMessages = chatMessages.map((msg) => {
-                if (msg.id === messageId) {
-                    const reactions = msg.reactions || [];
-                    const newReactions = reactions.includes(emoji)
-                        ? reactions.filter((r) => r !== emoji)
-                        : [...reactions, emoji];
-                    return { ...msg, reactions: newReactions };
-                }
-                return msg;
-            });
-            return { ...prev, [chatId]: updatedMessages };
+            return {
+                ...prev,
+                [chatId]: chatMessages.map((msg) => {
+                    if (msg.id === messageId) {
+                        const reactions = msg.reactions || [];
+                        const newReactions = reactions.includes(emoji)
+                            ? reactions.filter((r) => r !== emoji)
+                            : [...reactions, emoji];
+                        return { ...msg, reactions: newReactions };
+                    }
+                    return msg;
+                })
+            };
         });
     };
 
-	    // Call Functions
-	    const addCall = async (call: Omit<CallLog, 'id'>) => {
-	        if (currentUser) {
-	            try {
-	                const isOutgoing = call.type === 'outgoing';
-	                const callerId = isOutgoing ? currentUser.id : call.contactId;
-	                const calleeId = isOutgoing ? call.contactId : currentUser.id;
-	                await supabase.from('call_logs').insert({
-	                    caller_id: callerId,
-	                    callee_id: calleeId,
-	                    call_type: call.callType,
-                        status: call.status || 'completed',
-                        duration: call.duration || 0,
-	                    created_at: new Date().toISOString()
-	                });
-	            } catch (e) { console.error('Failed to save call to DB:', e); }
-	        }
-	    };
+    // --- CALL LOGIC ---
+    const addCall = async (call: Omit<CallLog, 'id'>) => {
+        if (currentUser) {
+            try {
+                const isOutgoing = call.type === 'outgoing';
+                const callerId = isOutgoing ? currentUser.id : call.contactId;
+                const calleeId = isOutgoing ? call.contactId : currentUser.id;
+                
+                // Add to Local state immediately for speed
+                const tempId = Date.now().toString();
+                const newLog: CallLog = { ...call, id: tempId };
+                setCalls(prev => [newLog, ...prev]);
+
+                const { error } = await supabase.from('call_logs').insert({
+                    caller_id: callerId,
+                    callee_id: calleeId,
+                    call_type: call.callType,
+                    status: call.status || 'completed',
+                    duration: call.duration || 0,
+                    created_at: new Date().toISOString()
+                });
+                
+                if (error) console.error("Error inserting call log:", error);
+            } catch (e) { console.error('Failed to save call to DB:', e); }
+        }
+    };
 
     const activeCallRef = useRef<ActiveCall | null>(null);
     const contactsRef = useRef<Contact[]>([]);
@@ -929,25 +801,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
     useEffect(() => { otherUserRef.current = otherUser; }, [otherUser]);
 
-    // Initialize CallService and handle signals
     useEffect(() => {
         if (currentUser) {
             callService.initialize(currentUser.id);
-
             const handleSignal = async (signal: CallSignal) => {
                 const currentActiveCall = activeCallRef.current;
                 const currentContacts = contactsRef.current;
                 const currentAuthUser = currentUserRef.current;
 
-                console.log('AppContext stable listener received signal:', signal.type);
+                console.log('AppContext received signal:', signal.type);
 
                 switch (signal.type) {
                     case 'call-request':
                         if (currentActiveCall) {
-                            console.log('[AppContext] Ignored call request: already in a call with', currentActiveCall.contactId);
+                            console.log('Busy: ignored call request');
                         } else {
                             if (signal.callerId !== currentAuthUser?.id) {
-                                console.log('[AppContext] Setting incoming call state from:', signal.callerId);
                                 const caller = currentContacts.find((c: Contact) => c.id === signal.callerId);
                                 setActiveCall({
                                     callId: signal.callId,
@@ -962,67 +831,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                                     callerName: caller?.name || "Unknown User",
                                     callerAvatar: caller?.avatar
                                 });
-                                // Recipient joins room to send ringing signal
-	                                callService.notifyRinging(signal.callId, signal.callerId, signal.callType);
-	                            } else {
-	                                console.log('[AppContext] Ignored self-initiated call request');
-	                            }
-	                        }
-	                        break;
-
+                                callService.notifyRinging(signal.callId, signal.callerId, signal.callType);
+                            }
+                        }
+                        break;
                     case 'call-ringing' as any:
-                        console.log('Partner phone is ringing');
                         if (currentActiveCall && !currentActiveCall.isIncoming) {
                             setActiveCall(prev => prev ? { ...prev, isRinging: true } : null);
                         }
                         break;
-
                     case 'call-accept':
-                        console.log('Call accepted by partner');
                         if (currentActiveCall && !currentActiveCall.isIncoming) {
                             setActiveCall(prev => prev ? { ...prev, isAccepted: true, isRinging: false, startTime: Date.now() } : null);
                             const { webRTCService } = require('../services/WebRTCService');
                             await webRTCService.onCallAccepted();
                         }
                         break;
-
                     case 'call-reject':
-                        console.log('Call rejected by partner');
                         if (currentActiveCall) {
                             const { webRTCService } = require('../services/WebRTCService');
                             webRTCService.endCall();
                             setActiveCall(null);
                         }
                         break;
-
                     case 'ice-candidate':
                     case 'offer':
                     case 'answer':
                         const { webRTCService } = require('../services/WebRTCService');
                         await webRTCService.handleSignal(signal);
                         break;
-
                     case 'call-end':
-                        console.log('Call ended by partner');
                         const { webRTCService: wrtc } = require('../services/WebRTCService');
                         wrtc.endCall();
                         setActiveCall(null);
                         break;
                 }
             };
-
             callService.addListener(handleSignal);
-            return () => {
-                callService.removeListener(handleSignal);
-            };
+            return () => { callService.removeListener(handleSignal); };
         }
-    }, [currentUser]); // Only re-run if user changes
+    }, [currentUser]);
 
     const startCall = async (contactId: string, type: 'audio' | 'video') => {
         const contact = contacts.find(c => c.id === contactId);
-        // We don't have callId yet, initiateCall returns it
         const callId = await callService.initiateCall(contactId, type);
-
         setActiveCall({
             callId: callId || undefined,
             contactId,
@@ -1039,10 +891,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const acceptCall = async () => {
         if (activeCall && activeCall.isIncoming && activeCall.callId) {
-            console.log('Accepting call...');
             setActiveCall(prev => prev ? { ...prev, isAccepted: true, isRinging: false, startTime: Date.now() } : null);
-
-            // Join the room and notify caller (Handled inside CallService.acceptCall)
             const signal: CallSignal = {
                 type: 'call-accept',
                 callId: activeCall.callId || '',
@@ -1058,7 +907,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const rejectCall = async () => {
         if (activeCall && activeCall.isIncoming && activeCall.callId) {
-            console.log('Rejecting call...');
             const signal: CallSignal = {
                 type: 'call-reject',
                 callId: activeCall.callId || '',
@@ -1069,8 +917,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 roomId: activeCall.callId
             };
             await callService.rejectCall(signal);
-
-            // Log rejected call
+            
+            // Log rejection
             const contact = contacts.find(c => c.id === activeCall.contactId);
             addCall({
                 contactId: activeCall.contactId,
@@ -1081,52 +929,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 callType: activeCall.type,
                 time: 'Just now'
             });
-            // Ensure WebRTC cleanup
+
             try {
                 const { webRTCService } = require('../services/WebRTCService');
                 webRTCService.endCall();
-            } catch (e) {
-                console.log('Error cleaning up WebRTC on rejection:', e);
-            }
-
+            } catch (e) {}
             setActiveCall(null);
         }
     };
 
     const endCall = async () => {
         if (activeCall) {
-            // If it's an incoming call not yet accepted, it's a rejection
             if (activeCall.isIncoming && !activeCall.isAccepted) {
                 await rejectCall();
                 return;
             }
-
-            // Signal partner that call is ended
             if (currentUser && activeCall.contactId) {
                 await callService.endCall();
             }
+            
+            // Log completion
+            const contact = contacts.find(c => c.id === activeCall.contactId);
+            addCall({
+                contactId: activeCall.contactId,
+                contactName: contact?.name || 'Unknown',
+                avatar: contact?.avatar || '',
+                type: activeCall.isIncoming ? 'incoming' : 'outgoing',
+                status: 'completed',
+                callType: activeCall.type,
+                time: 'Just now',
+            });
 
-	            // Log call before ending
-	            const contact = contacts.find(c => c.id === activeCall.contactId);
-	            addCall({
-	                contactId: activeCall.contactId,
-	                contactName: contact?.name || 'Unknown',
-	                avatar: contact?.avatar || '',
-	                type: activeCall.isIncoming ? 'incoming' : 'outgoing',
-                    status: 'completed',
-	                callType: activeCall.type,
-	                time: 'Just now',
-	            });
-
-                const { webRTCService } = require('../services/WebRTCService');
-                webRTCService.endCall();
-                setActiveCall(null);
+            const { webRTCService } = require('../services/WebRTCService');
+            webRTCService.endCall();
+            setActiveCall(null);
         }
     };
 
     const toggleMinimizeCall = (val: boolean) => {
         setActiveCall(prev => prev ? { ...prev, isMinimized: val } : null);
-
     };
 
     const toggleMute = () => {
@@ -1134,8 +975,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveCall(prev => prev ? { ...prev, isMuted } : null);
     };
 
+    // --- STATUS LOGIC ---
     const addStatus = async (status: Omit<StatusUpdate, 'id'>) => {
-        // Optimistic update
         const tempId = Date.now().toString();
         const newStatus = { ...status, id: tempId };
         setStatuses((prev) => [newStatus, ...prev]);
@@ -1158,7 +999,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const deleteStatus = async (statusId: string) => {
         setStatuses((prev) => prev.filter((s) => s.id !== statusId));
-
         if (currentUser) {
             try {
                 await supabase.from('statuses').delete().eq('id', statusId).eq('user_id', currentUser.id);
@@ -1168,57 +1008,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const setTheme = (newTheme: ThemeName) => setThemeState(newTheme);
 
-    // Update profile (avatar, name, bio)
     const addStatusView = async (statusId: string) => {
         if (!currentUser) return;
-
         const status = statuses.find(s => s.id === statusId);
-        if (!status || status.views?.includes(currentUser.id)) {
-            return; // Already viewed or status not found
-        }
+        if (!status || status.views?.includes(currentUser.id)) return;
 
-        // Optimistic update
         const updatedStatuses = statuses.map(s =>
-            s.id === statusId
-                ? { ...s, views: [...(s.views || []), currentUser.id] }
-                : s
+            s.id === statusId ? { ...s, views: [...(s.views || []), currentUser.id] } : s
         );
         setStatuses(updatedStatuses);
 
         try {
-            // Get current views from DB
-            const { data, error } = await supabase
-                .from('statuses')
-                .select('views')
-                .eq('id', statusId)
-                .single();
-
+            const { data, error } = await supabase.from('statuses').select('views').eq('id', statusId).single();
             if (error) throw error;
-
             const existingViews = data?.views || [];
             if (!existingViews.includes(currentUser.id)) {
-                const newViews = [...existingViews, currentUser.id];
-                await supabase
-                    .from('statuses')
-                    .update({ views: newViews })
-                    .eq('id', statusId);
+                await supabase.from('statuses').update({ views: [...existingViews, currentUser.id] }).eq('id', statusId);
             }
-        } catch (e) {
-            console.error('Failed to update status view:', e);
-            // Revert optimistic update on error
-            setStatuses(statuses);
-        }
+        } catch (e) { setStatuses(statuses); }
     };
 
-    // --- Real-time Profile Updates ---
+    const updateProfile = async (updates: { name?: string; bio?: string; avatar?: string }) => {
+        if (!currentUser) return;
+        const updatedUser = {
+            ...currentUser,
+            name: updates.name ?? currentUser.name,
+            bio: updates.bio ?? currentUser.bio,
+            avatar: updates.avatar ?? currentUser.avatar,
+        };
+        setCurrentUser(updatedUser);
+        try {
+            const { error } = await supabase.from('profiles').upsert({
+                id: currentUser.id,
+                name: updatedUser.name,
+                avatar_url: updatedUser.avatar,
+                bio: updatedUser.bio,
+                updated_at: new Date().toISOString(),
+            });
+            if (error) throw error;
+            await AsyncStorage.setItem(`@profile_${currentUser.id}`, JSON.stringify(updatedUser));
+        } catch (e) { console.error('Failed to sync profile to DB:', e); }
+    };
+
     useEffect(() => {
         const profileSubscription = supabase
             .channel('public:profiles')
             .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles' }, (payload) => {
                 const updatedProfile = payload.new;
-                console.log('Real-time profile update received:', updatedProfile);
-                
-                // Update contacts list if the updated user is a contact
                 setContacts(prevContacts => prevContacts.map(contact => {
                     if (contact.id === updatedProfile.id) {
                         return { 
@@ -1232,97 +1068,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 }));
             })
             .subscribe();
-
-        return () => {
-            supabase.removeChannel(profileSubscription);
-        };
+        return () => { supabase.removeChannel(profileSubscription); };
     }, []);
-
-    // Update profile (avatar, name, bio)
-    const updateProfile = async (updates: { name?: string; bio?: string; avatar?: string }) => {
-        if (!currentUser) return;
-
-        const updatedUser = {
-            ...currentUser,
-            name: updates.name ?? currentUser.name,
-            bio: updates.bio ?? currentUser.bio,
-            avatar: updates.avatar ?? currentUser.avatar,
-        };
-
-
-        setCurrentUser(updatedUser);
-
-        try {
-            console.log('Syncing profile to DB:', updatedUser);
-            // Update Supabase Profiles
-            const { error } = await supabase
-                .from('profiles')
-                .upsert({
-                    id: currentUser.id,
-                    name: updatedUser.name,
-                    avatar_url: updatedUser.avatar,
-                    bio: updatedUser.bio,
-                    updated_at: new Date().toISOString(),
-                });
-
-            if (error) {
-                console.error('Supabase profile update error:', error);
-                throw error;
-            } else {
-                console.log('Profile synced successfully!');
-            }
-            
-            // Update AsyncStorage for quick load
-            await AsyncStorage.setItem(`@profile_${currentUser.id}`, JSON.stringify(updatedUser));
-        } catch (e) {
-            console.error('Failed to sync profile to DB:', e);
-        }
-    };
 
     return (
         <AppContext.Provider value={{
-            // Auth
-            currentUser,
-            otherUser,
-            isLoggedIn: !!currentUser,
-            login,
-            logout,
-
-            // Data
-            contacts,
-            messages,
-            calls,
-            statuses,
-            theme,
-            activeTheme: THEMES[theme],
-            activeCall,
-            musicState,
-            isReady,
-            onlineUsers, // Added onlineUsers to context value
-
-            // Actions
-            addMessage,
-            updateMessage,
-            updateMessageStatus,
-            deleteMessage,
-            addReaction,
-            addCall,
-            addStatus,
-            deleteStatus,
-            setTheme,
-            startCall,
-            acceptCall,
-            endCall,
-            toggleMinimizeCall,
-            toggleMute,
-            playSong,
-            togglePlayMusic,
-            toggleFavoriteSong,
-            seekTo,
-            getPlaybackPosition,
-            sendChatMessage,
-            updateProfile,
-            addStatusView,
+            currentUser, otherUser, isLoggedIn: !!currentUser, login, logout,
+            contacts, messages, calls, statuses, theme, activeTheme: THEMES[theme], activeCall, musicState, isReady, onlineUsers,
+            addMessage, updateMessage, updateMessageStatus, deleteMessage, addReaction, addCall, addStatus, deleteStatus, setTheme,
+            startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, playSong, togglePlayMusic, toggleFavoriteSong,
+            seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView,
         }}>
             {children}
         </AppContext.Provider >
