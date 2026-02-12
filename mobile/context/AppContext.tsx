@@ -352,7 +352,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 const mappedStatuses = data.map(mapStatusFromDB);
                 setStatuses(mappedStatuses);
             }
-        } catch (e) { console.error('Fetch statuses error:', e); }
+        } catch (e) { console.warn('Fetch statuses error (Non-fatal):', e); }
     };
 
     const fetchCallsFromSupabase = async (userId: string) => {
@@ -367,7 +367,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 .limit(50);
 
             if (error) {
-                console.error("Supabase Call Fetch Error:", error);
+                console.warn("Supabase Call Fetch Error (Non-fatal):", error);
                 return;
             }
 
@@ -391,7 +391,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 });
                 setCalls(mappedCalls);
             }
-        } catch (e) { console.error('Fetch calls error:', e); }
+        } catch (e) { console.warn('Fetch calls error (Non-fatal):', e); }
     };
 
     // Real-time Subscriptions
@@ -786,8 +786,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     created_at: new Date().toISOString()
                 });
                 
-                if (error) console.error("Error inserting call log:", error);
-            } catch (e) { console.error('Failed to save call to DB:', e); }
+                if (error) console.warn("Supabase insert call log error (Non-fatal):", error);
+            } catch (e) { console.warn('Failed to save call to DB (Non-fatal):', e); }
         }
     };
 
@@ -993,7 +993,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     expires_at: status.expiresAt,
                     created_at: new Date().toISOString()
                 });
-            } catch (e) { console.error('Failed to save status to DB:', e); }
+            } catch (e) { console.warn('Failed to save status to DB (Non-fatal):', e); }
         }
     };
 
@@ -1002,7 +1002,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (currentUser) {
             try {
                 await supabase.from('statuses').delete().eq('id', statusId).eq('user_id', currentUser.id);
-            } catch (e) { console.error('Failed to delete status from DB:', e); }
+            } catch (e) { console.warn('Failed to delete status from DB (Non-fatal):', e); }
         }
     };
 
@@ -1047,7 +1047,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             });
             if (error) throw error;
             await AsyncStorage.setItem(`@profile_${currentUser.id}`, JSON.stringify(updatedUser));
-        } catch (e) { console.error('Failed to sync profile to DB:', e); }
+        } catch (e) { console.warn('Failed to sync profile to DB (Non-fatal):', e); }
     };
 
     useEffect(() => {
