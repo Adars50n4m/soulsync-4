@@ -1,9 +1,11 @@
 import React from 'react';
-import { View, Text, FlatList, Image, Pressable, StyleSheet, StatusBar } from 'react-native';
+import { View, Text, FlatList, Image, Pressable, StyleSheet, StatusBar, SectionList, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
-import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../../context/AppContext';
+import { SwiftUIButton } from '../../components/SwiftUIButton';
+import { BlurView } from 'expo-blur';
+import * as Haptics from 'expo-haptics';
 
 export default function StatusScreen() {
     const router = useRouter();
@@ -31,10 +33,12 @@ export default function StatusScreen() {
         .filter(group => group.statuses.length > 0);
 
     const handleAddStatus = () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         router.push('/add-status');
     };
 
     const handleViewMyStatus = () => {
+        Haptics.selectionAsync();
         if (hasMyStatus && currentUser) {
             router.push({ pathname: '/view-status', params: { id: currentUser.id, index: '0' } });
         } else {
@@ -43,6 +47,7 @@ export default function StatusScreen() {
     };
 
     const handleViewStatus = (userId: string) => {
+        Haptics.selectionAsync();
         router.push({ pathname: '/view-status', params: { id: userId, index: '0' } });
     };
 
@@ -51,16 +56,20 @@ export default function StatusScreen() {
         const latestStatus = contactStatuses[contactStatuses.length - 1];
 
         return (
-            <Pressable style={styles.statusItem} onPress={() => handleViewStatus(contact.id)}>
-                <View style={styles.statusAvatarRing}>
+            <Pressable 
+                style={({ pressed }) => [styles.statusRow, pressed && styles.rowPressed]} 
+                onPress={() => handleViewStatus(contact.id)}
+            >
+                 <View style={styles.statusAvatarRing}>
                     <Image source={{ uri: contact.avatar }} style={styles.statusAvatar} />
                 </View>
                 <View style={styles.statusInfo}>
                     <Text style={styles.statusName}>{contact.name}</Text>
                     <Text style={styles.statusTime}>
-                        {latestStatus.timestamp} • {contactStatuses.length} update{contactStatuses.length > 1 ? 's' : ''}
+                        {`${latestStatus.timestamp} • ${contactStatuses.length} update${contactStatuses.length > 1 ? 's' : ''}`}
                     </Text>
                 </View>
+                <MaterialIcons name="chevron-right" size={20} color="rgba(255,255,255,0.3)" />
             </Pressable>
         );
     };
@@ -68,72 +77,73 @@ export default function StatusScreen() {
     return (
         <View style={styles.container}>
             <StatusBar barStyle="light-content" />
-
-            {/* Header */}
-            <LinearGradient
-                colors={['#000000', 'rgba(0,0,0,0.8)', 'transparent']}
-                style={styles.header}
-            >
-                <Text style={styles.headerTitle}>STATUS</Text>
-            </LinearGradient>
-
-            {/* My Status */}
-            <View style={styles.myStatusSection}>
-                <Pressable style={styles.myStatus} onPress={handleViewMyStatus}>
-                    <View style={styles.myAvatarContainer}>
-                        <Image source={{ uri: currentUser?.avatar }} style={styles.myAvatar} />
-                        {hasMyStatus ? (
-                            <View style={styles.statusRingIndicator}>
-                                <View style={styles.statusDot} />
-                            </View>
-                        ) : (
-                            <Pressable style={styles.addButton} onPress={handleAddStatus}>
-                                <MaterialIcons name="add" size={16} color="#ffffff" />
-                            </Pressable>
-                        )}
-                    </View>
-                    <View style={styles.myStatusInfo}>
-                        <Text style={styles.myStatusTitle}>My Status</Text>
-                        <Text style={styles.myStatusHint}>
-                            {hasMyStatus
-                                ? `${myStatuses.length} update${myStatuses.length > 1 ? 's' : ''} • Tap to view`
-                                : 'Tap to add status update'
-                            }
-                        </Text>
-                    </View>
-                    {hasMyStatus && (
-                        <Pressable style={styles.addMoreButton} onPress={handleAddStatus}>
-                            <MaterialIcons name="add" size={20} color="#f43f5e" />
-                        </Pressable>
-                    )}
-                </Pressable>
+            
+            <View style={styles.header}>
+                <Text style={styles.headerTitle}>Status</Text>
             </View>
 
-            {/* Recent Updates */}
-            <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>RECENT UPDATES</Text>
-            </View>
-
-            {contactStatusGroups.length === 0 ? (
-                <View style={styles.emptyState}>
-                    <MaterialIcons name="photo-library" size={60} color="rgba(255,255,255,0.1)" />
-                    <Text style={styles.emptyStateText}>NO STATUS UPDATES</Text>
-                    <Text style={styles.emptyStateHint}>Status updates from your contacts will appear here</Text>
+            <ScrollView style={styles.contentContainer} showsVerticalScrollIndicator={false}>
+                {/* My Status Section */}
+                <View style={styles.sectionContainer}>
+                    <Pressable 
+                        style={({ pressed }) => [styles.statusRow, pressed && styles.rowPressed]} 
+                        onPress={handleViewMyStatus}
+                    >
+                         <View style={styles.myAvatarContainer}>
+                            <Image source={{ uri: currentUser?.avatar }} style={styles.myAvatar} />
+                            {hasMyStatus ? (
+                                <View style={styles.statusRingIndicator}>
+                                    <View style={styles.statusDot} />
+                                </View>
+                            ) : (
+                                <View style={styles.addButton}>
+                                    <MaterialIcons name="add" size={14} color="#ffffff" />
+                                </View>
+                            )}
+                        </View>
+                        <View style={styles.statusInfo}>
+                            <Text style={styles.statusName}>My Status</Text>
+                            <Text style={styles.statusTime}>
+                                {hasMyStatus ? `${myStatuses.length} new` : 'Tap to add to your status'}
+                            </Text>
+                        </View>
+                        <MaterialIcons name="chevron-right" size={20} color="rgba(255,255,255,0.3)" />
+                    </Pressable>
                 </View>
-            ) : (
-                <FlatList
-                    data={contactStatusGroups}
-                    keyExtractor={item => item.contact.id}
-                    renderItem={renderContactStatus}
-                    contentContainerStyle={styles.listContent}
-                    showsVerticalScrollIndicator={false}
-                />
-            )}
 
-            {/* Info */}
-            <View style={styles.infoContainer}>
-                <MaterialIcons name="access-time" size={14} color="rgba(255,255,255,0.3)" />
-                <Text style={styles.infoText}>Status updates disappear after 24 hours</Text>
+                {/* Recent Updates Header */}
+                {contactStatusGroups.length > 0 && (
+                    <Text style={styles.sectionHeader}>RECENT UPDATES</Text>
+                )}
+
+                {/* Contact Statuses */}
+                {contactStatusGroups.length === 0 ? (
+                    <View style={styles.emptyContainer}>
+                        <Text style={styles.emptyText}>No recent updates</Text>
+                    </View>
+                ) : (
+                    <View style={styles.listSectionContainer}>
+                        <FlatList
+                            data={contactStatusGroups}
+                            keyExtractor={(item) => item.contact.id}
+                            renderItem={renderContactStatus}
+                            scrollEnabled={false} // Disable FlatList scrolling inside ScrollView
+                            ItemSeparatorComponent={() => <View style={styles.separator} />}
+                        />
+                    </View>
+                )}
+                <View style={styles.spacer} />
+            </ScrollView>
+
+            {/* iOS Style Floating Button */}
+            <View style={styles.fabContainer}>
+                <SwiftUIButton 
+                    title="Camera" 
+                    icon="camera-alt" 
+                    type="glass" 
+                    onPress={handleAddStatus} 
+                    style={styles.fab}
+                />
             </View>
         </View>
     );
@@ -143,169 +153,142 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: '#000000',
+        paddingTop: 60,
     },
     header: {
-        paddingTop: 50,
-        paddingBottom: 24,
-        paddingHorizontal: 24,
+        paddingHorizontal: 20,
+        paddingBottom: 10,
     },
     headerTitle: {
         color: '#ffffff',
-        fontSize: 18,
-        fontWeight: '900',
-        textTransform: 'uppercase',
-        letterSpacing: 3,
+        fontSize: 34,
+        fontWeight: '700',
+        letterSpacing: 0.3,
     },
-    myStatusSection: {
+    contentContainer: {
+        flex: 1,
         paddingHorizontal: 16,
-        paddingBottom: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.1)',
     },
-    myStatus: {
+    sectionContainer: {
+        backgroundColor: 'rgba(28, 28, 30, 0.6)', // iOS secondary system fill dark
+        borderRadius: 16,
+        overflow: 'hidden',
+        marginBottom: 24,
+    },
+    listSectionContainer: {
+        backgroundColor: 'rgba(28, 28, 30, 0.6)', // iOS secondary system fill dark
+        borderRadius: 16,
+        overflow: 'hidden',
+    },
+    sectionHeader: {
+        color: 'rgba(235, 235, 245, 0.6)', // iOS secondary label
+        fontSize: 13,
+        fontWeight: '600',
+        marginBottom: 8,
+        paddingLeft: 12,
+        textTransform: 'uppercase',
+    },
+    statusRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 16,
-        padding: 12,
-        backgroundColor: 'rgba(255,255,255,0.05)',
-        borderRadius: 16,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+    },
+    rowPressed: {
+        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    },
+    separator: {
+        height: StyleSheet.hairlineWidth,
+        backgroundColor: 'rgba(255, 255, 255, 0.15)',
+        marginLeft: 68, // Aligned with text
+    },
+    statusAvatar: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+    },
+    statusAvatarRing: {
+        width: 50,
+        height: 50,
+        borderRadius: 25,
+        borderWidth: 2,
+        borderColor: '#0a84ff', // iOS Blue for updates
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 12,
     },
     myAvatarContainer: {
         position: 'relative',
+        marginRight: 12,
+        width: 50,
+        height: 50,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     myAvatar: {
-        width: 56,
-        height: 56,
-        borderRadius: 28,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
     },
     addButton: {
         position: 'absolute',
         bottom: 0,
         right: 0,
-        width: 24,
-        height: 24,
-        borderRadius: 12,
-        backgroundColor: '#f43f5e',
+        backgroundColor: '#0a84ff',
+        width: 18,
+        height: 18,
+        borderRadius: 9,
         alignItems: 'center',
         justifyContent: 'center',
-        borderWidth: 2,
-        borderColor: '#000000',
+        borderWidth: 1.5,
+        borderColor: '#000',
     },
     statusRingIndicator: {
         position: 'absolute',
-        top: -2,
-        left: -2,
-        right: -2,
-        bottom: -2,
-        borderRadius: 30,
+        top: -3,
+        right: -3,
+        bottom: -3,
+        left: -3,
+        borderRadius: 28,
         borderWidth: 2,
-        borderColor: '#f43f5e',
+        borderColor: '#0a84ff',
     },
     statusDot: {
-        position: 'absolute',
-        top: 0,
-        right: 4,
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-        backgroundColor: '#f43f5e',
-    },
-    myStatusInfo: {
         flex: 1,
-    },
-    myStatusTitle: {
-        color: '#ffffff',
-        fontSize: 16,
-        fontWeight: '700',
-    },
-    myStatusHint: {
-        color: 'rgba(255,255,255,0.4)',
-        fontSize: 12,
-        marginTop: 2,
-    },
-    addMoreButton: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: 'rgba(244, 63, 94, 0.1)',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    sectionHeader: {
-        paddingHorizontal: 24,
-        paddingVertical: 16,
-    },
-    sectionTitle: {
-        color: 'rgba(255,255,255,0.4)',
-        fontSize: 11,
-        fontWeight: '900',
-        letterSpacing: 2,
-    },
-    listContent: {
-        paddingHorizontal: 16,
-        paddingBottom: 120,
-    },
-    statusItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 16,
-        paddingVertical: 12,
-    },
-    statusAvatarRing: {
-        width: 56,
-        height: 56,
-        borderRadius: 28,
-        padding: 2,
-        borderWidth: 2,
-        borderColor: '#f43f5e',
-    },
-    statusAvatar: {
-        width: '100%',
-        height: '100%',
-        borderRadius: 26,
     },
     statusInfo: {
         flex: 1,
+        justifyContent: 'center',
     },
     statusName: {
         color: '#ffffff',
-        fontSize: 16,
+        fontSize: 17,
         fontWeight: '600',
     },
     statusTime: {
-        color: 'rgba(255,255,255,0.4)',
-        fontSize: 12,
+        color: 'rgba(235, 235, 245, 0.6)',
+        fontSize: 14,
         marginTop: 2,
     },
-    emptyState: {
+    emptyContainer: {
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        paddingBottom: 100,
+        paddingVertical: 40,
     },
-    emptyStateText: {
-        color: 'rgba(255,255,255,0.2)',
-        fontSize: 12,
-        fontWeight: '900',
-        textTransform: 'uppercase',
-        letterSpacing: 3,
-        marginTop: 16,
+    emptyText: {
+        color: 'rgba(235, 235, 245, 0.6)',
+        fontSize: 15,
     },
-    emptyStateHint: {
-        color: 'rgba(255,255,255,0.2)',
-        fontSize: 12,
-        marginTop: 8,
-        textAlign: 'center',
+    fabContainer: {
+        position: 'absolute',
+        bottom: 30,
+        right: 20,
     },
-    infoContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
-        paddingBottom: 120,
+    fab: {
+        minWidth: 140,
     },
-    infoText: {
-        color: 'rgba(255,255,255,0.3)',
-        fontSize: 11,
+    spacer: {
+        height: 120,
     },
 });

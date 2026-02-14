@@ -7,7 +7,7 @@ import { chatService, ChatMessage } from '../services/ChatService';
 import { callService, CallSignal } from '../services/CallService';
 import { webRTCService } from '../services/WebRTCService';
 import { supabase } from '../config/supabase';
-import { AppState } from 'react-native';
+import { AppState, Alert } from 'react-native';
 
 import { socket } from '../src/webrtc/socket';
 
@@ -85,8 +85,9 @@ interface AppContextType {
     deleteMessage: (chatId: string, messageId: string) => void;
     addReaction: (chatId: string, messageId: string, emoji: string) => void;
     addCall: (call: Omit<CallLog, 'id'>) => void;
-    addStatus: (status: Omit<StatusUpdate, 'id'>) => void;
+    addStatus: (status: Omit<StatusUpdate, 'id' | 'likes' | 'views'>) => void;
     deleteStatus: (id: string) => void;
+    toggleStatusLike: (statusId: string) => Promise<void>;
     setTheme: (theme: ThemeName) => void;
     startCall: (contactId: string, type: 'audio' | 'video') => void;
     acceptCall: () => Promise<void>;
@@ -98,7 +99,7 @@ interface AppContextType {
     toggleFavoriteSong: (song: Song) => void;
     seekTo: (position: number) => void;
     getPlaybackPosition: () => Promise<number>;
-    sendChatMessage: (chatId: string, text: string, media?: Message['media']) => void;
+    sendChatMessage: (chatId: string, text: string, media?: Message['media'], replyTo?: string) => void;
     updateProfile: (updates: { name?: string; bio?: string; avatar?: string }) => void;
     addStatusView: (statusId: string) => Promise<void>;
 }
@@ -367,15 +368,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 .limit(50);
 
             if (error) {
-                console.warn("Supabase Call Fetch Error (Non-fatal):", error);
+                console.error("Supabase Call Fetch Error:", error);
                 return;
             }
+
+            console.log("Call history fetched successfully:", data?.length, "records");
 
             if (data) {
                 const mappedCalls: CallLog[] = data.map((log: any) => {
                     const isOutgoing = log.caller_id === userId;
                     const partnerId = isOutgoing ? log.callee_id : log.caller_id;
-                    const partner = USERS[partnerId]; 
+                    const partner = (otherUser && partnerId === otherUser.id) ? otherUser : USERS[partnerId]; 
 
                     return {
                         id: log.id.toString(),
@@ -391,7 +394,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 });
                 setCalls(mappedCalls);
             }
-        } catch (e) { console.warn('Fetch calls error (Non-fatal):', e); }
+        } catch (e) { console.error('Fetch calls error:', e); }
     };
 
     // Real-time Subscriptions
@@ -406,7 +409,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 if (newLog.caller_id === currentUser.id || newLog.callee_id === currentUser.id) {
                     const isOutgoing = newLog.caller_id === currentUser.id;
                     const partnerId = isOutgoing ? newLog.callee_id : newLog.caller_id;
-                    const partner = USERS[partnerId];
+                    const partner = (otherUser && partnerId === otherUser.id) ? otherUser : USERS[partnerId];
                     
                     const callItem: CallLog = {
                         id: newLog.id.toString(),
@@ -432,12 +435,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     const newStatus = payload.new;
                     // Verify if active
                     if (new Date(newStatus.expires_at) > new Date()) {
-                        // Check if we already have it (optimistic update prevention)
                         setStatuses(prev => {
                             if (prev.find(s => s.id === newStatus.id.toString())) return prev;
                             return [mapStatusFromDB(newStatus), ...prev];
                         });
                     }
+                } else if (payload.eventType === 'UPDATE') {
+                    const updated = payload.new;
+                    setStatuses(prev => prev.map(s => 
+                        s.id === updated.id.toString() ? mapStatusFromDB(updated) : s
+                    ));
                 } else if (payload.eventType === 'DELETE') {
                     setStatuses(prev => prev.filter(s => s.id !== payload.old.id.toString()));
                 }
@@ -461,11 +468,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         caption: dbStatus.caption,
         timestamp: new Date(dbStatus.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         expiresAt: dbStatus.expires_at,
-        views: dbStatus.views || []
+        views: dbStatus.views || [],
+        likes: dbStatus.likes || []
     });
 
-    const sendChatMessage = useCallback(async (chatId: string, text: string, media?: Message['media']) => {
-        const sentMessage = await chatService.sendMessage(text, media);
+    const sendChatMessage = useCallback(async (chatId: string, text: string, media?: Message['media'], replyTo?: string) => {
+        const sentMessage = await chatService.sendMessage(text, media, replyTo);
         if (sentMessage) {
             const newMsg: Message = {
                 id: sentMessage.id,
@@ -474,6 +482,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 status: 'sent',
                 media: sentMessage.media ? { type: sentMessage.media.type, url: sentMessage.media.url } : undefined,
+                replyTo: sentMessage.reply_to,
             };
             setMessages(prev => ({
                 ...prev,
@@ -777,16 +786,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 const newLog: CallLog = { ...call, id: tempId };
                 setCalls(prev => [newLog, ...prev]);
 
-                const { error } = await supabase.from('call_logs').insert({
+                const insertPayload = {
                     caller_id: callerId,
                     callee_id: calleeId,
                     call_type: call.callType,
                     status: call.status || 'completed',
                     duration: call.duration || 0,
                     created_at: new Date().toISOString()
-                });
+                };
+                console.log("[AppContext] Inserting call log:", insertPayload);
+
+                const { error } = await supabase.from('call_logs').insert(insertPayload);
                 
-                if (error) console.warn("Supabase insert call log error (Non-fatal):", error);
+                if (error) console.error("Supabase insert call log error:", error);
+                else console.log("Call log inserted successfully");
             } catch (e) { console.warn('Failed to save call to DB (Non-fatal):', e); }
         }
     };
@@ -976,14 +989,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // --- STATUS LOGIC ---
-    const addStatus = async (status: Omit<StatusUpdate, 'id'>) => {
+    const addStatus = async (status: Omit<StatusUpdate, 'id' | 'likes' | 'views'>) => {
         const tempId = Date.now().toString();
-        const newStatus = { ...status, id: tempId };
+        const newStatus = { 
+            ...status, 
+            id: tempId,
+            likes: [],
+            views: []
+        } as StatusUpdate;
         setStatuses((prev) => [newStatus, ...prev]);
 
         if (currentUser) {
             try {
-                await supabase.from('statuses').insert({
+                const { error } = await supabase.from('statuses').insert({
                     user_id: currentUser.id,
                     user_name: currentUser.name,
                     user_avatar: currentUser.avatar,
@@ -991,9 +1009,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     media_type: status.mediaType,
                     caption: status.caption,
                     expires_at: status.expiresAt,
-                    created_at: new Date().toISOString()
+                    created_at: new Date().toISOString(),
+                    likes: [],
+                    views: []
                 });
-            } catch (e) { console.warn('Failed to save status to DB (Non-fatal):', e); }
+                
+                if (error) {
+                    console.error('Supabase status insert error:', error);
+                    Alert.alert('Error', 'Failed to save status to cloud.');
+                }
+            } catch (e) { 
+                console.error('Failed to save status to DB:', e);
+                Alert.alert('Error', 'Failed to save status to cloud.');
+            }
+        } else {
+             console.error('No current user found when adding status');
         }
     };
 
@@ -1013,19 +1043,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const status = statuses.find(s => s.id === statusId);
         if (!status || status.views?.includes(currentUser.id)) return;
 
-        const updatedStatuses = statuses.map(s =>
-            s.id === statusId ? { ...s, views: [...(s.views || []), currentUser.id] } : s
-        );
-        setStatuses(updatedStatuses);
+        const updatedViews = [...(status.views || []), currentUser.id];
+        
+        // Optimistic update
+        setStatuses(prev => prev.map(s =>
+            s.id === statusId ? { ...s, views: updatedViews } : s
+        ));
 
+        // DB update
         try {
-            const { data, error } = await supabase.from('statuses').select('views').eq('id', statusId).single();
-            if (error) throw error;
-            const existingViews = data?.views || [];
-            if (!existingViews.includes(currentUser.id)) {
-                await supabase.from('statuses').update({ views: [...existingViews, currentUser.id] }).eq('id', statusId);
-            }
-        } catch (e) { setStatuses(statuses); }
+            await supabase.from('statuses').update({ views: updatedViews }).eq('id', statusId);
+        } catch (e) { console.warn('Failed to update status views (Non-fatal):', e); }
+    };
+
+    const toggleStatusLike = async (statusId: string) => {
+        if (!currentUser) return;
+        const status = statuses.find(s => s.id === statusId);
+        if (!status) return;
+
+        let updatedLikes;
+        if (status.likes?.includes(currentUser.id)) {
+            updatedLikes = status.likes.filter(id => id !== currentUser.id);
+        } else {
+            updatedLikes = [...(status.likes || []), currentUser.id];
+        }
+
+        // Optimistic update
+        setStatuses(prev => prev.map(s =>
+            s.id === statusId ? { ...s, likes: updatedLikes } : s
+        ));
+
+        // DB update
+        try {
+            await supabase.from('statuses').update({ likes: updatedLikes }).eq('id', statusId);
+        } catch (e) { console.warn('Failed to toggle status like (Non-fatal):', e); }
     };
 
     const updateProfile = async (updates: { name?: string; bio?: string; avatar?: string }) => {
@@ -1077,7 +1128,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             contacts, messages, calls, statuses, theme, activeTheme: THEMES[theme], activeCall, musicState, isReady, onlineUsers,
             addMessage, updateMessage, updateMessageStatus, deleteMessage, addReaction, addCall, addStatus, deleteStatus, setTheme,
             startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, playSong, togglePlayMusic, toggleFavoriteSong,
-            seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView,
+            seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView, toggleStatusLike,
         }}>
             {children}
         </AppContext.Provider >

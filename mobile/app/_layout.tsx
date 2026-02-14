@@ -20,21 +20,20 @@ function RootContent() {
   const router = useRouter();
   const segments = useSegments();
 
-  // --- TRAFFIC CONTROLLER FOR CALLS ---
-  useEffect(() => {
-    if (!activeCall) return;
+    // --- TRAFFIC CONTROLLER FOR CALLS ---
+    useEffect(() => {
+        if (!activeCall) return;
 
-    // Check where we are
-    const inCallScreen = segments[0] === 'call';
+        const inCallScreen = segments[0] === 'call';
 
-    // 1. If call is accepted and NOT minimized, force navigation to call screen
-    if (activeCall.isAccepted && !activeCall.isMinimized && !inCallScreen) {
-      console.log('Call active & accepted - Navigating to Call Screen');
-      router.push('/call');
-    }
-    
-    // 2. If call is incoming (ringing), we don't navigate yet, the Modal handles it.
-  }, [activeCall?.isAccepted, activeCall?.isMinimized, segments]);
+        // 1. If call is outgoing (just initiated) or accepted, navigate to call screen
+        const shouldBeInCallScreen = !activeCall.isIncoming || activeCall.isAccepted;
+
+        if (shouldBeInCallScreen && !activeCall.isMinimized && !inCallScreen) {
+            console.log('Call active & (Outgoing or Accepted) - Navigating to Call Screen');
+            router.push('/call');
+        }
+    }, [activeCall?.isAccepted, activeCall?.isIncoming, activeCall?.isMinimized, segments]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -44,6 +43,11 @@ function RootContent() {
           presentation: 'fullScreenModal',
           animation: 'fade',
           gestureEnabled: false 
+        }} />
+        <Stack.Screen name="music" options={{ 
+          presentation: 'transparentModal',
+          animation: 'fade',
+          headerShown: false
         }} />
         <Stack.Screen name="+not-found" />
       </Stack>

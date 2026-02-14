@@ -140,10 +140,10 @@ class ChatService {
             sender: this.userId,
             receiver: this.partnerId,
             text,
-            // media_type: media?.type || null, // Column missing in DB
-            // media_url: media?.url || null,   // Column missing in DB
-            // media_name: media?.name || null, // Column missing in DB
-            // reply_to_id: replyTo || null,    // Column missing in DB
+            media_type: media?.type || null,
+            media_url: media?.url || null,
+            media_caption: media?.caption || null,
+            reply_to_id: replyTo || null,
             created_at: timestamp
         };
 
@@ -189,11 +189,11 @@ class ChatService {
             timestamp: dbRow.created_at,
             status: dbRow.status || 'sent',
             media: dbRow.media_url ? {
-                type: 'image', // Default or fetch from somewhere else if needed, but DB column missing
+                type: dbRow.media_type || 'image',
                 url: dbRow.media_url,
-                name: undefined
+                caption: dbRow.media_caption
             } : undefined,
-            reply_to: undefined, // dbRow.reply_to_id, // Column missing
+            reply_to: dbRow.reply_to_id?.toString(),
             reactions: dbRow.reaction ? [dbRow.reaction] : undefined
         };
     }

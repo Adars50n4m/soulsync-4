@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { View, Text, Image, FlatList, Pressable, StyleSheet, StatusBar, Animated } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -7,7 +7,92 @@ import { MaterialIcons } from '@expo/vector-icons';
 
 import { useApp } from '../../context/AppContext';
 import { SoulSyncLogo } from '../../components/SoulSyncLogo';
-import { LiquidGlassCard } from '../../components/LiquidGlassCard';
+
+const ChatListItem = React.memo(({ item, lastMsg, router }: { item: any, lastMsg: any, router: any }) => {
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const translateYAnim = useRef(new Animated.Value(0)).current;
+
+  const handlePressIn = () => {
+    Animated.parallel([
+      Animated.spring(scaleAnim, {
+        toValue: 0.96,
+        useNativeDriver: true,
+        tension: 100,
+        friction: 8,
+      }),
+      Animated.spring(translateYAnim, {
+        toValue: -4,
+        useNativeDriver: true,
+        tension: 100,
+        friction: 8,
+      }),
+    ]).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.parallel([
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        useNativeDriver: true,
+        tension: 100,
+        friction: 8,
+      }),
+      Animated.spring(translateYAnim, {
+        toValue: 0,
+        useNativeDriver: true,
+        tension: 100,
+        friction: 8,
+      }),
+    ]).start();
+  };
+
+  return (
+    <Pressable
+      onPress={() => router.push(`/chat/${item.id}`)}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      style={styles.chatItem}
+    >
+      <Animated.View style={[
+        styles.chatPillContainer,
+        {
+          transform: [{ scale: scaleAnim }, { translateY: translateYAnim }]
+        }
+      ]}>
+        {/* Absolute Background Layers */}
+        <View style={styles.pillBackground} />
+        <BlurView intensity={40} tint="dark" style={styles.pillBlur} />
+
+        {/* Content Layer (on top) */}
+        <View style={styles.pillContent}>
+          {/* Avatar */}
+          <View style={styles.avatarContainer}>
+            <Image source={{ uri: item.avatar }} style={styles.avatar} />
+            {item.status === 'online' && (
+              <View style={styles.onlineIndicator} />
+            )}
+          </View>
+
+          {/* Content */}
+          <View style={styles.chatContent}>
+            <Text style={styles.contactName}>{item.name}</Text>
+            <Text numberOfLines={1} style={styles.lastMessage}>
+              {lastMsg.text || 'Tap to start syncing...'}
+            </Text>
+          </View>
+
+          {/* Right Side */}
+          <View style={styles.rightSide}>
+            {lastMsg.timestamp && (
+              <Text style={styles.timestamp}>{lastMsg.timestamp}</Text>
+            )}
+            <MaterialIcons name="chevron-right" size={20} color="rgba(255,255,255,0.3)" />
+          </View>
+        </View>
+      </Animated.View>
+    </Pressable>
+  );
+});
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -17,77 +102,7 @@ export default function HomeScreen() {
     const chatMessages = messages[item.id] || [];
     const lastMsg = chatMessages[chatMessages.length - 1] || { text: item.lastMessage || 'Start a conversation...', timestamp: '' };
 
-    return (
-      <Pressable
-        onPress={() => router.push(`/chat/${item.id}`)}
-        style={({ pressed }) => [
-          styles.chatItem,
-          pressed && styles.chatItemPressed
-        ]}
-      >
-        <LiquidGlassCard
-          variant="default"
-          glowColor={`${activeTheme.primary}20`}
-          style={styles.chatCard}
-        >
-          <View style={styles.chatItemContent}>
-            {/* Avatar with Glow Ring */}
-            <View style={styles.avatarContainer}>
-              <LinearGradient
-                colors={[activeTheme.primary, activeTheme.accent]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.avatarGlow}
-              >
-                <View style={styles.avatarInner}>
-                  <Image
-                    source={{ uri: item.avatar }}
-                    style={styles.avatar}
-                  />
-                </View>
-              </LinearGradient>
-              {item.status === 'online' && (
-                <View style={[styles.onlineIndicator, { backgroundColor: activeTheme.primary }]} />
-              )}
-            </View>
-
-            {/* Content */}
-            <View style={styles.chatContent}>
-              <View style={styles.chatHeader}>
-                <Text style={styles.contactName}>
-                  {item.name}
-                </Text>
-                {lastMsg.timestamp && (
-                  <Text style={[styles.timestamp, { color: `${activeTheme.primary}80` }]}>
-                    {lastMsg.timestamp}
-                  </Text>
-                )}
-              </View>
-              <View style={styles.chatPreview}>
-                <Text numberOfLines={1} style={styles.lastMessage}>
-                  {lastMsg.text || 'Tap to start syncing...'}
-                </Text>
-                {item.unreadCount > 0 && (
-                  <LinearGradient
-                    colors={[activeTheme.primary, activeTheme.accent]}
-                    style={styles.unreadBadge}
-                  >
-                    <Text style={styles.unreadCount}>
-                      {item.unreadCount}
-                    </Text>
-                  </LinearGradient>
-                )}
-              </View>
-            </View>
-
-            {/* Arrow Indicator */}
-            <View style={styles.arrowContainer}>
-              <MaterialIcons name="chevron-right" size={20} color="rgba(255,255,255,0.3)" />
-            </View>
-          </View>
-        </LiquidGlassCard>
-      </Pressable>
-    );
+    return <ChatListItem item={item} lastMsg={lastMsg} router={router} />;
   };
 
   return (
@@ -226,100 +241,90 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   chatItem: {
-    marginBottom: 12,
-    marginHorizontal: 12,
+    marginBottom: 8,
+    marginHorizontal: 16,
+    borderRadius: 35, // Half of height
+    overflow: 'hidden',
+    height: 70, // Match Header Height
   },
-  chatItemPressed: {
-    opacity: 0.85,
-    transform: [{ scale: 0.98 }],
+  chatPillContainer: {
+    flex: 1,
+    borderRadius: 35,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    overflow: 'hidden',
+    position: 'relative',
   },
-  chatCard: {
-    // Additional card styling handled by LiquidGlassCard
+  // New Styles for Absolute Layout
+  pillBackground: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#151515', 
+    opacity: 0.95, // Almost solid like header
+    zIndex: 0,
   },
-  chatItemContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+  pillBlur: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1,
+  },
+  pillContent: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
+    paddingHorizontal: 12, // Match header padding
+    gap: 12,
+    zIndex: 2,
   },
   avatarContainer: {
     position: 'relative',
   },
-  avatarGlow: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    padding: 2,
-  },
-  avatarInner: {
-    flex: 1,
-    borderRadius: 25,
-    backgroundColor: '#000000',
-    overflow: 'hidden',
-  },
   avatar: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 25,
+    width: 46, // Slightly larger than header (42) for list readability, but smaller than before (60)
+    height: 46,
+    borderRadius: 23,
+    borderWidth: 0,
   },
   onlineIndicator: {
     position: 'absolute',
-    bottom: 2,
-    right: 2,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    borderWidth: 3,
-    borderColor: '#000000',
+    bottom: 0,
+    right: 0,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#22c55e',
+    borderWidth: 2,
+    borderColor: '#151515',
   },
   chatContent: {
     flex: 1,
-  },
-  chatHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
+    justifyContent: 'center',
+    
   },
   contactName: {
     color: '#ffffff',
+    fontSize: 17, // Match Header
     fontWeight: '700',
-    fontSize: 16,
-    letterSpacing: 1,
-  },
-  timestamp: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  chatPreview: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    letterSpacing: 0.5, // Match Header
+    marginBottom: 0, // Minimal spacing
   },
   lastMessage: {
-    color: 'rgba(255,255,255,0.4)',
+    color: 'rgba(255,255,255,0.5)',
     fontSize: 13,
     fontWeight: '500',
-    flex: 1,
-    marginRight: 8,
+    lineHeight: 16,
   },
-  unreadBadge: {
-    minWidth: 22,
-    height: 22,
-    borderRadius: 11,
-    paddingHorizontal: 6,
-    alignItems: 'center',
+  rightSide: {
+    alignItems: 'flex-end',
     justifyContent: 'center',
+    paddingRight: 4,
+    gap: 4,
+    top: 8, // Match chatContent alignment
   },
-  unreadCount: {
-    color: '#ffffff',
+  timestamp: {
+    color: 'rgba(255,255,255,0.5)', // Match lastMessage color
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: '600',
   },
-  arrowContainer: {
-    paddingLeft: 4,
-  },
+
   emptyState: {
     flex: 1,
     alignItems: 'center',

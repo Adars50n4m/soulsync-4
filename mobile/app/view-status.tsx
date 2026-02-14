@@ -15,6 +15,7 @@ import Animated, {
     Easing,
     withSpring
 } from 'react-native-reanimated';
+import { Video, ResizeMode } from 'expo-av';
 import { useApp } from '../context/AppContext';
 
 const { width, height } = Dimensions.get('window');
@@ -22,7 +23,7 @@ const { width, height } = Dimensions.get('window');
 export default function ViewStatusScreen() {
     const { id, index } = useLocalSearchParams<{ id: string; index: string }>();
     const router = useRouter();
-    const { statuses, contacts, currentUser, deleteStatus, addStatusView, sendChatMessage } = useApp();
+    const { statuses, contacts, currentUser, deleteStatus, addStatusView, sendChatMessage, toggleStatusLike } = useApp();
     const [currentIndex, setCurrentIndex] = useState(parseInt(index || '0'));
     const [replyText, setReplyText] = useState('');
     const [modalVisible, setModalVisible] = useState(false);
@@ -139,6 +140,12 @@ export default function ViewStatusScreen() {
         borderRadius: translateY.value > 0 ? 20 : 0,
     }));
 
+    const handleLike = () => {
+        if (currentStatus) {
+            toggleStatusLike(currentStatus.id);
+        }
+    };
+
     const handleReply = () => {
         if (!replyText.trim() || !currentStatus || !id) return;
 
@@ -183,6 +190,8 @@ export default function ViewStatusScreen() {
             </View>
         );
     }
+
+    const hasLiked = currentStatus.likes?.includes(currentUser?.id || '');
 
     return (
         <GestureHandlerRootView style={{ flex: 1, backgroundColor: 'black' }}>
@@ -233,11 +242,26 @@ export default function ViewStatusScreen() {
             {/* Status Content */}
             <GestureDetector gesture={composedGestures}>
                 <View style={styles.content}>
-                    <Image
-                        source={{ uri: currentStatus.mediaUrl }}
-                        style={styles.media}
-                        resizeMode="contain"
-                    />
+                    {currentStatus.mediaType === 'video' ? (
+                        <Video
+                            source={{ uri: currentStatus.mediaUrl }}
+                            style={styles.media}
+                            resizeMode={ResizeMode.CONTAIN}
+                            shouldPlay
+                            isLooping={false}
+                            onPlaybackStatusUpdate={(status: any) => {
+                                if (status.isLoaded && status.didJustFinish) {
+                                    runOnJS(handleNext)();
+                                }
+                            }}
+                        />
+                    ) : (
+                        <Image
+                            source={{ uri: currentStatus.mediaUrl }}
+                            style={styles.media}
+                            resizeMode="contain"
+                        />
+                    )}
                 </View>
             </GestureDetector>
 
@@ -248,17 +272,31 @@ export default function ViewStatusScreen() {
                 </View>
             )}
 
-            {/* Views (only for my status) */}
-            {isMyStatus && (
-                 <Pressable onPress={() => setModalVisible(true)}>
-                    <View style={styles.viewsContainer}>
+            {/* Interactions Footer */}
+            <View style={styles.interactionsFooter}>
+                {/* Views (only for my status) */}
+                {isMyStatus ? (
+                    <Pressable onPress={() => setModalVisible(true)} style={styles.viewsWrapper}>
                         <MaterialIcons name="visibility" size={20} color="#ffffff" />
                         <Text style={styles.viewsText}>
-                            {currentStatus.views?.length || 0} views
+                            {currentStatus.views?.length || 0}
                         </Text>
+                    </Pressable>
+                ) : (
+                    <View style={styles.likesWrapper}>
+                        <Pressable onPress={handleLike} style={styles.likeButton}>
+                            <MaterialIcons 
+                                name={hasLiked ? "favorite" : "favorite-border"} 
+                                size={28} 
+                                color={hasLiked ? "#f43f5e" : "#ffffff"} 
+                            />
+                        </Pressable>
+                        {currentStatus.likes?.length > 0 && (
+                            <Text style={styles.likesText}>{currentStatus.likes.length}</Text>
+                        )}
                     </View>
-                </Pressable>
-            )}
+                )}
+            </View>
 
             {/* Reply (for others' status) */}
             {!isMyStatus && (
@@ -403,6 +441,33 @@ const styles = StyleSheet.create({
     viewsText: {
         color: '#ffffff',
         fontSize: 14,
+    },
+    interactionsFooter: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 16,
+        borderTopWidth: 1,
+        borderTopColor: 'rgba(255,255,255,0.1)',
+        gap: 20,
+    },
+    viewsWrapper: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    likesWrapper: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    likeButton: {
+        padding: 4,
+    },
+    likesText: {
+        color: '#ffffff',
+        fontSize: 16,
+        fontWeight: '600',
     },
     replyContainer: {
         flexDirection: 'row',

@@ -3,6 +3,7 @@ import { Tabs } from 'expo-router';
 import { View, Pressable, StyleSheet, Animated } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useApp } from '../../context/AppContext';
 
 const TabIcon = ({ name, focused, size = 24 }: { name: any; focused: boolean; size?: number }) => {
@@ -39,6 +40,8 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
             const isFocused = state.index === index;
 
             const onPress = () => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              
               const event = navigation.emit({
                 type: 'tabPress',
                 target: route.key,

@@ -6,8 +6,9 @@ export interface Message {
     timestamp: string;
     status?: 'sent' | 'delivered' | 'read';
     reactions?: string[];
+    replyTo?: string;
     media?: {
-        type: 'image' | 'video' | 'file' | 'status_reply';
+        type: 'image' | 'video' | 'audio' | 'file' | 'status_reply';
         url: string;
         name?: string;
         caption?: string;
@@ -34,6 +35,7 @@ export interface StatusUpdate {
     timestamp: string;
     expiresAt: string; // ISO date string, 24h from creation
     views: string[]; // Array of user IDs who viewed
+    likes: string[]; // Array of user IDs who liked
     // Legacy fields for backwards compatibility
     contactName?: string;
     avatar?: string;

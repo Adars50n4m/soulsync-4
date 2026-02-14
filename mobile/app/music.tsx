@@ -45,6 +45,9 @@ export default function MusicScreen() {
     const [progress, setProgress] = useState(0);
     const lastClickTime = useRef<{ [key: string]: number }>({});
     const [keyboardVisible, setKeyboardVisible] = useState(false);
+    const isMountedRef = useRef(true);
+    const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const abortControllerRef = useRef<AbortController | null>(null);
 
     // Animations
     const slideY = useSharedValue(height);
@@ -74,6 +77,13 @@ export default function MusicScreen() {
         const showSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', () => setKeyboardVisible(true));
         const hideSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardVisible(false));
         return () => {
+            isMountedRef.current = false;
+            if (searchTimeoutRef.current) {
+                clearTimeout(searchTimeoutRef.current);
+            }
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
             showSub.remove();
             hideSub.remove();
         };
@@ -98,37 +108,201 @@ export default function MusicScreen() {
         return () => clearInterval(interval);
     }, [musicState.isPlaying, musicState.currentSong]);
 
+    const [page, setPage] = useState(1);
+    const [hasMore, setHasMore] = useState(true);
+
     const transformSong = (s: any): Song => {
-        return {
-            id: s.id,
-            name: s.name || s.title || 'Unknown Title',
-            artist: s.artists?.primary?.map((a: any) => a.name).join(', ') || s.primaryArtists || 'Unknown Artist',
-            image: s.image?.[s.image.length - 1]?.url || s.image?.[1]?.url || s.image?.[0]?.url || '',
-            url: s.downloadUrl?.[s.downloadUrl.length - 1]?.url || s.downloadUrl?.[0]?.url || '',
-            duration: s.duration,
-        };
+        try {
+            if (!s) return { id: Math.random().toString(), name: 'Unknown', artist: 'Unknown', image: '', url: '' };
+
+            let imageUrl = 'https://images.unsplash.com/photo-1614850523296-d8c1af93d400?w=400&h=400&fit=crop';
+            if (Array.isArray(s.image) && s.image.length > 0) {
+                imageUrl = s.image[s.image.length - 1]?.url || s.image[0]?.url || imageUrl;
+            } else if (typeof s.image === 'string' && s.image) {
+                imageUrl = s.image;
+            }
+
+            let downloadUrl = '';
+            if (Array.isArray(s.downloadUrl) && s.downloadUrl.length > 0) {
+                downloadUrl = s.downloadUrl[s.downloadUrl.length - 1]?.url || s.downloadUrl[0]?.url || '';
+            } else if (typeof s.downloadUrl === 'string') {
+                downloadUrl = s.downloadUrl;
+            }
+
+            let artistName = 'Unknown Artist';
+            if (s.artists?.primary && Array.isArray(s.artists.primary)) {
+                artistName = s.artists.primary.map((a: any) => a.name).join(', ');
+            } else if (typeof s.primaryArtists === 'string') {
+                artistName = s.primaryArtists;
+            } else if (s.artist) {
+                artistName = s.artist;
+            }
+
+            return {
+                id: s.id?.toString() || Math.random().toString(),
+                name: s.name || s.title || 'Unknown Title',
+                artist: artistName || 'Unknown Artist',
+                image: imageUrl,
+                url: downloadUrl,
+                duration: typeof s.duration === 'number' ? s.duration : 0,
+            };
+        } catch (e) {
+            console.error('[Music] Transform Error:', e);
+            return { id: Math.random().toString(), name: 'Error', artist: 'Error', image: '', url: '' };
+        }
     };
 
-    const searchSongs = async (query: string) => {
-        if (!query.trim()) { setSongs([]); return; }
-        setIsLoading(true);
-        const url = `${getSaavnApiUrl()}/search/songs?query=${encodeURIComponent(query)}&limit=20`;
+    const searchSongs = async (query: string, newSearch = true) => {
         try {
-            const response = await fetch(url);
-            const data = await response.json();
-            if (data?.success && data?.data?.results && Array.isArray(data.data.results)) {
-                // Deduplicate and ensure unique IDs
-                const rawResults = data.data.results.map(transformSong).filter((s: Song) => s.url);
+            if (!query.trim()) {
+                if (isMountedRef.current) setSongs([]);
+                return;
+            }
+
+            // Cancel previous request if any
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+
+            // Create new abort controller for this request
+            abortControllerRef.current = new AbortController();
+
+            if (newSearch) {
+                if (isMountedRef.current) {
+                    setIsLoading(true);
+                    setPage(1);
+                    setHasMore(true);
+                }
+            }
+
+            const currentPage = newSearch ? 1 : page;
+            const limit = 40;
+            const url = `${getSaavnApiUrl()}/search/songs?query=${encodeURIComponent(query)}&page=${currentPage}&limit=${limit}`;
+
+            console.log(`[Music] Searching URL: ${url}`);
+
+            const response = await fetch(url, {
+                signal: abortControllerRef.current.signal
+            });
+
+            if (!isMountedRef.current) return;
+
+            const text = await response.text();
+            if (!isMountedRef.current) return;
+
+            // console.log('[Music] Response length:', text.length);
+
+            let data;
+            try {
+                data = JSON.parse(text);
+            } catch (jsonError) {
+                console.warn('[Music] JSON Parse Error:', jsonError);
+                if (isMountedRef.current) {
+                    if (newSearch) setSongs([]);
+                    setIsLoading(false);
+                }
+                return;
+            }
+
+            if (!isMountedRef.current) return;
+
+            if (data?.success && data?.data?.results) {
+                const resultsArray = Array.isArray(data.data.results) ? data.data.results : [];
+
+                if (resultsArray.length === 0) {
+                    if (isMountedRef.current) {
+                        if (newSearch) setSongs([]);
+                        setHasMore(false);
+                        setIsLoading(false);
+                    }
+                    return;
+                }
+
+                const rawResults = resultsArray
+                    .map((item: any) => transformSong(item))
+                    .filter((s: Song) => s.url); // Filter out songs without URL
+
+                // Deduplicate by ID
                 const uniqueResults = Array.from(new Map(rawResults.map((s: Song) => [s.id, s])).values()) as Song[];
-                setSongs(uniqueResults);
+
+                console.log(`[Music] Found ${uniqueResults.length} valid songs`);
+
+                if (!isMountedRef.current) return;
+
+                if (newSearch) {
+                    setSongs(uniqueResults);
+                } else {
+                    setSongs(prev => {
+                        const combined = [...prev, ...uniqueResults];
+                         return Array.from(new Map(combined.map((s: Song) => [s.id, s])).values()) as Song[];
+                    });
+                }
+
+                if (uniqueResults.length < limit) {
+                    setHasMore(false);
+                } else {
+                    setPage(currentPage + 1);
+                }
             } else {
+                console.log('[Music] API returned success=false or no data');
+                if (isMountedRef.current) {
+                    if (newSearch) setSongs([]);
+                    setHasMore(false);
+                }
+            }
+        } catch (error: any) {
+            // Don't log abort errors as they're expected when cancelling requests
+            if (error?.name !== 'AbortError') {
+                console.warn('[Music] Search error:', error?.message || error);
+            }
+            if (isMountedRef.current && newSearch && error?.name !== 'AbortError') {
                 setSongs([]);
             }
-        } catch (error) { 
-            console.error('[Music] Search Error:', error);
-            setSongs([]); 
+        } finally {
+            if (isMountedRef.current) {
+                setIsLoading(false);
+            }
         }
-        setIsLoading(false);
+    };
+
+    const loadMore = () => {
+        if (!isLoading && hasMore && searchQuery.trim()) {
+            searchSongs(searchQuery, false);
+        }
+    };
+
+    // Debounced search as user types (like Saavn app)
+    const handleSearchInput = (text: string) => {
+        setSearchQuery(text);
+
+        // Clear previous timeout
+        if (searchTimeoutRef.current) {
+            clearTimeout(searchTimeoutRef.current);
+            searchTimeoutRef.current = null;
+        }
+
+        // Cancel ongoing request
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+
+        // Debounce search - trigger after 800ms of user stopping typing
+        if (text.trim().length >= 2) {
+            setIsLoading(true);
+            searchTimeoutRef.current = setTimeout(() => {
+                if (isMountedRef.current) {
+                    searchSongs(text, true);
+                }
+            }, 800);
+        } else if (text.trim().length === 0) {
+            // Clear results if search is empty
+            setSongs([]);
+            setIsLoading(false);
+        } else {
+            // Less than 2 characters
+            setIsLoading(false);
+        }
     };
 
     const handleSongInteraction = (song: Song) => {
@@ -209,9 +383,10 @@ export default function MusicScreen() {
                         placeholder="Search songs, artists..."
                         placeholderTextColor="rgba(255,255,255,0.3)"
                         value={searchQuery}
-                        onChangeText={setSearchQuery}
-                        onSubmitEditing={() => searchSongs(searchQuery)}
+                        onChangeText={handleSearchInput}
                         returnKeyType="search"
+                        autoCorrect={false}
+                        autoCapitalize="none"
                     />
                 </BlurView>
             </View>
@@ -255,8 +430,8 @@ export default function MusicScreen() {
         <View style={styles.container}>
             <StatusBar barStyle="light-content" />
             
-            {/* Blurred Background */}
-            <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
+            {/* Blurred Background - Blurs the content behind this modal */}
+            <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
 
             {/* Transparent Pressable to close the overlay */}
             <Pressable style={StyleSheet.absoluteFill} onPress={() => router.back()} />
@@ -270,13 +445,19 @@ export default function MusicScreen() {
                         <FlatList
                             data={displaySongs}
                             renderItem={renderSongItem}
-                            keyExtractor={item => item.id}
+                            keyExtractor={(item, index) => item.id || index.toString()}
                             ListHeaderComponent={renderOverlayHeader}
                             contentContainerStyle={styles.listContent}
                             showsVerticalScrollIndicator={false}
                             keyboardShouldPersistTaps="handled"
-                            ListFooterComponent={<View style={{ height: 120 }} />}
-                            ListEmptyComponent={isLoading ? (
+                            onEndReached={loadMore}
+                            onEndReachedThreshold={0.5}
+                            ListFooterComponent={
+                                <View style={{ height: 120, alignItems: 'center', paddingTop: 20 }}>
+                                    {isLoading && songs.length > 0 && <ActivityIndicator color={MAGENTA} />}
+                                </View>
+                            }
+                            ListEmptyComponent={isLoading && songs.length === 0 ? (
                                 <ActivityIndicator color={MAGENTA} style={{ marginTop: 20 }} />
                             ) : null}
                         />

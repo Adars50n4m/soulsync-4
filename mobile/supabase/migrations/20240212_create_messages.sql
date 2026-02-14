@@ -6,6 +6,9 @@ create table if not exists public.messages (
   text text not null,
   status text check (status in ('sent', 'delivered', 'read')) default 'sent',
   media_url text,
+  media_type text,
+  media_caption text,
+  reply_to_id bigint,
   created_at timestamp with time zone default timezone('utc'::text, now())
 );
 

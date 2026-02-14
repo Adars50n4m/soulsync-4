@@ -120,16 +120,27 @@ class CallService {
             timestamp: new Date().toISOString()
         };
 
-        const targetChannel = supabase.channel(`signals:${partnerId}`);
-        await targetChannel.subscribe(async (status) => {
+        const targetChannelName = `signals:${partnerId}`;
+        const targetChannel = supabase.channel(targetChannelName);
+        
+        console.log(`[CallService] Subscribing to ${targetChannelName} to send request`);
+        
+        targetChannel.subscribe(async (status) => {
+            console.log(`[CallService] Target channel status for ${partnerId}: ${status}`);
             if (status === 'SUBSCRIBED') {
-                console.log('[CallService] Broadcasting request to partner');
-                await targetChannel.send({
+                console.log('[CallService] Broadcasting call-request to partner');
+                const response = await targetChannel.send({
                     type: 'broadcast',
                     event: 'signal',
                     payload: signal
                 });
-                targetChannel.unsubscribe();
+                console.log('[CallService] Broadcast send result:', response);
+                
+                // Keep it subscribed for a short moment to ensure delivery, then cleanup
+                setTimeout(() => {
+                    targetChannel.unsubscribe();
+                    console.log(`[CallService] Unsubscribed from ${targetChannelName}`);
+                }, 2000);
             }
         });
 

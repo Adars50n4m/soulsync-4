@@ -76,10 +76,18 @@ class MusicSyncService {
             clearTimeout(this.reconnectTimeout);
         }
 
+        if (this.reconnectAttempts > 10) {
+            console.log('[MusicSync] Max reconnection attempts reached. Stopping.');
+            this.connectionStatus = 'disconnected';
+            return;
+        }
+
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000); // Max 30s backoff
         this.reconnectAttempts++;
 
-        console.log(`[MusicSync] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})...`);
+        if (this.reconnectAttempts <= 3) {
+             console.log(`[MusicSync] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})...`);
+        }
 
         this.reconnectTimeout = setTimeout(() => {
             if (this.channel) {
@@ -93,19 +101,19 @@ class MusicSyncService {
             this.channel
                 .on('broadcast', { event: 'playback_update' }, (payload: { payload: PlaybackState }) => {
                     if (this.userId && payload.payload.updatedBy !== this.userId) {
-                        console.log('[MusicSync] Received remote update:', payload.payload);
+                        // console.log('[MusicSync] Received remote update');
                         this.onUpdate?.(payload.payload);
                     }
                 })
                 .subscribe((status: string, err?: Error) => {
                     if (err) {
-                        console.error('[MusicSync] Reconnection error:', err);
+                        if (this.reconnectAttempts <= 3) console.error('[MusicSync] Reconnection error:', err);
                         this.connectionStatus = 'disconnected';
                         this.handleReconnect();
                         return;
                     }
 
-                    console.log('[MusicSync] Status:', status);
+                    // console.log('[MusicSync] Status:', status);
 
                     if (status === 'SUBSCRIBED') {
                         console.log('[MusicSync] Reconnected successfully');

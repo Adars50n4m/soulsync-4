@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
     View, Text, Image, TextInput, Pressable, StyleSheet, Dimensions,
-    StatusBar, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard
+    StatusBar, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Modal, ScrollView
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
@@ -12,6 +12,7 @@ import Animated, {
     SlideInDown, 
     Layout
 } from 'react-native-reanimated';
+import { Video, ResizeMode } from 'expo-av';
 import { useApp } from '../context/AppContext';
 import { storageService } from '../services/StorageService';
 
@@ -24,10 +25,18 @@ export default function AddStatusScreen() {
     const [caption, setCaption] = useState('');
     const [uploading, setUploading] = useState(false);
     const [keyboardVisible, setKeyboardVisible] = useState(false);
+    const [initialLaunch, setInitialLaunch] = useState(true);
 
     useEffect(() => {
         const showSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', () => setKeyboardVisible(true));
         const hideSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardVisible(false));
+        
+        // Auto-open gallery on first launch
+        if (initialLaunch) {
+            handlePickMedia();
+            setInitialLaunch(false);
+        }
+
         return () => {
             showSub.remove();
             hideSub.remove();
@@ -39,6 +48,7 @@ export default function AddStatusScreen() {
             mediaTypes: ImagePicker.MediaTypeOptions.All,
             allowsEditing: true,
             quality: 0.8,
+            videoMaxDuration: 60,
         });
 
         if (!result.canceled && result.assets[0]) {
@@ -47,6 +57,9 @@ export default function AddStatusScreen() {
                 uri: asset.uri,
                 type: asset.type === 'video' ? 'video' : 'image',
             });
+        } else if (result.canceled && !media) {
+            // If canceled and no media selected (initial state), go back
+            router.back();
         }
     };
 
@@ -54,6 +67,7 @@ export default function AddStatusScreen() {
         const permission = await ImagePicker.requestCameraPermissionsAsync();
         if (!permission.granted) {
             Alert.alert('Permission needed', 'Camera permission is required');
+            router.back();
             return;
         }
 
@@ -68,11 +82,13 @@ export default function AddStatusScreen() {
                     uri: result.assets[0].uri,
                     type: 'image',
                 });
+            } else if (result.canceled && !media) {
+                 router.back();
             }
         } catch (error) {
             Alert.alert('Camera Error', 'Could not open camera.');
+            if (!media) router.back();
         }
-
     };
 
     const handlePost = async () => {
@@ -83,9 +99,6 @@ export default function AddStatusScreen() {
 
         setUploading(true);
 
-        // Simulate upload
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
         // Add status with 24h expiry
         const now = new Date();
         const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours
@@ -94,6 +107,7 @@ export default function AddStatusScreen() {
         let publicUrl = media.uri;
         if (media.uri.startsWith('file://')) {
             try {
+                // Upload
                 const uploadedUrl = await storageService.uploadImage(media.uri, 'status-media', currentUser?.id);
                 if (uploadedUrl) {
                     publicUrl = uploadedUrl;
@@ -113,11 +127,10 @@ export default function AddStatusScreen() {
             caption: caption.trim(),
             timestamp: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             expiresAt: expiresAt.toISOString(),
-            views: [],
         });
 
         setUploading(false);
-        Alert.alert('Success', 'Status posted! It will expire in 24 hours.');
+        Alert.alert('Success', 'Status posted!');
         router.back();
     };
 
@@ -125,29 +138,9 @@ export default function AddStatusScreen() {
         return (
             <View style={styles.container}>
                 <StatusBar barStyle="light-content" />
-                <Animated.View entering={FadeIn.duration(300)} style={styles.emptyStateContainer}>
-                    <Pressable onPress={() => router.back()} style={styles.closeButton}>
-                        <MaterialIcons name="close" size={28} color="white" />
-                    </Pressable>
-                    
-                    <View style={styles.actionsContainer}>
-                        <Pressable style={styles.actionButton} onPress={handleTakePhoto}>
-                            <View style={[styles.actionIcon, { backgroundColor: 'rgba(255,255,255,0.1)' }]}>
-                                <MaterialIcons name="camera-alt" size={40} color="white" />
-                            </View>
-                            <Text style={styles.actionText}>Camera</Text>
-                        </Pressable>
-
-                        <Pressable style={styles.actionButton} onPress={handlePickMedia}>
-                            <View style={[styles.actionIcon, { backgroundColor: 'rgba(255,255,255,0.1)' }]}>
-                                <MaterialIcons name="photo-library" size={40} color="white" />
-                            </View>
-                            <Text style={styles.actionText}>Gallery</Text>
-                        </Pressable>
-                    </View>
-
-                    <Text style={styles.hintText}>Share a moment to your Signal</Text>
-                </Animated.View>
+                <View style={{ flex: 1, backgroundColor: 'black', justifyContent: 'center', alignItems: 'center' }}>
+                    <ActivityIndicator size="large" color="#ffffff" />
+                </View>
             </View>
         );
     }
@@ -156,8 +149,19 @@ export default function AddStatusScreen() {
         <View style={styles.container}>
             <StatusBar barStyle="light-content" hidden />
 
-            {/* Full Screen Media */}
-            <Image source={{ uri: media.uri }} style={styles.fullScreenImage} resizeMode="contain" />
+            {/* Full Screen Media Preview */}
+            {media.type === 'video' ? (
+                <Video 
+                    source={{ uri: media.uri }}
+                    style={styles.fullScreenImage}
+                    resizeMode={ResizeMode.CONTAIN}
+                    shouldPlay
+                    isLooping
+                    isMuted={false}
+                />
+            ) : (
+                <Image source={{ uri: media.uri }} style={styles.fullScreenImage} resizeMode="contain" />
+            )}
             
             {/* Top Controls */}
             <LinearGradient colors={['rgba(0,0,0,0.6)', 'transparent']} style={styles.topGradient}>
@@ -192,6 +196,7 @@ export default function AddStatusScreen() {
                     style={styles.inputRow}
                 >
                     <View style={styles.inputWrapper}>
+                        <MaterialIcons name="create" size={20} color="rgba(255,255,255,0.5)" style={{ marginRight: 8 }} />
                         <TextInput
                             style={styles.captionInput}
                             placeholder="Add a caption..."
@@ -320,13 +325,14 @@ const styles = StyleSheet.create({
     },
     inputWrapper: {
         flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
         backgroundColor: 'rgba(0,0,0,0.5)',
         borderRadius: 25,
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.2)',
         minHeight: 50,
-        justifyContent: 'center',
-        paddingHorizontal: 20,
+        paddingHorizontal: 16,
         paddingVertical: 5,
     },
     captionInput: {
