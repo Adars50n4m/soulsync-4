@@ -775,10 +775,10 @@ const styles = StyleSheet.create({
         marginBottom: 2,
     },
     statusText: {
-        color: '#F50057', // Distinct Pink/Red
-        fontSize: 11,
-        fontWeight: '800',
-        letterSpacing: 1,
+        color: 'rgba(255,255,255,0.5)',
+        fontSize: 8.5,
+        fontWeight: '600',
+        letterSpacing: 0.5,
         textTransform: 'uppercase',
     },
     headerButton: {

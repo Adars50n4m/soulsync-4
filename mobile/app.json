@@ -61,7 +61,8 @@
           "microphonePermission": "SoulSync needs microphone access for video calls",
           "recordAudioAndroid": true
         }
-      ]
+      ],
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true,

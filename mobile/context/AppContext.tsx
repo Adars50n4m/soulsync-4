@@ -7,8 +7,12 @@ import { chatService, ChatMessage } from '../services/ChatService';
 import { callService, CallSignal } from '../services/CallService';
 import { webRTCService } from '../services/WebRTCService';
 import { supabase } from '../config/supabase';
-import { AppState, Alert } from 'react-native';
+import { offlineService } from '../services/LocalDBService';
 
+if (!offlineService) {
+    console.warn('[AppContext] LocalDBService failed to load. Check native modules.');
+}
+import { AppState, Alert } from 'react-native';
 import { socket } from '../src/webrtc/socket';
 
 export type ThemeName = 'midnight' | 'liquid-blue' | 'sunset' | 'emerald' | 'cyber' | 'amethyst';
@@ -290,17 +294,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     setCurrentUser(userObj);
                     setOtherUser(other);
                     
-                    setContacts([{
-                        id: other.id,
-                        name: other.name,
-                        avatar: other.avatar,
-                        status: 'offline',
-                        bio: other.bio,
-                        lastMessage: '',
-                        unreadCount: 0,
-                    }]);
+                    // 1. Load from Local DB (Instant)
+                    try {
+                        const localContacts = await offlineService?.getContacts() || [];
+                        if (localContacts.length > 0) {
+                            console.log('[AppContext] Loaded contacts from local DB');
+                            setContacts(localContacts);
+                        } else {
+                             // Fallback for first run
+                            setContacts([{
+                                id: other.id,
+                                name: other.name,
+                                avatar: other.avatar,
+                                status: 'offline',
+                                bio: other.bio,
+                                lastMessage: '',
+                                unreadCount: 0,
+                            }]);
+                        }
 
-                    // Fetch data
+                        const localMessages = await offlineService?.getMessages(other.id) || [];
+                        if (localMessages.length > 0) {
+                            console.log('[AppContext] Loaded messages from local DB', localMessages.length);
+                            setMessages(prev => ({ ...prev, [other.id]: localMessages }));
+                        }
+                    } catch (e) {
+                        console.error('[AppContext] Failed to load local DB:', e);
+                    }
+
+                    // 2. Fetch from Network (Sync)
                     await Promise.all([
                         fetchProfileFromSupabase(userId),
                         fetchMessagesFromSupabase(userId, other.id),
@@ -502,9 +524,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             })
             .subscribe();
 
+        // Listen for new MESSAGES (Realtime & Persistence)
+        const messageSub = supabase
+            .channel('public:messages')
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, async (payload) => {
+                const newMsg = payload.new as any;
+                if (newMsg.receiver === currentUser.id || newMsg.sender === currentUser.id) {
+                    const partnerId = newMsg.sender === currentUser.id ? newMsg.receiver : newMsg.sender;
+                    
+                    const message: Message = {
+                        id: newMsg.id.toString(),
+                        sender: newMsg.sender === currentUser.id ? 'me' : 'them',
+                        text: newMsg.text,
+                        timestamp: new Date(newMsg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        status: newMsg.status || 'sent',
+                        media: newMsg.media_url ? { type: newMsg.media_type, url: newMsg.media_url, caption: newMsg.media_caption } : undefined,
+                        replyTo: newMsg.reply_to_id
+                    };
+
+                    // Save to Local DB
+                    if (offlineService) {
+                        await offlineService.saveMessage(partnerId, message);
+                    }
+
+                    // Update State
+                    setMessages(prev => {
+                        const chatMessages = prev[partnerId] || [];
+                        if (chatMessages.some(m => m.id === message.id)) return prev; // Dedup
+                        return { ...prev, [partnerId]: [...chatMessages, message] };
+                    });
+
+                    // Update Contact Last Message
+                    setContacts(prev => prev.map(c => 
+                        c.id === partnerId ? {
+                            ...c,
+                            lastMessage: message.media ? '梼 Attachment' : message.text,
+                            unreadCount: message.sender === 'them' ? (c.unreadCount || 0) + 1 : c.unreadCount
+                        } : c
+                    ));
+                }
+            })
+            .subscribe();
+
         return () => {
             supabase.removeChannel(callSub);
             supabase.removeChannel(statusSub);
+            supabase.removeChannel(messageSub);
         };
     }, [currentUser?.id, otherUser]);
 
@@ -535,6 +600,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 media: sentMessage.media ? { type: sentMessage.media.type as any, url: sentMessage.media.url } : undefined,
                 replyTo: sentMessage.reply_to,
             };
+
+            // Save outgoing message to Local DB
+            if (offlineService) {
+                await offlineService.saveMessage(chatId, newMsg);
+            }
+
             setMessages(prev => ({
                 ...prev,
                 [chatId]: [...(prev[chatId] || []), newMsg]
@@ -607,6 +678,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         try {
             const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
             if (data) {
+                const updatedContact = {
+                    id: userId,
+                    name: data.name,
+                    avatar: data.avatar_url,
+                    bio: data.bio,
+                    status: 'offline' as 'online' | 'offline', // Default, will be updated by socket
+                    unreadCount: 0,
+                    lastMessage: ''
+                };
+                
+                // Update Local and State
+                if (offlineService) {
+                    await offlineService.saveContact(updatedContact);
+                }
+
                 setOtherUser(prev => prev ? { ...prev, name: data.name, avatar: data.avatar_url, bio: data.bio } : null);
                 setContacts(prev => prev.map(c => c.id === userId ? {
                     ...c,
@@ -634,7 +720,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     timestamp: new Date(dbRow.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                     status: dbRow.status,
                     media: dbRow.media_url ? { type: 'image', url: dbRow.media_url } : undefined,
+                    // TODO: Handle replyTo from DB if needed
                 }));
+
+                // Save to Local DB
+                if (offlineService) {
+                    await Promise.all(mappedMessages.map(msg => offlineService.saveMessage(partnerId, msg)));
+                }
+
                 setMessages(prev => ({ ...prev, [partnerId]: mappedMessages }));
 
                 // Update last message in specific contact
