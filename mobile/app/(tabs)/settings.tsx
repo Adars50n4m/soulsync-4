@@ -128,7 +128,7 @@ export default function SettingsScreen() {
                             subtitle={notifications ? 'Enabled' : 'Disabled'}
                             onPress={() => setNotifications(!notifications)}
                             rightElement={
-                                <View style={[styles.toggle, notifications && styles.toggleActive]}>
+                                <View style={[styles.toggle, notifications && { backgroundColor: activeTheme.primary }]}>
                                     <View style={[styles.toggleKnob, notifications && styles.toggleKnobActive]} />
                                 </View>
                             }
@@ -314,9 +314,7 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(255,255,255,0.2)',
         padding: 2,
     },
-    toggleActive: {
-        backgroundColor: '#f43f5e',
-    },
+
     toggleKnob: {
         width: 24,
         height: 24,

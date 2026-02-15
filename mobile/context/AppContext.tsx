@@ -76,7 +76,9 @@ interface AppContextType {
     activeTheme: ThemeConfig;
     activeCall: ActiveCall | null;
     musicState: MusicState;
+
     onlineUsers: string[];
+    typingUsers: string[];
 
     // Actions
     addMessage: (chatId: string, text: string, sender: 'me' | 'them', media?: Message['media']) => string;
@@ -102,6 +104,7 @@ interface AppContextType {
     sendChatMessage: (chatId: string, text: string, media?: Message['media'], replyTo?: string) => void;
     updateProfile: (updates: { name?: string; bio?: string; avatar?: string }) => void;
     addStatusView: (statusId: string) => Promise<void>;
+    sendTyping: (isTyping: boolean) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -120,6 +123,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
     const [isReady, setIsReady] = useState(false);
     const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
+    const [typingUsers, setTypingUsers] = useState<string[]>([]);
 
     const [musicState, setMusicState] = useState<MusicState>({
         currentSong: null,
@@ -156,16 +160,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     useEffect(() => {
         if (!currentUser) return;
 
+        const handleAppStateChange = (nextAppState: string) => {
+            if (nextAppState === 'active') {
+                console.log('[AppContext] App active, connecting socket...');
+                if (!socket?.connected) {
+                    socket?.connect();
+                }
+                socket?.emit('user-online', currentUser.id);
+            } else if (nextAppState === 'background') {
+                console.log('[AppContext] App background, disconnecting socket...');
+                // Optional: Emit user-offline before disconnecting if server supports it, 
+                // but disconnect usually triggers it on server too.
+                socket?.disconnect();
+            }
+        };
+
+        // Initial Connection
+        if (!socket?.connected) {
+            socket?.connect();
+        }
         socket?.emit('user-online', currentUser.id);
 
+        const subscription = AppState.addEventListener('change', handleAppStateChange);
+
         socket?.on('user-connected', (userId: string) => {
-            setOnlineUsers((prev) => [...prev, userId]);
+            console.log('[AppContext] User connected:', userId);
+            setOnlineUsers((prev) => Array.from(new Set([...prev, userId])));
             setContacts(prev => prev.map(c => 
                 c.id === userId ? { ...c, status: 'online' } : c
             ));
         });
 
         socket?.on('user-disconnected', (userId: string) => {
+            console.log('[AppContext] User disconnected:', userId);
             setOnlineUsers((prev) => prev.filter(id => id !== userId));
             setContacts(prev => prev.map(c => 
                 c.id === userId ? { ...c, status: 'offline' } : c
@@ -173,6 +200,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
 
         socket?.on('online-users-list', (users: string[]) => {
+            console.log('[AppContext] Online users list:', users);
             setOnlineUsers(users);
             setContacts(prev => prev.map(c => ({
                 ...c,
@@ -180,10 +208,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             })));
         });
 
+        socket?.on('user-typing', ({ userId }: { userId: string }) => {
+            console.log('[AppContext] User typing:', userId);
+            if (userId !== currentUser.id) {
+                setTypingUsers(prev => Array.from(new Set([...prev, userId])));
+            }
+        });
+
+        socket?.on('user-stop-typing', ({ userId }: { userId: string }) => {
+            setTypingUsers(prev => prev.filter(id => id !== userId));
+        });
+
+        socket?.on('connect', () => {
+            console.log('[AppContext] Socket connected/reconnected');
+            if (currentUser) {
+                socket?.emit('user-online', currentUser.id);
+            }
+        });
+
         return () => {
+            subscription.remove();
             socket?.off('user-connected');
             socket?.off('user-disconnected');
             socket?.off('online-users-list');
+            socket?.off('user-typing');
+            socket?.off('user-stop-typing');
+            socket?.off('connect');
+            // Do not disconnect on unmount of effect, only on active/background or logout
         };
     }, [currentUser]);
 
@@ -243,7 +294,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         id: other.id,
                         name: other.name,
                         avatar: other.avatar,
-                        status: 'online',
+                        status: 'offline',
                         bio: other.bio,
                         lastMessage: '',
                         unreadCount: 0,
@@ -481,7 +532,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 text: sentMessage.text,
                 timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 status: 'sent',
-                media: sentMessage.media ? { type: sentMessage.media.type, url: sentMessage.media.url } : undefined,
+                media: sentMessage.media ? { type: sentMessage.media.type as any, url: sentMessage.media.url } : undefined,
                 replyTo: sentMessage.reply_to,
             };
             setMessages(prev => ({
@@ -514,9 +565,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 id: other.id,
                 name: other.name,
                 avatar: other.avatar,
-                status: 'online',
+                status: 'offline', // Default to offline, let socket update it
                 bio: other.bio,
-                lastMessage: '',
+                lastMessage: 'Start a conversation',
                 unreadCount: 0,
             }]);
 
@@ -585,6 +636,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     media: dbRow.media_url ? { type: 'image', url: dbRow.media_url } : undefined,
                 }));
                 setMessages(prev => ({ ...prev, [partnerId]: mappedMessages }));
+
+                // Update last message in specific contact
+                const lastMsg = mappedMessages[mappedMessages.length - 1];
+                if (lastMsg) {
+                     setContacts(prev => prev.map(c => 
+                        c.id === partnerId ? {
+                            ...c,
+                            lastMessage: lastMsg.media ? '梼 Attachment' : lastMsg.text
+                        } : c
+                    ));
+                }
             }
         } catch (e) {}
     };
@@ -597,6 +659,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // ... (Keep Music Functions) ...
+    const sendTyping = useCallback((isTyping: boolean) => {
+        if (!currentUser || !otherUser) return;
+        socket?.emit(isTyping ? 'typing' : 'stop-typing', { 
+            senderId: currentUser.id, 
+            receiverId: otherUser.id 
+        });
+    }, [currentUser, otherUser]);
+
     const playSong = async (song: Song, broadcast = true) => {
         try {
             if (!song.url || song.url.trim() === '') return;
@@ -1129,6 +1199,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             addMessage, updateMessage, updateMessageStatus, deleteMessage, addReaction, addCall, addStatus, deleteStatus, setTheme,
             startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, playSong, togglePlayMusic, toggleFavoriteSong,
             seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView, toggleStatusLike,
+            typingUsers, sendTyping
         }}>
             {children}
         </AppContext.Provider >

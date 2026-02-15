@@ -1,0 +1,18 @@
+name = "soulsync-upload-worker"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# R2 bucket binding (FREE TIER) - Using your existing bucket!
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "soulsync"
+
+# Environment variables
+[vars]
+MAX_FILE_SIZE_MB = "50"
+MAX_AVATAR_SIZE_MB = "5"
+
+# IMPORTANT: Add these secrets using: wrangler secret put <NAME>
+# SUPABASE_JWT_SECRET - Your Supabase JWT secret (from Supabase Dashboard → Settings → API)
+# R2_PUBLIC_DOMAIN - Your R2.dev public URL (e.g., "https://pub-abc123xyz.r2.dev")
+#                     Get this from R2 Dashboard → soulsync-media → Settings → Public Access

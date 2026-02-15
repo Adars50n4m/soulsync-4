@@ -5,7 +5,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../../context/AppContext';
 
 export default function CallsScreen() {
-    const { calls, contacts, startCall } = useApp();
+    const { calls, contacts, startCall, activeTheme } = useApp();
 
     const getContact = (contactId: string) => {
         return contacts.find(c => c.id === contactId);
@@ -43,13 +43,13 @@ export default function CallsScreen() {
                     </View>
                 </View>
                 <Pressable
-                    style={styles.callButton}
+                    style={[styles.callButton, { backgroundColor: `${activeTheme.primary}1A` }]}
                     onPress={() => contact && startCall(contact.id, item.callType || 'audio')}
                 >
                     <MaterialIcons
                         name={item.callType === 'video' ? 'videocam' : 'call'}
                         size={22}
-                        color="#f43f5e"
+                        color={activeTheme.primary}
                     />
                 </Pressable>
             </Pressable>

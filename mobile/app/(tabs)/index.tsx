@@ -8,7 +8,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../../context/AppContext';
 import { SoulSyncLogo } from '../../components/SoulSyncLogo';
 
-const ChatListItem = React.memo(({ item, lastMsg, router }: { item: any, lastMsg: any, router: any }) => {
+const ChatListItem = React.memo(({ item, lastMsg, router, isTyping }: { item: any, lastMsg: any, router: any, isTyping: boolean }) => {
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const translateYAnim = useRef(new Animated.Value(0)).current;
 
@@ -76,9 +76,15 @@ const ChatListItem = React.memo(({ item, lastMsg, router }: { item: any, lastMsg
           {/* Content */}
           <View style={styles.chatContent}>
             <Text style={styles.contactName}>{item.name}</Text>
-            <Text numberOfLines={1} style={styles.lastMessage}>
-              {lastMsg.text || 'Tap to start syncing...'}
-            </Text>
+            {isTyping ? (
+                 <Text numberOfLines={1} style={[styles.lastMessage, { color: '#22c55e', fontWeight: '700' }]}>
+                  Typing...
+                </Text>
+            ) : (
+                <Text numberOfLines={1} style={styles.lastMessage}>
+                  {lastMsg.text || 'Start a conversation'}
+                </Text>
+            )}
           </View>
 
           {/* Right Side */}
@@ -96,13 +102,14 @@ const ChatListItem = React.memo(({ item, lastMsg, router }: { item: any, lastMsg
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { contacts, messages, activeTheme, musicState } = useApp();
+  const { contacts, messages, activeTheme, musicState, typingUsers } = useApp();
 
   const renderItem = ({ item, index }: { item: any, index: number }) => {
     const chatMessages = messages[item.id] || [];
-    const lastMsg = chatMessages[chatMessages.length - 1] || { text: item.lastMessage || 'Start a conversation...', timestamp: '' };
+    const lastMsg = chatMessages[chatMessages.length - 1] || { text: item.lastMessage || 'Start a conversation', timestamp: '' };
+    const isTyping = typingUsers.includes(item.id);
 
-    return <ChatListItem item={item} lastMsg={lastMsg} router={router} />;
+    return <ChatListItem item={item} lastMsg={lastMsg} router={router} isTyping={isTyping} />;
   };
 
   return (

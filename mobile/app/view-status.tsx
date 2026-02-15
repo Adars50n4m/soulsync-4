@@ -23,7 +23,7 @@ const { width, height } = Dimensions.get('window');
 export default function ViewStatusScreen() {
     const { id, index } = useLocalSearchParams<{ id: string; index: string }>();
     const router = useRouter();
-    const { statuses, contacts, currentUser, deleteStatus, addStatusView, sendChatMessage, toggleStatusLike } = useApp();
+    const { statuses, contacts, currentUser, deleteStatus, addStatusView, sendChatMessage, toggleStatusLike, activeTheme } = useApp();
     const [currentIndex, setCurrentIndex] = useState(parseInt(index || '0'));
     const [replyText, setReplyText] = useState('');
     const [modalVisible, setModalVisible] = useState(false);
@@ -288,7 +288,7 @@ export default function ViewStatusScreen() {
                             <MaterialIcons 
                                 name={hasLiked ? "favorite" : "favorite-border"} 
                                 size={28} 
-                                color={hasLiked ? "#f43f5e" : "#ffffff"} 
+                                color={hasLiked ? activeTheme.primary : "#ffffff"} 
                             />
                         </Pressable>
                         {currentStatus.likes?.length > 0 && (

@@ -7,6 +7,7 @@ import * as Haptics from 'expo-haptics';
 import { useApp } from '../../context/AppContext';
 
 const TabIcon = ({ name, focused, size = 24 }: { name: any; focused: boolean; size?: number }) => {
+  const { activeTheme } = useApp();
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -23,14 +24,14 @@ const TabIcon = ({ name, focused, size = 24 }: { name: any; focused: boolean; si
       <MaterialIcons
         name={name}
         size={size}
-        color={focused ? '#f43f5e' : 'rgba(255,255,255,0.35)'}
+        color={focused ? activeTheme.primary : 'rgba(255,255,255,0.35)'}
       />
     </Animated.View>
   );
 };
 
 const TabBar = ({ state, descriptors, navigation }: any) => {
-  const { musicState } = useApp();
+  const { musicState, activeTheme } = useApp();
 
   return (
     <View style={styles.tabBarContainer}>
@@ -65,7 +66,7 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
                 onPress={onPress}
                 style={({ pressed }) => [
                   styles.tabButton,
-                  isFocused && styles.tabButtonFocused,
+                  isFocused && { backgroundColor: `${activeTheme.primary}1F` },
                   pressed && styles.tabButtonPressed,
                 ]}
               >

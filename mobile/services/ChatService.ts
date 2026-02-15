@@ -8,7 +8,7 @@ export interface ChatMessage {
     timestamp: string;
     status: 'sent' | 'delivered' | 'read';
     media?: {
-        type: 'image' | 'video' | 'file' | 'status_reply';
+        type: 'image' | 'video' | 'audio' | 'file' | 'status_reply';
         url: string;
         name?: string;
         caption?: string;

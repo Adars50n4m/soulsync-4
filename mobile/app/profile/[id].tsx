@@ -13,7 +13,7 @@ const { width } = Dimensions.get('window');
 export default function ProfileScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
-    const { currentUser, otherUser, messages } = useApp();
+    const { currentUser, otherUser, messages, activeTheme } = useApp();
 
     // Determine which user's profile to show
     const isOwnProfile = id === currentUser?.id;
@@ -119,30 +119,33 @@ export default function ProfileScreen() {
                             <Pressable
                                 style={({ pressed }) => [
                                     styles.actionButton,
+                                    { backgroundColor: `${activeTheme.primary}1A`, borderColor: `${activeTheme.primary}33` },
                                     pressed && styles.actionButtonPressed
                                 ]}
                                 onPress={() => router.push(`/chat/${profileUser.id}`)}
                             >
-                                <MaterialIcons name="chat-bubble" size={20} color="#f43f5e" />
-                                <Text style={styles.actionText}>MESSAGE</Text>
+                                <MaterialIcons name="chat-bubble" size={20} color={activeTheme.primary} />
+                                <Text style={[styles.actionText, { color: activeTheme.primary }]}>MESSAGE</Text>
                             </Pressable>
                             <Pressable
                                 style={({ pressed }) => [
                                     styles.actionButton,
+                                    { backgroundColor: `${activeTheme.primary}1A`, borderColor: `${activeTheme.primary}33` },
                                     pressed && styles.actionButtonPressed
                                 ]}
                             >
-                                <MaterialIcons name="call" size={20} color="#f43f5e" />
-                                <Text style={styles.actionText}>CALL</Text>
+                                <MaterialIcons name="call" size={20} color={activeTheme.primary} />
+                                <Text style={[styles.actionText, { color: activeTheme.primary }]}>CALL</Text>
                             </Pressable>
                             <Pressable
                                 style={({ pressed }) => [
                                     styles.actionButton,
+                                    { backgroundColor: `${activeTheme.primary}1A`, borderColor: `${activeTheme.primary}33` },
                                     pressed && styles.actionButtonPressed
                                 ]}
                             >
-                                <MaterialIcons name="videocam" size={20} color="#f43f5e" />
-                                <Text style={styles.actionText}>VIDEO</Text>
+                                <MaterialIcons name="videocam" size={20} color={activeTheme.primary} />
+                                <Text style={[styles.actionText, { color: activeTheme.primary }]}>VIDEO</Text>
                             </Pressable>
                         </View>
                     )}
@@ -186,7 +189,7 @@ export default function ProfileScreen() {
                         <Text style={styles.infoText}>Connected since the beginning</Text>
                     </View>
                     <View style={styles.infoRow}>
-                        <MaterialIcons name="favorite" size={18} color="#f43f5e" />
+                        <MaterialIcons name="favorite" size={18} color={activeTheme.primary} />
                         <Text style={styles.infoText}>Synced forever</Text>
                     </View>
                 </BlurView>

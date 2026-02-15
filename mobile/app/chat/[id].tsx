@@ -87,7 +87,7 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
         <View style={[styles.messageWrapper, isMe && styles.messageWrapperMe]}>
             <View style={styles.replyIconContainer}>
                 <Animated.View style={[styles.replyIcon, iconStyle]}>
-                    <MaterialIcons name="reply" size={24} color="#F50057" />
+                    <MaterialIcons name="reply" size={24} color={activeTheme.primary} />
                 </Animated.View>
             </View>
 
@@ -97,50 +97,16 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
                         styles.bubbleContainer,
                         isMe ? styles.bubbleContainerMe : styles.bubbleContainerThem
                     ]}>
-                        {/* Background - Premium Glass Effect */}
-                        {isMe ? (
-                            <LinearGradient
-                                colors={['rgba(245, 0, 87, 0.9)', 'rgba(200, 0, 70, 0.8)']}
-                                start={{ x: 0, y: 0 }}
-                                end={{ x: 1, y: 1 }}
-                                style={StyleSheet.absoluteFill}
-                            />
-                        ) : (
-                            <View style={StyleSheet.absoluteFill}>
-                                <LinearGradient
-                                    colors={['rgba(255, 255, 255, 0.15)', 'rgba(255, 255, 255, 0.05)']}
-                                    start={{ x: 0, y: 0 }}
-                                    end={{ x: 1, y: 1 }}
-                                    style={StyleSheet.absoluteFill}
-                                />
-                                <BlurView intensity={10} tint="light" style={StyleSheet.absoluteFill} />
-                            </View>
-                        )}
-
-                        {/* Glass shine effect for incoming */}
-                        {!isMe && (
-                            <LinearGradient
-                                colors={['rgba(255,255,255,0.05)', 'transparent']}
-                                start={{ x: 0, y: 0 }}
-                                end={{ x: 0, y: 1 }}
-                                style={{
-                                    position: 'absolute',
-                                    top: 0,
-                                    left: 0,
-                                    right: 0,
-                                    height: '40%',
-                                    pointerEvents: 'none'
-                                }}
-                            />
-                        )}
+                        {/* Background - Solid Color */ }
+                        <View style={[StyleSheet.absoluteFill, { backgroundColor: isMe ? activeTheme.primary : 'rgba(255, 255, 255, 0.1)' }]} />
 
                         <View style={styles.messageContent}>
                             {/* Quoted Message */}
                             {quotedMessage && (
                                 <View style={[styles.quotedContainer, isMe ? styles.quotedMe : styles.quotedThem]}>
-                                    <View style={[styles.quoteBar, { backgroundColor: isMe ? '#fff' : '#ff0080' }]} />
+                                    <View style={[styles.quoteBar, { backgroundColor: isMe ? '#fff' : activeTheme.primary }]} />
                                     <View style={styles.quoteContent}>
-                                        <Text style={[styles.quoteSender, { color: isMe ? '#fff' : '#f43f5e' }]}>
+                                        <Text style={[styles.quoteSender, { color: isMe ? '#fff' : activeTheme.primary }]}>
                                             {quotedMessage.sender === 'me' ? 'YOU' : 'THEM'}
                                         </Text>
                                         <Text numberOfLines={1} style={[styles.quoteText, { color: isMe ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.5)' }]}>
@@ -166,7 +132,7 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
                                     )}
                                     {msg.media.type === 'audio' && (
                                         <View style={styles.audioWaveform}>
-                                            <MaterialIcons name="graphic-eq" size={20} color="#F50057" />
+                                            <MaterialIcons name="graphic-eq" size={20} color={activeTheme.primary} />
                                             <Text style={styles.audioDuration}>0:45</Text>
                                             <MaterialIcons name="play-arrow" size={24} color="#fff" />
                                         </View>
@@ -244,12 +210,18 @@ const ReactionModal = ({ visible, onClose, onSelect }: any) => {
 export default function SingleChatScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
-    const { contacts, messages, sendChatMessage, startCall, activeCall, addReaction, deleteMessage, musicState, currentUser } = useApp();
+    const { contacts, messages, sendChatMessage, startCall, activeCall, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers } = useApp();
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
+    
+    // Typing timeout ref
+    const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const [replyingTo, setReplyingTo] = useState<any>(null);
     const [selectedMsgId, setSelectedMsgId] = useState<string | null>(null);
-    const [isTyping, setIsTyping] = useState(false);
+    
+    const contact = contacts.find(c => c.id === id);
+    const chatMessages = messages[id || ''] || [];
+    const isTyping = contact ? typingUsers.includes(contact.id) : false;
     const [showMusicPlayer, setShowMusicPlayer] = useState(false);
     const flatListRef = useRef<FlatList>(null);
     const modalAnim = useRef(new RNAnimated.Value(0)).current;
@@ -300,8 +272,7 @@ export default function SingleChatScreen() {
     const [playerMedia, setPlayerMedia] = useState<{ url: string; type: 'image' | 'video' | 'audio'; caption?: string } | null>(null);
     const [isUploading, setIsUploading] = useState(false);
 
-    const contact = contacts.find(c => c.id === id);
-    const chatMessages = messages[id || ''] || [];
+
 
     useEffect(() => {
         if (chatMessages.length > 0) {
@@ -340,6 +311,11 @@ export default function SingleChatScreen() {
 
     const handleSend = () => {
         if (!inputText.trim() || !id) return;
+
+        // Stop typing immediately when sending
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        sendTyping(false);
+
         const content = inputText.trim();
         setInputText('');
         setReplyingTo(null);
@@ -487,13 +463,13 @@ export default function SingleChatScreen() {
                     <Text style={styles.contactName}>{contact.name}</Text>
                     {musicState.currentSong ? (
                         <View style={styles.nowPlayingStatus}>
-                            <MaterialIcons name="library-music" size={10} color="#f43f5e" />
-                            <Text style={styles.statusText} numberOfLines={1}>
+                            <MaterialIcons name="library-music" size={10} color={activeTheme.primary} />
+                            <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
                                 {sanitizeSongTitle(musicState.currentSong.name)}
                             </Text>
                         </View>
                     ) : (
-                        <Text style={styles.statusText}>
+                        <Text style={[styles.statusText, { color: 'rgba(255,255,255,0.5)' }]}>
                             {contact.status === 'online' ? 'ONLINE' : 'OFFLINE'}
                         </Text>
                     )}
@@ -501,13 +477,13 @@ export default function SingleChatScreen() {
 
                 {/* Music Button - Navigates to 3D Music Screen */}
                 <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
-                    <MaterialIcons name="library-music" size={20} color="#f43f5e" />
+                    <MaterialIcons name="library-music" size={20} color={activeTheme.primary} />
                 </Pressable>
 
                 {/* Call Button */}
                 <View ref={callButtonRef} collapsable={false}>
                     <Pressable style={styles.headerButton} onPress={openCallModal}>
-                        <MaterialIcons name="call" size={20} color="#f43f5e" />
+                        <MaterialIcons name="call" size={20} color={activeTheme.primary} />
                     </Pressable>
                 </View>
             </BlurView>
@@ -541,7 +517,7 @@ export default function SingleChatScreen() {
             {/* Typing Indicator */}
             {isTyping && (
                 <View style={styles.typingContainer}>
-                    <Text style={styles.typingText}>SYNCHRONIZING...</Text>
+                    <Text style={[styles.typingText, { color: activeTheme.primary }]}>typing...</Text>
                 </View>
             )}
 
@@ -584,7 +560,17 @@ export default function SingleChatScreen() {
                         <TextInput
                             style={styles.input}
                             value={inputText}
-                            onChangeText={setInputText}
+                            onChangeText={(text) => {
+                                setInputText(text);
+                                
+                                // Typing indicator logic
+                                sendTyping(true);
+                                
+                                if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+                                typingTimeoutRef.current = setTimeout(() => {
+                                    sendTyping(false);
+                                }, 2000);
+                            }}
                             onFocus={handleFocus}
                             placeholder="Sync fragment..."
                             placeholderTextColor="rgba(255,255,255,0.3)"
@@ -605,7 +591,7 @@ export default function SingleChatScreen() {
                             <MaterialIcons
                                 name={inputText.trim() ? 'arrow-upward' : 'mic'}
                                 size={18}
-                                color={inputText.trim() ? '#F50057' : 'rgba(255,255,255,0.7)'}
+                                color={inputText.trim() ? activeTheme.primary : 'rgba(255,255,255,0.7)'}
                             />
                         </Pressable>
                     </View>
@@ -1023,7 +1009,7 @@ const styles = StyleSheet.create({
     typingText: {
         fontSize: 8,
         fontWeight: '900',
-        color: '#f43f5e',
+        color: '#f43f5e', // Keeping default for now, or dynamic? Let's verify if user wants ALL pinks changed.
         letterSpacing: 4,
     },
     replyPreview: {
@@ -1047,7 +1033,7 @@ const styles = StyleSheet.create({
     replySender: {
         fontSize: 8,
         fontWeight: '900',
-        color: '#f43f5e',
+        color: '#f43f5e', // TODO: Make dynamic via style injection if possible, or leave as default brand color
         letterSpacing: 2,
     },
     replyText: {
