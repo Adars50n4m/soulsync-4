@@ -1,6 +1,7 @@
 
 import React, { memo, useMemo, useState, useEffect, useRef } from 'react';
 import { HashRouter as Router, Routes, Route, useLocation, Link, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { AppProvider, useApp } from './AppContext.tsx';
 import { getActiveStreams, onStreamsChange } from './src/webrtc/useWebRTC';
 
@@ -224,24 +225,36 @@ const App: React.FC = () => {
   return (
     <AppProvider>
       <Router>
-        <div className="relative h-screen w-full bg-black text-white overflow-hidden font-sans select-none">
-          <Routes>
-            <Route path="/" element={<HomeScreen />} />
-            <Route path="/chat/:id" element={<SingleChatScreen />} />
-            <Route path="/status" element={<StatusScreen />} />
-            <Route path="/calls" element={<CallsScreen />} />
-            <Route path="/contacts" element={<ContactsScreen />} />
-            <Route path="/profile/:id" element={<ProfileScreen />} />
-            <Route path="/settings" element={<SettingsScreen />} />
-            <Route path="/video-call/:id" element={<VideoCallScreen />} />
-            <Route path="/audio-call/:id" element={<AudioCallScreen />} />
+        <AppContent />
+      </Router>
+    </AppProvider>
+  );
+};
+
+const AppContent: React.FC = () => {
+  const location = useLocation();
+
+  return (
+    <LayoutGroup>
+      <AnimatePresence initial={false} custom={location}>
+        <motion.div className="relative h-screen w-full bg-black text-white overflow-hidden font-sans select-none">
+          <Routes location={location} key={location.pathname}>
+            <Route path="/" element={<HomeScreen key="home" />} />
+            <Route path="/chat/:id" element={<SingleChatScreen key="chat" />} />
+            <Route path="/status" element={<StatusScreen key="status" />} />
+            <Route path="/calls" element={<CallsScreen key="calls" />} />
+            <Route path="/contacts" element={<ContactsScreen key="contacts" />} />
+            <Route path="/profile/:id" element={<ProfileScreen key="profile" />} />
+            <Route path="/settings" element={<SettingsScreen key="settings" />} />
+            <Route path="/video-call/:id" element={<VideoCallScreen key="video-call" />} />
+            <Route path="/audio-call/:id" element={<AudioCallScreen key="audio-call" />} />
           </Routes>
           <BottomNav />
           <PipOverlay />
           <HomeIndicator />
-        </div>
-      </Router>
-    </AppProvider>
+        </motion.div>
+      </AnimatePresence>
+    </LayoutGroup>
   );
 };
 

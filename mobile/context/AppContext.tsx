@@ -332,15 +332,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     ]);
                 }
 
-                const [storedTheme, storedFavorites] = await Promise.all([
+                const [storedTheme, storedFavorites, storedLastSong] = await Promise.all([
                     AsyncStorage.getItem('ss_theme'),
                     AsyncStorage.getItem(userId ? `ss_favorites_${userId}` : 'ss_favorites_none'),
+                    AsyncStorage.getItem(userId ? `ss_last_song_${userId}` : 'ss_last_song_none'),
                 ]);
 
                 if (storedTheme) setThemeState(storedTheme as ThemeName);
                 if (storedFavorites) {
                     try {
                         setMusicState(prev => ({ ...prev, favorites: JSON.parse(storedFavorites) }));
+                    } catch (e) {}
+                }
+
+                if (storedLastSong) {
+                    try {
+                        const song = JSON.parse(storedLastSong);
+                        setMusicState(prev => ({ ...prev, currentSong: song }));
+                        // We don't auto-play, just set as current
                     } catch (e) {}
                 }
                 
@@ -785,6 +794,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (!status.isLoaded) return;
             setSound(newSound);
             setMusicState(prev => ({ ...prev, currentSong: song, isPlaying: true }));
+
+            // Save last played song
+            if (currentUser) {
+                AsyncStorage.setItem(`ss_last_song_${currentUser.id}`, JSON.stringify(song));
+            }
+
             if (broadcast) {
                 musicSyncService.broadcastUpdate({
                     currentSong: song,

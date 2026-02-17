@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Native
+ios/
+android/
+.expo/
+*.txt
+*.md

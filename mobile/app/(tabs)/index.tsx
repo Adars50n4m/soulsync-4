@@ -1,49 +1,34 @@
-import React, { useRef } from 'react';
-import { View, Text, Image, FlatList, Pressable, StyleSheet, StatusBar, Animated } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, Text, Image, FlatList, Pressable, StyleSheet, StatusBar, Animated as RNAnimated, Dimensions, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons } from '@expo/vector-icons';
+import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
+import * as ImagePicker from 'expo-image-picker';
 
 import { useApp } from '../../context/AppContext';
 import { SoulSyncLogo } from '../../components/SoulSyncLogo';
+import { StatusViewerModal } from '../../components/StatusViewerModal';
+import { MediaPickerSheet } from '../../components/MediaPickerSheet';
+import { Contact, Story } from '../../types';
 
 const ChatListItem = React.memo(({ item, lastMsg, router, isTyping }: { item: any, lastMsg: any, router: any, isTyping: boolean }) => {
-  const scaleAnim = useRef(new Animated.Value(1)).current;
-  const translateYAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useSharedValue(1);
+  const translateYAnim = useSharedValue(0);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scaleAnim.value }, { translateY: translateYAnim.value }]
+  }));
 
   const handlePressIn = () => {
-    Animated.parallel([
-      Animated.spring(scaleAnim, {
-        toValue: 0.96,
-        useNativeDriver: true,
-        tension: 100,
-        friction: 8,
-      }),
-      Animated.spring(translateYAnim, {
-        toValue: -4,
-        useNativeDriver: true,
-        tension: 100,
-        friction: 8,
-      }),
-    ]).start();
+    scaleAnim.value = withSpring(0.96, { damping: 10, stiffness: 100 });
+    translateYAnim.value = withSpring(-4, { damping: 10, stiffness: 100 });
   };
 
   const handlePressOut = () => {
-    Animated.parallel([
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        useNativeDriver: true,
-        tension: 100,
-        friction: 8,
-      }),
-      Animated.spring(translateYAnim, {
-        toValue: 0,
-        useNativeDriver: true,
-        tension: 100,
-        friction: 8,
-      }),
-    ]).start();
+    scaleAnim.value = withSpring(1, { damping: 10, stiffness: 100 });
+    translateYAnim.value = withSpring(0, { damping: 10, stiffness: 100 });
   };
 
   return (
@@ -53,12 +38,10 @@ const ChatListItem = React.memo(({ item, lastMsg, router, isTyping }: { item: an
       onPressOut={handlePressOut}
       style={styles.chatItem}
     >
-      <Animated.View style={[
-        styles.chatPillContainer,
-        {
-          transform: [{ scale: scaleAnim }, { translateY: translateYAnim }]
-        }
-      ]}>
+      <Animated.View
+        style={[styles.chatPillContainer, animatedStyle]}
+        sharedTransitionTag={`pill-container-${item.id}`}
+      >
         {/* Absolute Background Layers */}
         <View style={styles.pillBackground} />
         <BlurView intensity={40} tint="dark" style={styles.pillBlur} />
@@ -102,7 +85,106 @@ const ChatListItem = React.memo(({ item, lastMsg, router, isTyping }: { item: an
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { contacts, messages, activeTheme, musicState, typingUsers } = useApp();
+  const { contacts, messages, activeTheme, musicState, typingUsers, currentUser, statuses, addStatus } = useApp();
+  
+  // Status State
+  const [selectedStatusContact, setSelectedStatusContact] = useState<Contact | null>(null);
+  const [isViewerVisible, setIsViewerVisible] = useState(false);
+  const [isMediaPickerVisible, setIsMediaPickerVisible] = useState(false);
+
+  // Group statuses by user and map to Story type
+  const contactStoriesMap = React.useMemo(() => {
+    const map = new Map<string, Story[]>();
+    
+    statuses.forEach(s => {
+      const story: Story = {
+        id: s.id,
+        url: s.mediaUrl,
+        type: s.mediaType,
+        timestamp: s.timestamp,
+        seen: false, // You might want to track 'seen' state locally or in context
+        caption: s.caption
+      };
+      if (!map.has(s.userId)) {
+        map.set(s.userId, []);
+      }
+      map.get(s.userId)?.push(story);
+    });
+    return map;
+  }, [statuses]);
+
+  // Derived list of contacts who have stories
+  const contactsWithStories = React.useMemo(() => {
+     return contacts.filter(c => contactStoriesMap.has(c.id)).map(c => ({
+         ...c,
+         stories: contactStoriesMap.get(c.id)
+     }));
+  }, [contacts, contactStoriesMap]);
+
+  const handleStatusPress = (contact: Contact) => {
+    setSelectedStatusContact(contact);
+    setIsViewerVisible(true);
+  };
+
+  const handleMyStatusPress = () => {
+    setIsMediaPickerVisible(true);
+  };
+
+  const createStatus = (result: ImagePicker.ImagePickerResult) => {
+      if (!result.canceled && result.assets && result.assets.length > 0 && currentUser) {
+          const asset = result.assets[0];
+          const type = asset.type === 'video' ? 'video' : 'image';
+          
+          // Create 24h expiration
+          const expiresAt = new Date();
+          expiresAt.setHours(expiresAt.getHours() + 24);
+
+          addStatus({
+              userId: currentUser.id,
+              mediaUrl: asset.uri,
+              mediaType: type,
+              timestamp: new Date().toISOString(),
+              expiresAt: expiresAt.toISOString(),
+              caption: ''
+          });
+      }
+      setIsMediaPickerVisible(false);
+  };
+
+  const handleSelectCamera = async () => {
+      try {
+          const permission = await ImagePicker.requestCameraPermissionsAsync();
+          if (!permission.granted) {
+              Alert.alert('Permission needed', 'Camera permission is required to post status.');
+              return;
+          }
+          const result = await ImagePicker.launchCameraAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Images, // Video support can be added later if needed
+              quality: 0.8,
+          });
+          createStatus(result);
+      } catch (error) {
+          Alert.alert('Error', 'Failed to open camera');
+      }
+  };
+
+  const handleSelectGallery = async () => {
+      try {
+          const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (!permission.granted) {
+              Alert.alert('Permission needed', 'Gallery permission is required to post status.');
+              return;
+          }
+           const result = await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.All,
+              quality: 0.8,
+          });
+          createStatus(result);
+      } catch (error) {
+          Alert.alert('Error', 'Failed to open gallery');
+      }
+  };
+
 
   const renderItem = ({ item, index }: { item: any, index: number }) => {
     const chatMessages = messages[item.id] || [];
@@ -112,32 +194,61 @@ export default function HomeScreen() {
     return <ChatListItem item={item} lastMsg={lastMsg} router={router} isTyping={isTyping} />;
   };
 
+  // Status Rail Component
+  const StatusRail = () => (
+    <View style={styles.statusRail}>
+      <FlatList
+        horizontal
+        data={[{ id: 'my-status' }, ...contactsWithStories]}
+        keyExtractor={item => item.id}
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.statusContent}
+        renderItem={({ item }) => {
+          if (item.id === 'my-status') {
+            return (
+              <Pressable style={styles.statusCard} onPress={handleMyStatusPress}>
+                <View style={styles.myStatusBackground}>
+                  <View style={styles.myStatusAvatarContainer}>
+                    <Image 
+                      source={{ uri: currentUser?.avatar || 'https://via.placeholder.com/150' }} 
+                      style={styles.myStatusAvatar} 
+                    />
+                    <View style={styles.myStatusAddBadge}>
+                      <MaterialIcons name="add" size={16} color="#fff" />
+                    </View>
+                  </View>
+                  <Text style={styles.startStoryText}>Start a story</Text>
+                </View>
+              </Pressable>
+            );
+          }
+          
+          const contact = item as Contact;
+          const hasUnseen = contact.stories?.some(s => !s.seen);
+          const firstStory = contact.stories?.[0];
+
+          return (
+            <Pressable 
+              style={styles.statusCard}
+              onPress={() => handleStatusPress(contact)}
+            >
+              <Image source={{ uri: firstStory?.url }} style={styles.statusMediaBackground} />
+              <View style={styles.statusOverlay}>
+                <View style={[styles.contactAvatarBadge, { borderColor: hasUnseen ? '#3b82f6' : 'rgba(255,255,255,0.2)' }]}>
+                  <Image source={{ uri: contact.avatar }} style={styles.smallStatusAvatar} />
+                </View>
+              </View>
+            </Pressable>
+          );
+        }}
+      />
+    </View>
+  );
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
 
-      {/* Ambient Background Glow */}
-      <View style={styles.ambientGlow}>
-        <LinearGradient
-          colors={[`${activeTheme.primary}15`, 'transparent']}
-          style={styles.ambientGradient}
-        />
-      </View>
-
-      {/* Header with Glass Effect */}
-      <BlurView intensity={100} tint="dark" style={styles.header}>
-        <LinearGradient
-          colors={['rgba(0,0,0,0.9)', 'rgba(0,0,0,0.7)', 'transparent']}
-          style={styles.headerGradient}
-        >
-          <View style={styles.headerContent}>
-            <View style={styles.headerLeft}>
-              <SoulSyncLogo width={32} height={32} />
-              <Text style={styles.headerTitle}>SoulSync</Text>
-            </View>
-          </View>
-        </LinearGradient>
-      </BlurView>
 
       {contacts.length === 0 ? (
         <View style={styles.emptyState}>
@@ -158,10 +269,39 @@ export default function HomeScreen() {
           data={contacts}
           keyExtractor={item => item.id}
           renderItem={renderItem}
+          ListHeaderComponent={StatusRail}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
         />
       )}
+
+      {/* Status Viewer Modal */}
+      {selectedStatusContact && (
+        <StatusViewerModal
+          visible={isViewerVisible}
+          stories={selectedStatusContact.stories || []}
+          contactName={selectedStatusContact.name}
+          contactAvatar={selectedStatusContact.avatar}
+          onClose={() => {
+            setIsViewerVisible(false);
+            setSelectedStatusContact(null);
+          }}
+          onComplete={() => {
+            setIsViewerVisible(false);
+            setSelectedStatusContact(null);
+          }}
+        />
+      )}
+
+      {/* Media Picker for My Status */}
+      <MediaPickerSheet
+        visible={isMediaPickerVisible}
+        onClose={() => setIsMediaPickerVisible(false)}
+        onSelectCamera={handleSelectCamera}
+        onSelectGallery={handleSelectGallery}
+        onSelectAudio={() => Alert.alert("Audio Status", "Coming soon!")}
+      />
+
     </View>
   );
 }
@@ -171,92 +311,95 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000000',
   },
-  ambientGlow: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 300,
-    zIndex: 0,
+  // Status Rail Styles
+  statusRail: {
+    marginTop: 60,
+    marginBottom: 24,
   },
-  ambientGradient: {
-    flex: 1,
-    borderRadius: 150,
-  },
-  header: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
-    overflow: 'hidden',
-  },
-  headerGradient: {
-    paddingTop: 48,
-    paddingBottom: 12,
-    paddingHorizontal: 16,
-  },
-  headerContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  statusContent: {
+    paddingHorizontal: 20,
     gap: 12,
+  },
+  statusCard: {
+    width: 110,
+    height: 140,
+    borderRadius: 28,
+    overflow: 'hidden',
+    backgroundColor: '#1a1a1a',
+  },
+  myStatusBackground: {
     flex: 1,
-  },
-  headerTitleContainer: {
-    flex: 1,
-  },
-  headerTitle: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-  nowPlayingBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 2,
-  },
-  playingDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  nowPlayingText: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 10,
-    fontWeight: '600',
-    maxWidth: 150,
-  },
-  musicButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: '#262626',
+    padding: 12,
   },
+  myStatusAvatarContainer: {
+    position: 'relative',
+    marginBottom: 12,
+  },
+  myStatusAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 2,
+    borderColor: '#3b82f6',
+  },
+  myStatusAddBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#1a1a1a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#262626',
+  },
+  startStoryText: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  statusMediaBackground: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#1a1a1a',
+  },
+  statusOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    padding: 10,
+  },
+  contactAvatarBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 2,
+    padding: 2,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  smallStatusAvatar: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 15,
+  },
+  
   listContent: {
-    paddingTop: 120,
     paddingBottom: 100,
     paddingHorizontal: 4,
   },
   chatItem: {
     marginBottom: 8,
     marginHorizontal: 16,
-    borderRadius: 35, // Half of height
+    borderRadius: 36, // Exactly half of height (72)
     overflow: 'hidden',
-    height: 70, // Match Header Height
+    height: 72, // Match Chat Header Height
   },
   chatPillContainer: {
     flex: 1,
-    borderRadius: 35,
+    borderRadius: 36,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.1)',
     overflow: 'hidden',

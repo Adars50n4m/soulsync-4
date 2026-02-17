@@ -1,19 +1,13 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import 'react-native-reanimated';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AppProvider, useApp } from '../context/AppContext';
 import { View } from 'react-native';
 import PipOverlay from '../components/PipOverlay';
 import { IncomingCallModal } from '../components/IncomingCallModal';
 import '../global.css';
-
-// Prevent the splash screen from auto-hiding before asset loading is complete.
-SplashScreen.preventAutoHideAsync();
 
 function RootContent() {
   const { activeCall } = useApp();
@@ -37,17 +31,23 @@ function RootContent() {
 
   return (
     <View style={{ flex: 1 }}>
-       <Stack screenOptions={{ headerShown: false }}>
+      <Stack screenOptions={{ headerShown: false }} initialRouteName="(tabs)">
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="call" options={{ 
+        <Stack.Screen name="call" options={{
           presentation: 'fullScreenModal',
           animation: 'fade',
-          gestureEnabled: false 
+          gestureEnabled: false
         }} />
-        <Stack.Screen name="music" options={{ 
+        <Stack.Screen name="music" options={{
           presentation: 'transparentModal',
           animation: 'fade',
           headerShown: false
+        }} />
+        <Stack.Screen name="chat/[id]" options={{
+          presentation: 'card',
+          animation: 'none', // Disable page transition so only the shared element morph is visible
+          headerShown: false,
+          gestureEnabled: true,
         }} />
         <Stack.Screen name="+not-found" />
       </Stack>
@@ -60,11 +60,6 @@ function RootContent() {
 }
 
 export default function RootLayout() {
-  useEffect(() => {
-    // Hide splash screen immediately since we're not waiting for fonts
-    SplashScreen.hideAsync();
-  }, []);
-
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <AppProvider>

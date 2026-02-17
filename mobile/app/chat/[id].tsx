@@ -16,9 +16,11 @@ import Animated, {
     withTiming,
     runOnJS,
     interpolate,
-    Extrapolation
+    Extrapolation,
+    SharedTransition
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+
 import { useApp } from '../../context/AppContext';
 import { MusicPlayerOverlay } from '../../components/MusicPlayerOverlay';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
@@ -37,6 +39,61 @@ const sanitizeSongTitle = (title: string): string => {
         .replace(/\s*\([^)]*\)/g, '')  // Remove (anything)
         .replace(/\s*\[[^\]]*\]/g, '') // Remove [anything]
         .trim();
+};
+
+const ProgressiveBlur = ({ position = 'top', height = 180, intensity = 100, steps = 40 }: { position?: 'top' | 'bottom', height?: number, intensity?: number, steps?: number }) => {
+    return (
+        <View style={{
+            position: 'absolute',
+            [position]: 0,
+            left: 0,
+            right: 0,
+            height,
+            zIndex: position === 'top' ? 90 : 50,
+            overflow: 'hidden',
+        }} pointerEvents="none">
+            {/* Base layers for progressive blur */}
+            {Array.from({ length: steps }).map((_, i) => {
+                const ratio = i / steps;
+                
+                // Balanced Cubic-Quartic falloff for smoothness
+                // Power 10 was too sharp, creating "lines"
+                const intensityFactor = Math.pow(1 - ratio, 3.5);
+                
+                // Smoother opacity distribution
+                const opacityFactor = Math.pow(1 - ratio, 1.5);
+
+                const stepHeight = height / steps;
+                
+                return (
+                    <BlurView
+                        key={i}
+                        intensity={intensity * intensityFactor}
+                        tint="dark"
+                        style={{
+                            position: 'absolute',
+                            [position]: i * stepHeight,
+                            left: 0,
+                            right: 0,
+                            height: stepHeight + 4, // More overlap to hide joins
+                            opacity: Math.max(0.1, opacityFactor),
+                        }}
+                    />
+                );
+            })}
+
+            {/* Smoothing Gradient - This acts as a 'diffuser' to hide the banding lines */}
+            <LinearGradient
+                colors={[
+                    position === 'top' ? 'rgba(0,0,0,0.8)' : 'transparent',
+                    position === 'top' ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.4)',
+                    position === 'top' ? 'transparent' : 'rgba(0,0,0,0.8)',
+                ]}
+                style={StyleSheet.absoluteFill}
+                pointerEvents="none"
+            />
+        </View>
+    );
 };
 
 // Message Bubble with Liquid Glass UI
@@ -208,29 +265,34 @@ const ReactionModal = ({ visible, onClose, onSelect }: any) => {
 };
 
 export default function SingleChatScreen() {
-    const { id } = useLocalSearchParams<{ id: string }>();
+    const { id: rawId } = useLocalSearchParams();
+    const id = Array.isArray(rawId) ? rawId[0] : rawId;
     const router = useRouter();
     const { contacts, messages, sendChatMessage, startCall, activeCall, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers } = useApp();
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
-    
-    // Typing timeout ref
-    const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const [replyingTo, setReplyingTo] = useState<any>(null);
-    const [selectedMsgId, setSelectedMsgId] = useState<string | null>(null);
-    
-    const contact = contacts.find(c => c.id === id);
-    const chatMessages = messages[id || ''] || [];
-    const isTyping = contact ? typingUsers.includes(contact.id) : false;
-    const [showMusicPlayer, setShowMusicPlayer] = useState(false);
-    const flatListRef = useRef<FlatList>(null);
-    const modalAnim = useRef(new RNAnimated.Value(0)).current;
+
     const [callOptionsPosition, setCallOptionsPosition] = useState({ x: 0, y: 0 });
     const [isExpanded, setIsExpanded] = useState(false);
+
+    // Animation Values
     const plusRotation = useSharedValue(0);
     const optionsHeight = useSharedValue(0);
     const optionsOpacity = useSharedValue(0);
-    
+    const modalAnim = useRef(new RNAnimated.Value(0)).current;
+
+    // Missing State & Refs
+    const flatListRef = useRef<FlatList>(null);
+    const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const [replyingTo, setReplyingTo] = useState<any>(null);
+    const [selectedMsgId, setSelectedMsgId] = useState<string | null>(null);
+    const [showMusicPlayer, setShowMusicPlayer] = useState(false);
+
+    // Derived State
+    const contact = contacts.find(c => c.id === id);
+    const chatMessages = messages[id || ''] || [];
+    const isTyping = contact ? typingUsers.includes(contact.id) : false;
+
     // Toggle Options Menu
     const toggleOptions = () => {
         if (isExpanded) {
@@ -312,16 +374,16 @@ export default function SingleChatScreen() {
     const handleSend = () => {
         if (!inputText.trim() || !id) return;
 
-        // Stop typing immediately when sending
         if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
         sendTyping(false);
 
         const content = inputText.trim();
         setInputText('');
-        setReplyingTo(null);
 
-        // Send message via real-time ChatService
-        sendChatMessage(id, content, undefined);
+        const replyToId = replyingTo ? replyingTo.id : undefined;
+        sendChatMessage(id, content, undefined, replyToId);
+
+        setReplyingTo(null);
     };
 
     const handleReaction = (emoji: string) => {
@@ -449,44 +511,49 @@ export default function SingleChatScreen() {
             <StatusBar barStyle="light-content" />
 
             {/* Header */}
-            <BlurView intensity={100} tint="dark" style={styles.header}>
-                <Pressable onPress={() => router.back()} style={styles.backButton}>
-                    <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
-                </Pressable>
-
-                <Pressable style={styles.avatarWrapper} onPress={() => router.push(`/profile/${contact.id}` as any)}>
-                    <Image source={{ uri: contact.avatar }} style={styles.avatar} />
-                    {contact.status === 'online' && <View style={styles.onlineIndicator} />}
-                </Pressable>
-
-                <View style={styles.headerInfo}>
-                    <Text style={styles.contactName}>{contact.name}</Text>
-                    {musicState.currentSong ? (
-                        <View style={styles.nowPlayingStatus}>
-                            <MaterialIcons name="library-music" size={10} color={activeTheme.primary} />
-                            <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
-                                {sanitizeSongTitle(musicState.currentSong.name)}
-                            </Text>
-                        </View>
-                    ) : (
-                        <Text style={[styles.statusText, { color: 'rgba(255,255,255,0.5)' }]}>
-                            {contact.status === 'online' ? 'ONLINE' : 'OFFLINE'}
-                        </Text>
-                    )}
-                </View>
-
-                {/* Music Button - Navigates to 3D Music Screen */}
-                <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
-                    <MaterialIcons name="library-music" size={20} color={activeTheme.primary} />
-                </Pressable>
-
-                {/* Call Button */}
-                <View ref={callButtonRef} collapsable={false}>
-                    <Pressable style={styles.headerButton} onPress={openCallModal}>
-                        <MaterialIcons name="call" size={20} color={activeTheme.primary} />
+            <Animated.View
+                style={styles.headerContainer}
+                sharedTransitionTag={`pill-container-${id}`}
+            >
+                <BlurView intensity={100} tint="dark" style={styles.header}>
+                    <Pressable onPress={() => router.back()} style={styles.backButton}>
+                        <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
                     </Pressable>
-                </View>
-            </BlurView>
+
+                    <Pressable style={styles.avatarWrapper} onPress={() => router.push(`/profile/${contact.id}` as any)}>
+                        <Image source={{ uri: contact.avatar }} style={styles.avatar} />
+                        {contact.status === 'online' && <View style={styles.onlineIndicator} />}
+                    </Pressable>
+
+                    <View style={styles.headerInfo}>
+                        <Text style={styles.contactName}>{contact.name}</Text>
+                        {musicState.currentSong ? (
+                            <View style={styles.nowPlayingStatus}>
+                                <MaterialIcons name="library-music" size={10} color={activeTheme.primary} />
+                                <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
+                                    {sanitizeSongTitle(musicState.currentSong.name)}
+                                </Text>
+                            </View>
+                        ) : (
+                            <Text style={[styles.statusText, { color: 'rgba(255,255,255,0.5)' }]}>
+                                {contact.status === 'online' ? 'ONLINE' : 'OFFLINE'}
+                            </Text>
+                        )}
+                    </View>
+
+                    {/* Music Button - Navigates to 3D Music Screen */}
+                    <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
+                        <MaterialIcons name="library-music" size={20} color={activeTheme.primary} />
+                    </Pressable>
+
+                    {/* Call Button */}
+                    <View ref={callButtonRef} collapsable={false}>
+                        <Pressable style={styles.headerButton} onPress={openCallModal}>
+                            <MaterialIcons name="call" size={20} color={activeTheme.primary} />
+                        </Pressable>
+                    </View>
+                </BlurView>
+            </Animated.View>
 
             {/* Messages */}
             <FlatList
@@ -506,13 +573,9 @@ export default function SingleChatScreen() {
                 }
             />
 
-            {/* iOS-style Header Scroll Blur Effect */}
-            <LinearGradient
-                colors={['rgba(0, 0, 0, 0.98)', 'rgba(0, 0, 0, 0.85)', 'rgba(0, 0, 0, 0.65)', 'rgba(0, 0, 0, 0.4)', 'rgba(0, 0, 0, 0.15)', 'rgba(0, 0, 0, 0.05)', 'transparent']}
-                locations={[0, 0.15, 0.3, 0.5, 0.7, 0.85, 1]}
-                style={styles.headerScrollBlur}
-                pointerEvents="none"
-            />
+            {/* iOS-style Progressive Blur Effects */}
+            <ProgressiveBlur position="top" height={160} intensity={80} />
+            <ProgressiveBlur position="bottom" height={200} intensity={80} />
 
             {/* Typing Indicator */}
             {isTyping && (
@@ -539,12 +602,6 @@ export default function SingleChatScreen() {
 
             {/* Input Area */}
             <View style={styles.inputArea}>
-                <LinearGradient
-                    colors={['transparent', 'rgba(0,0,0,0.2)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.8)', '#000000']}
-                    locations={[0, 0.2, 0.50, 0.60, 0.8]}
-                    style={StyleSheet.absoluteFill}
-                    pointerEvents="none"
-                />
                 {/* Unified Pill Container */}
                 <View style={styles.unifiedPillContainer}>
                     <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
@@ -569,7 +626,7 @@ export default function SingleChatScreen() {
                                 if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
                                 typingTimeoutRef.current = setTimeout(() => {
                                     sendTyping(false);
-                                }, 2000);
+                                }, 2000) as unknown as NodeJS.Timeout;
                             }}
                             onFocus={handleFocus}
                             placeholder="Sync fragment..."
@@ -715,28 +772,26 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: '#000000',
     },
-    header: {
+    headerContainer: {
         position: 'absolute',
         top: 50,
-        left: 20,
-        right: 20,
+        left: 16,
+        right: 16,
         zIndex: 100,
-        backgroundColor: '#151515',
-        borderRadius: 40,
+        borderRadius: 36, // Exact pill shape matching home screen
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        backgroundColor: 'transparent',
+    },
+    header: {
+        backgroundColor: 'rgba(30, 30, 35, 0.4)',
         paddingHorizontal: 16,
         paddingVertical: 10,
         flexDirection: 'row',
         alignItems: 'center',
-        borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.1)',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.5,
-        shadowRadius: 20,
-        elevation: 10,
         gap: 12,
-        height: 70,
-        overflow: 'hidden',
+        height: 72,
     },
     backButton: {
         padding: 4,
@@ -1109,6 +1164,22 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         marginTop: 100,
     },
+    headerScrollBlur: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 140, // Height to cover header and status bar
+        zIndex: 90,
+    },
+    bottomScrollBlur: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: 180, // Height to cover input area's float zone
+        zIndex: 50,
+    },
     // Reaction Modal
     reactionModalOverlay: {
         flex: 1,
@@ -1195,14 +1266,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 4,
-    },
-    headerScrollBlur: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        height: 280,
-        zIndex: 50,
     },
     optionsMenu: {
         width: '100%',

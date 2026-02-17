@@ -15,15 +15,26 @@ export interface Message {
     };
 }
 
+export interface Story {
+  id: string;
+  url: string;
+  type: 'image' | 'video';
+  timestamp: string;
+  seen: boolean;
+  duration?: number;
+  caption?: string;
+}
+
 export interface Contact {
     id: string;
     name: string;
     avatar: string;
     status: 'online' | 'offline' | 'away' | 'busy';
     lastSeen?: string;
-    bio?: string;
+    about?: string;
     lastMessage?: string;
     unreadCount?: number;
+    stories?: Story[];
 }
 
 export interface StatusUpdate {
