@@ -10,9 +10,7 @@ import Animated, {
   withSpring, 
   LinearTransition,
   FadeIn,
-  FadeOut,
-  SlideInRight,
-  SlideOutLeft
+  FadeOut
 } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 
@@ -23,9 +21,9 @@ import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { Contact, Story } from '../../types';
 import SingleChatScreen from '../chat/[id]';
 
-const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping }: {
-  item: Contact,
-  lastMsg: any,
+const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping }: { 
+  item: Contact, 
+  lastMsg: any, 
   onSelect: (contact: Contact, y: number) => void,
   isTyping: boolean
 }) => {
@@ -88,7 +86,6 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping }: {
 export default function HomeScreen() {
   const { contacts, messages, activeTheme, typingUsers, currentUser, statuses, addStatus } = useApp();
   const navigation = useNavigation();
-  const router = useRouter();
   const [selectedUser, setSelectedUser] = useState<Contact | null>(null);
   const [sourceY, setSourceY] = useState<number | undefined>(undefined);
 
@@ -169,14 +166,18 @@ export default function HomeScreen() {
     const chatMessages = messages[item.id] || [];
     const lastMsg = chatMessages[chatMessages.length - 1] || { text: item.lastMessage, timestamp: '' };
     const isTyping = typingUsers.includes(item.id);
-    return <ChatListItem item={item} lastMsg={lastMsg} onSelect={handleUserSelect} isTyping={isTyping} />;
+    return (
+      <View style={{ opacity: selectedUser?.id === item.id ? 0 : 1 }}>
+        <ChatListItem item={item} lastMsg={lastMsg} onSelect={handleUserSelect} isTyping={isTyping} />
+      </View>
+    );
   };
 
   if (selectedUser) {
     return (
-      <Animated.View
-        style={styles.fullScreenContent}
-        entering={FadeIn.duration(350)}
+      <Animated.View 
+        style={styles.fullScreenContent} 
+        entering={FadeIn.duration(350).delay(50)} 
         exiting={FadeOut.duration(300)}
         layout={LinearTransition.springify().damping(18)}
       >
@@ -186,9 +187,9 @@ export default function HomeScreen() {
   }
 
   return (
-    <Animated.View
-        style={styles.container}
-        entering={FadeIn.duration(350)}
+    <Animated.View 
+        style={styles.container} 
+        entering={FadeIn.duration(350)} 
         exiting={FadeOut.duration(300)}
         layout={LinearTransition.springify().damping(18)}
     >
