@@ -279,49 +279,57 @@ export default function SingleChatScreen() {
 
     // Morph Animation — iOS-style smooth bezier, no spring jitter
     const HEADER_TOP = 50;
-    const morphTranslateY = useSharedValue(sourceY !== undefined ? sourceY - HEADER_TOP : 0);
+    // Morph Animation — 0 = Home (Pill), 1 = Chat (Header)
+    const morphProgress = useSharedValue(sourceY !== undefined ? 0 : 1);
     const chatBodyOpacity = useSharedValue(sourceY !== undefined ? 0 : 1);
 
-    const headerMorphStyle = useAnimatedStyle(() => ({
-        transform: [{ translateY: morphTranslateY.value }],
-    }));
+    const headerMorphStyle = useAnimatedStyle(() => {
+        const distance = sourceY !== undefined ? sourceY - HEADER_TOP : 0;
+        return {
+            transform: [
+                { translateY: interpolate(morphProgress.value, [0, 1], [distance, 0]) },
+                { scale: interpolate(morphProgress.value, [0, 1], [0.96, 1]) }
+            ],
+            // Visual Shape Morph: Animate from 16px horizontal spacing to 0
+            left: interpolate(morphProgress.value, [0, 1], [16, 0]),
+            right: interpolate(morphProgress.value, [0, 1], [16, 0]),
+            // Animate border radius from Pill (36) to Header (0)
+            borderRadius: interpolate(morphProgress.value, [0, 1], [36, 0]),
+        };
+    });
 
     const chatBodyAnimStyle = useAnimatedStyle(() => ({
         opacity: chatBodyOpacity.value,
     }));
 
-    // Animate IN immediately before paint - use Timing for performance stability
+    // Animate IN immediately before paint
     useLayoutEffect(() => {
         if (sourceY !== undefined) {
-            morphTranslateY.value = withTiming(0, { duration: MORPH_IN_DURATION, easing: MORPH_EASING });
+            morphProgress.value = withTiming(1, { duration: MORPH_IN_DURATION, easing: MORPH_EASING });
             chatBodyOpacity.value = withTiming(1, { duration: MORPH_IN_DURATION, easing: MORPH_EASING });
         }
     }, []);
 
-    // Animate OUT on back - Refined for zero-stutter and instant response
+    // Animate OUT on back - Final Shape-Shifting Morph
     const handleBack = useCallback(() => {
         if (sourceY !== undefined) {
-            const targetY = sourceY - HEADER_TOP;
-            
-            // 1. Morph the pill back to its row - slightly faster (300ms)
-            // Using a spring-like snappy easing for premium feel
-            morphTranslateY.value = withTiming(targetY, { 
+            // 1. Morph everything back to home state (width, position, radius)
+            morphProgress.value = withTiming(0, { 
                 duration: 300, 
                 easing: Easing.out(Easing.quad) 
             });
             
-            // 2. Fade out chat body ultra-quickly (150ms) to reveal Home screen
+            // 2. Fade out chat body ultra-quickly
             chatBodyOpacity.value = withTiming(0, { duration: 150 });
             
-            // 3. Navigate back at 250ms (80% through)
-            // This hides the last few frames of misalignment and removes all delay
+            // 3. Navigate back at 250ms (consistent snappy feel)
             setTimeout(() => {
                 router.back();
             }, 250);
         } else {
             router.back();
         }
-    }, [sourceY, router]);
+    }, [sourceY, router, morphProgress, chatBodyOpacity]);
 
     // Animation Values
     const plusRotation = useSharedValue(0);
@@ -829,10 +837,9 @@ const styles = StyleSheet.create({
     headerContainer: {
         position: 'absolute',
         top: 50,
-        left: 16,
-        right: 16,
+        // Left and Right are now handled by animatedStyle for morphing
         zIndex: 100,
-        borderRadius: 36, // Exact pill shape matching home screen
+        height: 72,
         overflow: 'hidden',
         borderWidth: 1,
         borderColor: 'rgba(255, 255, 255, 0.1)',
