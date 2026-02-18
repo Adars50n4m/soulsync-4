@@ -14,6 +14,7 @@ import Animated, {
     useAnimatedStyle,
     withSpring,
     withTiming,
+    withDelay,
     runOnJS,
     interpolate,
     Extrapolation,
@@ -301,11 +302,20 @@ export default function SingleChatScreen() {
         opacity: chatBodyOpacity.value,
     }));
 
-    // Animate IN immediately before paint
+    // Animate IN with staggered delay to prevent rendering lag
     useLayoutEffect(() => {
         if (sourceY !== undefined) {
-            morphProgress.value = withTiming(1, { duration: MORPH_IN_DURATION, easing: MORPH_EASING });
-            chatBodyOpacity.value = withTiming(1, { duration: MORPH_IN_DURATION, easing: MORPH_EASING });
+             // 1. Start shape morph slightly after slide initiation
+            morphProgress.value = withDelay(50, withTiming(1, { 
+                duration: MORPH_IN_DURATION, 
+                easing: MORPH_EASING 
+            }));
+            
+            // 2. Delay heavy body fade-in until list is partially rendered
+            chatBodyOpacity.value = withDelay(150, withTiming(1, { 
+                duration: 400, 
+                easing: Easing.out(Easing.quad) 
+            }));
         }
     }, []);
 
@@ -627,6 +637,11 @@ export default function SingleChatScreen() {
                     style={styles.messagesList}
                     contentContainerStyle={styles.messagesContent}
                     showsVerticalScrollIndicator={false}
+                    // Performance Optimizations
+                    initialNumToRender={12}
+                    maxToRenderPerBatch={10}
+                    windowSize={5}
+                    removeClippedSubviews={Platform.OS === 'android'}
                     ListEmptyComponent={
                         <View style={styles.emptyChat}>
                             <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.1)" />
