@@ -304,13 +304,16 @@ export default function SingleChatScreen() {
             // Instant feedback: start sliding header back with smooth timing
             morphTranslateY.value = withTiming(sourceY - HEADER_TOP, { duration: MORPH_OUT_DURATION, easing: MORPH_EASING });
             
-            // Navigate back immediately. Since it's a transparent modal, 
-            // the Home screen is already visible underneath as we slide away.
-            setTimeout(() => router.back(), 50);
+            // Sync chat body fade-out so it doesn't look "stuck"
+            chatBodyOpacity.value = withTiming(0, { duration: MORPH_OUT_DURATION, easing: MORPH_EASING });
+            
+            // Navigate back ONLY when animation is finished
+            // This prevents the jumpy "binary" switch of screens
+            setTimeout(() => router.back(), MORPH_OUT_DURATION);
         } else {
             router.back();
         }
-    }, [sourceY, sourceY]);
+    }, [sourceY, morphTranslateY, chatBodyOpacity, router]);
 
     // Animation Values
     const plusRotation = useSharedValue(0);
