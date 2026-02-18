@@ -42,7 +42,7 @@ const sanitizeSongTitle = (title: string): string => {
         .trim();
 };
 
-const ProgressiveBlur = ({ position = 'top', height = 180, intensity = 100, steps = 40 }: { position?: 'top' | 'bottom', height?: number, intensity?: number, steps?: number }) => {
+const ProgressiveBlur = ({ position = 'top', height = 180, intensity = 100, steps = 6 }: { position?: 'top' | 'bottom', height?: number, intensity?: number, steps?: number }) => {
     return (
         <View style={{
             position: 'absolute',
@@ -290,19 +290,19 @@ export default function SingleChatScreen() {
         opacity: chatBodyOpacity.value,
     }));
 
-    // Animate IN immediately before paint
+    // Animate IN immediately before paint - use Timing for performance stability
     useLayoutEffect(() => {
         if (sourceY !== undefined) {
-            morphTranslateY.value = withSpring(0, MORPH_SPRING_CONFIG);
-            chatBodyOpacity.value = withSpring(1, MORPH_SPRING_CONFIG);
+            morphTranslateY.value = withTiming(0, { duration: MORPH_IN_DURATION, easing: MORPH_EASING });
+            chatBodyOpacity.value = withTiming(1, { duration: MORPH_IN_DURATION, easing: MORPH_EASING });
         }
     }, []);
 
     // Animate OUT on back
     const handleBack = useCallback(() => {
         if (sourceY !== undefined) {
-            // Instant feedback: start sliding header back with liquid spring
-            morphTranslateY.value = withSpring(sourceY - HEADER_TOP, MORPH_SPRING_CONFIG);
+            // Instant feedback: start sliding header back with smooth timing
+            morphTranslateY.value = withTiming(sourceY - HEADER_TOP, { duration: MORPH_OUT_DURATION, easing: MORPH_EASING });
             
             // Navigate back immediately. Since it's a transparent modal, 
             // the Home screen is already visible underneath as we slide away.
@@ -310,7 +310,7 @@ export default function SingleChatScreen() {
         } else {
             router.back();
         }
-    }, [sourceY]);
+    }, [sourceY, sourceY]);
 
     // Animation Values
     const plusRotation = useSharedValue(0);
