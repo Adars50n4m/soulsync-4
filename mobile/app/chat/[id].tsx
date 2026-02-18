@@ -304,9 +304,9 @@ export default function SingleChatScreen() {
             // Instant feedback: start sliding header back with liquid spring
             morphTranslateY.value = withSpring(sourceY - HEADER_TOP, MORPH_SPRING_CONFIG);
             
-            // Navigate back even sooner for maximum snappiness
-            // Timing it to hit when the spring is almost done but still moving
-            setTimeout(() => router.back(), 250);
+            // Navigate back immediately. Since it's a transparent modal, 
+            // the Home screen is already visible underneath as we slide away.
+            setTimeout(() => router.back(), 50);
         } else {
             router.back();
         }

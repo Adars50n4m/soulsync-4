@@ -44,7 +44,7 @@ function RootContent() {
           headerShown: false
         }} />
         <Stack.Screen name="chat/[id]" options={{
-          presentation: 'card',
+          presentation: 'transparentModal',
           animation: 'none',
           headerShown: false,
           gestureEnabled: true,
