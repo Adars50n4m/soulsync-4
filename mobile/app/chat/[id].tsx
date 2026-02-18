@@ -287,14 +287,17 @@ export default function SingleChatScreen() {
     const [screenOpen, setScreenOpen] = useState(true);
 
     const headerMorphStyle = useAnimatedStyle(() => {
+        const morph = morphProgress.value;
         return {
             transform: [
-                { scale: interpolate(morphProgress.value, [0, 1], [0.96, 1]) }
+                { scale: interpolate(morph, [0, 1], [0.96, 1]) }
             ],
-            // Fixed Pill Shape Restored
-            left: 16,
-            right: 16,
-            borderRadius: 36,
+            // Reshape Animation: Interpolating horizontal margins
+            // 0 (Home) = Large margins (~20), 1 (Chat) = Standard margins (16)
+            left: interpolate(morph, [0, 1], [20, 16]),
+            right: interpolate(morph, [0, 1], [20, 16]),
+            borderRadius: 36, // Consistent Pill Shape
+            opacity: interpolate(morph, [0, 0.4, 1], [0.1, 1, 1]), // Subtle fade-in glow
         };
     });
 
@@ -319,9 +322,18 @@ export default function SingleChatScreen() {
         }
     }, []);
 
-    // Animate OUT on back - Sheet Transition handles the morph
+    // Animate OUT on back - Synchronized with SheetTransition
     const handleBack = useCallback(() => {
-        setScreenOpen(false); // Triggers SheetTransition exit animation
+        setScreenOpen(false); // Triggers SheetTransition exit
+        // Mirror the morph logic for exit
+        morphProgress.value = withTiming(0, { 
+            duration: MORPH_OUT_DURATION, 
+            easing: MORPH_EASING 
+        });
+        chatBodyOpacity.value = withTiming(0, { 
+            duration: MORPH_OUT_DURATION - 100, 
+            easing: Easing.in(Easing.quad) 
+        });
     }, []);
 
     // Animation Values

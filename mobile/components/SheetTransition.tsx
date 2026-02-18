@@ -11,6 +11,7 @@ import Animated, {
     cancelAnimation,
 } from 'react-native-reanimated';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
+import { MORPH_EASING, MORPH_IN_DURATION, MORPH_OUT_DURATION } from '../constants/transitions';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -53,30 +54,51 @@ export function SheetTransition({
     const borderRadius = useSharedValue(initialBorderRadius);
 
     const handleClose = useCallback(() => {
-        translateY.value = withSpring(distance, { 
-            damping: 24, 
-            stiffness: 120, 
-            mass: 0.8 
+        // Linear-style exit: predictable and high-performance
+        translateY.value = withTiming(distance, { 
+            duration: MORPH_OUT_DURATION, 
+            easing: MORPH_EASING 
+        }, (finished) => {
+            if (finished) {
+                runOnJS(onClose)();
+            }
         });
-        scale.value = withSpring(scaleFactor, springConfig);
-        opacity.value = withTiming(0, { duration: 250 });
         
-        setTimeout(() => {
-            runOnJS(onClose)();
-        }, 300);
-    }, [onClose, distance, scaleFactor, springConfig]);
+        scale.value = withTiming(scaleFactor, { 
+            duration: MORPH_OUT_DURATION, 
+            easing: MORPH_EASING 
+        });
+        
+        opacity.value = withTiming(0, { 
+            duration: MORPH_OUT_DURATION - 50, 
+            easing: MORPH_EASING 
+        });
+    }, [onClose, distance, scaleFactor]);
 
     // Animate in/out on prop change
     useEffect(() => {
         if (isOpen) {
-            translateY.value = withSpring(0, springConfig);
-            scale.value = withSpring(1, springConfig);
-            opacity.value = withTiming(1, { duration: 400 });
-            borderRadius.value = withTiming(0, { duration: 500 });
+            // Predictable entrance for perfect "Reshape" feel
+            translateY.value = withTiming(0, { 
+                duration: MORPH_IN_DURATION, 
+                easing: MORPH_EASING 
+            });
+            scale.value = withTiming(1, { 
+                duration: MORPH_IN_DURATION, 
+                easing: MORPH_EASING 
+            });
+            opacity.value = withTiming(1, { 
+                duration: MORPH_IN_DURATION, 
+                easing: MORPH_EASING 
+            });
+            borderRadius.value = withTiming(0, { 
+                duration: MORPH_IN_DURATION + 100, 
+                easing: MORPH_EASING 
+            });
         } else {
             handleClose();
         }
-    }, [isOpen, handleClose, springConfig]);
+    }, [isOpen, handleClose]);
 
     const panGesture = Gesture.Pan()
         .activeOffsetY([10, Number.MAX_SAFE_INTEGER])
