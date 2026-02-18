@@ -30,7 +30,7 @@ import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { MediaPreviewModal } from '../../components/MediaPreviewModal';
 import { MediaPlayerModal } from '../../components/MediaPlayerModal';
 import { storageService } from '../../services/StorageService';
-import { Message } from '../../types';
+import { Contact, Message } from '../../types';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -267,10 +267,18 @@ const ReactionModal = ({ visible, onClose, onSelect }: any) => {
     );
 };
 
-export default function SingleChatScreen() {
-    const { id: rawId, sourceY: rawSourceY } = useLocalSearchParams();
-    const id = Array.isArray(rawId) ? rawId[0] : rawId;
-    const sourceY = rawSourceY ? Number(Array.isArray(rawSourceY) ? rawSourceY[0] : rawSourceY) : undefined;
+interface SingleChatScreenProps {
+    user?: Contact;
+    onBack?: () => void;
+}
+
+export default function SingleChatScreen({ user: propsUser, onBack }: SingleChatScreenProps) {
+    const { id: paramsId, sourceY: paramsSourceY } = useLocalSearchParams();
+    
+    // Support both direct routing (params) and inline rendering (props)
+    const id = propsUser?.id || (Array.isArray(paramsId) ? paramsId[0] : paramsId);
+    const sourceY = paramsSourceY ? Number(Array.isArray(paramsSourceY) ? paramsSourceY[0] : paramsSourceY) : undefined;
+    
     const router = useRouter();
     const { contacts, messages, sendChatMessage, startCall, activeCall, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers } = useApp();
     const [inputText, setInputText] = useState('');
@@ -324,6 +332,11 @@ export default function SingleChatScreen() {
 
     // Animate OUT on back - Synchronized with SheetTransition
     const handleBack = useCallback(() => {
+        if (onBack) {
+            onBack();
+            return;
+        }
+        
         setScreenOpen(false); // Triggers SheetTransition exit
         // Mirror the morph logic for exit
         morphProgress.value = withTiming(0, { 
