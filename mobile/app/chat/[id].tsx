@@ -21,6 +21,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { MORPH_EASING, MORPH_IN_DURATION, MORPH_OUT_DURATION, MORPH_SPRING_CONFIG } from '../../constants/transitions';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { SheetTransition } from '../../components/SheetTransition';
 
 import { useApp } from '../../context/AppContext';
 import { MusicPlayerOverlay } from '../../components/MusicPlayerOverlay';
@@ -282,12 +283,11 @@ export default function SingleChatScreen() {
     // Morph Animation — 0 = Home (Pill), 1 = Chat (Header)
     const morphProgress = useSharedValue(sourceY !== undefined ? 0 : 1);
     const chatBodyOpacity = useSharedValue(sourceY !== undefined ? 0 : 1);
+    const [screenOpen, setScreenOpen] = useState(true);
 
     const headerMorphStyle = useAnimatedStyle(() => {
-        const distance = sourceY !== undefined ? sourceY - HEADER_TOP : 0;
         return {
             transform: [
-                { translateY: interpolate(morphProgress.value, [0, 1], [distance, 0]) },
                 { scale: interpolate(morphProgress.value, [0, 1], [0.96, 1]) }
             ],
             // Fixed Pill Shape Restored
@@ -309,26 +309,10 @@ export default function SingleChatScreen() {
         }
     }, []);
 
-    // Animate OUT on back - Final Shape-Shifting Morph
+    // Animate OUT on back - Sheet Transition handles the morph
     const handleBack = useCallback(() => {
-        if (sourceY !== undefined) {
-            // 1. Morph everything back to home state (width, position, radius)
-            morphProgress.value = withTiming(0, { 
-                duration: 300, 
-                easing: Easing.out(Easing.quad) 
-            });
-            
-            // 2. Fade out chat body ultra-quickly
-            chatBodyOpacity.value = withTiming(0, { duration: 150 });
-            
-            // 3. Navigate back at 250ms (consistent snappy feel)
-            setTimeout(() => {
-                router.back();
-            }, 250);
-        } else {
-            router.back();
-        }
-    }, [sourceY, router, morphProgress, chatBodyOpacity]);
+        setScreenOpen(false); // Triggers SheetTransition exit animation
+    }, []);
 
     // Animation Values
     const plusRotation = useSharedValue(0);
@@ -558,67 +542,79 @@ export default function SingleChatScreen() {
     }
 
     return (
-        <KeyboardAvoidingView
-            style={styles.container}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            keyboardVerticalOffset={0}
+        <SheetTransition
+            onClose={() => router.back()}
+            isOpen={screenOpen}
+            sourceY={sourceY}
+            headerTop={HEADER_TOP}
+            springConfig={{ damping: 20, stiffness: 90, mass: 1 }}
+            scaleFactor={0.92}
+            dragThreshold={100}
+            initialBorderRadius={36}
+            opacityOnGestureMove={true}
+            containerRadiusSync={true}
         >
-            <StatusBar barStyle="light-content" />
-
-            {/* Header - Morphs up from source position - Pill Shape Restored */}
-            <Animated.View 
-                style={[
-                    styles.headerContainer, 
-                    headerMorphStyle,
-                ]}
+            <KeyboardAvoidingView
+                style={styles.container}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                keyboardVerticalOffset={0}
             >
-                {/* Background Blur Matching Input Area */}
-                <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
-                
-                <View style={styles.header}>
-                    <Pressable onPress={handleBack} style={styles.backButton}>
-                        <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
-                    </Pressable>
+                <StatusBar barStyle="light-content" />
 
-                    <Pressable style={styles.avatarWrapper} onPress={() => router.push(`/profile/${contact.id}` as any)}>
-                        <Image source={{ uri: contact.avatar }} style={styles.avatar} />
-                        {contact.status === 'online' && <View style={styles.onlineIndicator} />}
-                    </Pressable>
+                {/* Header - Morphs up from source position - Pill Shape Restored */}
+                <Animated.View
+                    style={[
+                        styles.headerContainer,
+                        headerMorphStyle,
+                    ]}
+                >
+                    {/* Background Blur Matching Input Area */}
+                    <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
 
-                    <View style={styles.headerInfo}>
-                        <Text style={styles.contactName}>{contact.name}</Text>
-                        {musicState.currentSong ? (
-                            <View style={styles.nowPlayingStatus}>
-                                <MaterialIcons name="audiotrack" size={12} color={activeTheme.primary} />
-                                <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
-                                    {sanitizeSongTitle(musicState.currentSong.name)}
-                                </Text>
-                            </View>
-                        ) : (
-                            <Text style={[styles.statusText, { color: 'rgba(255,255,255,0.5)' }]}>
-                                {contact.status === 'online' ? 'ONLINE' : 'OFFLINE'}
-                            </Text>
-                        )}
-                    </View>
-
-                    {/* Music Button - Navigates to 3D Music Screen */}
-                    <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
-                        <MaterialIcons name="audiotrack" size={20} color={activeTheme.primary} />
-                    </Pressable>
-
-                    {/* Call Button */}
-                    <View ref={callButtonRef} collapsable={false}>
-                        <Pressable style={styles.headerButton} onPress={openCallModal}>
-                            <MaterialIcons name="call" size={20} color={activeTheme.primary} />
+                    <View style={styles.header}>
+                        <Pressable onPress={handleBack} style={styles.backButton}>
+                            <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
                         </Pressable>
-                    </View>
-                </View>
-            </Animated.View>
 
-            {/* Chat background and body — fades in/out during morph */}
-            <Animated.View style={[StyleSheet.absoluteFill, chatBodyAnimStyle]}>
-                {/* Opaque Background Layer - this fades out to reveal Home screen */}
-                <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000000' }]} />
+                        <Pressable style={styles.avatarWrapper} onPress={() => router.push(`/profile/${contact.id}` as any)}>
+                            <Image source={{ uri: contact.avatar }} style={styles.avatar} />
+                            {contact.status === 'online' && <View style={styles.onlineIndicator} />}
+                        </Pressable>
+
+                        <View style={styles.headerInfo}>
+                            <Text style={styles.contactName}>{contact.name}</Text>
+                            {musicState.currentSong ? (
+                                <View style={styles.nowPlayingStatus}>
+                                    <MaterialIcons name="audiotrack" size={12} color={activeTheme.primary} />
+                                    <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
+                                        {sanitizeSongTitle(musicState.currentSong.name)}
+                                    </Text>
+                                </View>
+                            ) : (
+                                <Text style={[styles.statusText, { color: 'rgba(255,255,255,0.5)' }]}>
+                                    {contact.status === 'online' ? 'ONLINE' : 'OFFLINE'}
+                                </Text>
+                            )}
+                        </View>
+
+                        {/* Music Button - Navigates to 3D Music Screen */}
+                        <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
+                            <MaterialIcons name="audiotrack" size={20} color={activeTheme.primary} />
+                        </Pressable>
+
+                        {/* Call Button */}
+                        <View ref={callButtonRef} collapsable={false}>
+                            <Pressable style={styles.headerButton} onPress={openCallModal}>
+                                <MaterialIcons name="call" size={20} color={activeTheme.primary} />
+                            </Pressable>
+                        </View>
+                    </View>
+                </Animated.View>
+
+                {/* Chat background and body — fades in/out during morph */}
+                <Animated.View style={[StyleSheet.absoluteFill, chatBodyAnimStyle]}>
+                    {/* Opaque Background Layer - this fades out to reveal Home screen */}
+                    <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000000' }]} />
                 
                 {/* Chat content */}
                 <View style={{ flex: 1 }}>
@@ -832,7 +828,9 @@ export default function SingleChatScreen() {
                 onClose={() => setPlayerMedia(null)}
             />
 
+
         </KeyboardAvoidingView>
+        </SheetTransition>
     );
 }
 
