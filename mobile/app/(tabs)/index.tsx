@@ -1,6 +1,6 @@
 import React, { useRef, useState, useCallback, useMemo } from 'react';
 import { View, Text, Image, FlatList, Pressable, StyleSheet, StatusBar, Dimensions, Alert } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useNavigation } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -87,9 +87,20 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping }: {
 
 export default function HomeScreen() {
   const { contacts, messages, activeTheme, typingUsers, currentUser, statuses, addStatus } = useApp();
+  const navigation = useNavigation();
   const router = useRouter();
   const [selectedUser, setSelectedUser] = useState<Contact | null>(null);
   const [sourceY, setSourceY] = useState<number | undefined>(undefined);
+
+  // Hide Tab Bar when Chat is open
+  React.useLayoutEffect(() => {
+    const parent = navigation.getParent();
+    if (parent) {
+      parent.setOptions({
+        tabBarStyle: selectedUser ? { display: 'none' } : undefined
+      });
+    }
+  }, [navigation, selectedUser]);
 
   // Status Handlers
   const [selectedStatusContact, setSelectedStatusContact] = useState<Contact | null>(null);

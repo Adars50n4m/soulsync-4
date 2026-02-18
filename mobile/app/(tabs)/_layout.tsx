@@ -40,6 +40,12 @@ const TabIcon = ({ name, focused, size = 24 }: { name: any; focused: boolean; si
 
 const TabBar = ({ state, descriptors, navigation }: any) => {
   const { activeTheme } = useApp();
+  const focusedOptions = descriptors[state.routes[state.index].key].options;
+
+  if (focusedOptions.tabBarStyle?.display === 'none') {
+    return null;
+  }
+
   const numTabs = state.routes.length;
   const tabWidth = (TAB_BAR_WIDTH - 24) / numTabs; // Padding considered
   
