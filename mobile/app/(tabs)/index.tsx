@@ -1,19 +1,37 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useCallback } from 'react';
 import { View, Text, Image, FlatList, Pressable, StyleSheet, StatusBar, Animated as RNAnimated, Dimensions, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons } from '@expo/vector-icons';
-import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
+import Animated, { 
+  useSharedValue, 
+  useAnimatedStyle, 
+  withSpring, 
+  withTiming, 
+  interpolate, 
+  Extrapolation,
+  Easing,
+  runOnJS
+} from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 
 import { useApp } from '../../context/AppContext';
 import { SoulSyncLogo } from '../../components/SoulSyncLogo';
 import { StatusViewerModal } from '../../components/StatusViewerModal';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
+import { MORPH_EASING, MORPH_IN_DURATION, MORPH_OUT_DURATION } from '../../constants/transitions';
 import { Contact, Story } from '../../types';
 
-const ChatListItem = React.memo(({ item, lastMsg, router, isTyping, index, scrollY }: { item: any, lastMsg: any, router: any, isTyping: boolean, index: number, scrollY: any }) => {
+const ChatListItem = React.memo(({ item, lastMsg, router, isTyping, index, scrollY, onMorph }: { 
+  item: any, 
+  lastMsg: any, 
+  router: any, 
+  isTyping: boolean, 
+  index: number, 
+  scrollY: any,
+  onMorph: (contact: any, y: number) => void 
+}) => {
   const scaleAnim = useSharedValue(1);
   const translateYAnim = useSharedValue(0);
   const pillRef = useRef<View>(null);
@@ -41,10 +59,8 @@ const ChatListItem = React.memo(({ item, lastMsg, router, isTyping, index, scrol
     
     const absoluteY = HEADER_OFFSET + (index * ITEM_FULL_HEIGHT) - scrollY.value;
     
-    router.push({
-      pathname: '/chat/[id]',
-      params: { id: item.id, sourceY: String(Math.round(absoluteY)) }
-    });
+    // Trigger local morph instead of immediate navigation
+    onMorph(item, absoluteY);
   };
 
   return (
@@ -101,6 +117,46 @@ export default function HomeScreen() {
   const router = useRouter();
   const scrollY = useSharedValue(0);
   const { contacts, messages, activeTheme, musicState, typingUsers, currentUser, statuses, addStatus } = useApp();
+  
+  // Morph States
+  const morphProgress = useSharedValue(0);
+  const sourceY = useSharedValue(0);
+  const [activeContact, setActiveContact] = React.useState<Contact | null>(null);
+  const [isMorphed, setIsMorphed] = React.useState(false);
+
+  const handleMorph = useCallback((contact: Contact, y: number) => {
+    setActiveContact(contact);
+    sourceY.value = y;
+    setIsMorphed(true);
+    morphProgress.value = withTiming(1, { 
+      duration: MORPH_IN_DURATION, 
+      easing: MORPH_EASING 
+    });
+  }, []);
+
+  const handleReverseMorph = useCallback(() => {
+    morphProgress.value = withTiming(0, { 
+      duration: MORPH_OUT_DURATION, 
+      easing: MORPH_EASING 
+    }, (finished) => {
+      if (finished) {
+        runOnJS(setIsMorphed)(false);
+        runOnJS(setActiveContact)(null);
+      }
+    });
+  }, []);
+
+  const navigateToChat = useCallback((contactId: string) => {
+    router.push({
+      pathname: '/chat/[id]',
+      params: { id: contactId, sourceY: String(50) } // Transition from the header position
+    });
+    // Reset morph after navigation delay
+    setTimeout(() => {
+        setIsMorphed(false);
+        morphProgress.value = 0;
+    }, 500);
+  }, [router]);
   
   // Status State
   const [selectedStatusContact, setSelectedStatusContact] = useState<Contact | null>(null);
@@ -206,7 +262,15 @@ export default function HomeScreen() {
     const lastMsg = chatMessages[chatMessages.length - 1] || { text: item.lastMessage || 'Start a conversation', timestamp: '' };
     const isTyping = typingUsers.includes(item.id);
 
-    return <ChatListItem item={item} lastMsg={lastMsg} router={router} isTyping={isTyping} index={index} scrollY={scrollY} />;
+    return <ChatListItem 
+      item={item} 
+      lastMsg={lastMsg} 
+      router={router} 
+      isTyping={isTyping} 
+      index={index} 
+      scrollY={scrollY} 
+      onMorph={handleMorph}
+    />;
   };
 
   // Status Rail Component
@@ -260,9 +324,75 @@ export default function HomeScreen() {
     </View>
   );
 
+  // Morphing Overlay Component
+  const morphStyle = useAnimatedStyle(() => {
+    const p = morphProgress.value;
+    return {
+      position: 'absolute',
+      top: interpolate(p, [0, 1], [sourceY.value, 50]),
+      left: 16,
+      right: 16,
+      height: 72,
+      borderRadius: 36,
+      backgroundColor: '#151515',
+      zIndex: 1000,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: 'rgba(255, 255, 255, 0.1)',
+      opacity: interpolate(p, [0, 0.05], [0, 1], Extrapolation.CLAMP),
+      transform: [
+        { scale: interpolate(p, [0, 1], [1, 1.02]) }
+      ],
+    };
+  });
+
+  const pillContentStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(morphProgress.value, [0, 0.4], [1, 0], Extrapolation.CLAMP),
+    transform: [{ translateX: interpolate(morphProgress.value, [0, 0.4], [0, -20], Extrapolation.CLAMP) }]
+  }));
+
+  const headerContentStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(morphProgress.value, [0.6, 1], [0, 1], Extrapolation.CLAMP),
+    transform: [{ scale: interpolate(morphProgress.value, [0.6, 1], [0.95, 1], Extrapolation.CLAMP) }]
+  }));
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
+
+      {/* Shared Element Morphing Overlay */}
+      {isMorphed && activeContact && (
+        <Animated.View style={morphStyle}>
+          <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+          
+          {/* Content Layer 1: Original Pill (Fades Out) */}
+          <Animated.View style={[styles.pillContent, pillContentStyle, { position: 'absolute', width: '100%', height: '100%' }]}>
+            <View style={styles.avatarContainer}>
+              <Image source={{ uri: activeContact.avatar }} style={styles.avatar} />
+            </View>
+            <View style={styles.chatContent}>
+              <Text style={styles.contactName}>{activeContact.name}</Text>
+              <Text style={styles.lastMessage} numberOfLines={1}>Synchronizing...</Text>
+            </View>
+          </Animated.View>
+
+          {/* Content Layer 2: Home Header (Fades In) */}
+          <Animated.View style={[styles.headerMorphContent, headerContentStyle]}>
+            <Pressable onPress={handleReverseMorph} style={styles.headerIconButton}>
+                <MaterialIcons name="close" size={24} color="#ffffff" />
+            </Pressable>
+            
+            <View style={styles.headerTitleContainer}>
+                <SoulSyncLogo width={28} height={28} />
+                <Text style={styles.headerTitle}>SOUL SYNC</Text>
+            </View>
+
+            <Pressable onPress={() => navigateToChat(activeContact.id)} style={styles.headerChatButton}>
+                <MaterialIcons name="chat" size={20} color={activeTheme.primary} />
+            </Pressable>
+          </Animated.View>
+        </Animated.View>
+      )}
 
 
       {contacts.length === 0 ? (
@@ -523,5 +653,36 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
     textAlign: 'center',
+  },
+  // Morphing Header Styles
+  headerMorphContent: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    justifyContent: 'space-between',
+  },
+  headerTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  headerTitle: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 2,
+  },
+  headerIconButton: {
+    padding: 8,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 20,
+  },
+  headerChatButton: {
+    padding: 10,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
 });
