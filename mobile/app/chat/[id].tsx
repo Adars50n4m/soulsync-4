@@ -587,7 +587,7 @@ export default function SingleChatScreen() {
                         <Text style={styles.contactName}>{contact.name}</Text>
                         {musicState.currentSong ? (
                             <View style={styles.nowPlayingStatus}>
-                                <MaterialIcons name="library-music" size={10} color={activeTheme.primary} />
+                                <MaterialIcons name="audiotrack" size={12} color={activeTheme.primary} />
                                 <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
                                     {sanitizeSongTitle(musicState.currentSong.name)}
                                 </Text>
@@ -601,7 +601,7 @@ export default function SingleChatScreen() {
 
                     {/* Music Button - Navigates to 3D Music Screen */}
                     <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
-                        <MaterialIcons name="library-music" size={20} color={activeTheme.primary} />
+                        <MaterialIcons name="audiotrack" size={20} color={activeTheme.primary} />
                     </Pressable>
 
                     {/* Call Button */}
@@ -847,8 +847,8 @@ const styles = StyleSheet.create({
         height: 72,
         overflow: 'hidden',
         borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.1)',
-        backgroundColor: 'rgba(21, 21, 21, 0.95)',
+        borderColor: 'rgba(255, 255, 255, 0.08)',
+        backgroundColor: 'rgba(30, 30, 35, 0.4)', // Blurred feel to match input
     },
     header: {
         backgroundColor: 'rgba(30, 30, 35, 0.4)',
