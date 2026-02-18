@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from
 import {
     View, Text, Image, FlatList, TextInput, Pressable,
     StyleSheet, StatusBar, KeyboardAvoidingView, Platform,
-    Modal, Animated as RNAnimated, Dimensions, Keyboard, Alert
+    Modal, Animated as RNAnimated, Dimensions, Keyboard, Alert, InteractionManager
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { BlurView } from 'expo-blur';
@@ -283,6 +283,24 @@ export default function SingleChatScreen({ user: propsUser, onBack, sourceY: pro
     const { contacts, messages, sendChatMessage, startCall, activeCall, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers } = useApp();
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
+    const [isReady, setIsReady] = useState(false);
+
+    // Defer heavy rendering until transition completes
+    useEffect(() => {
+        const task = InteractionManager.runAfterInteractions(() => {
+            setIsReady(true);
+        });
+        
+        // Fallback safety timeout
+        const timeout = setTimeout(() => {
+            setIsReady(true);
+        }, 350);
+
+        return () => {
+             task.cancel();
+             clearTimeout(timeout);
+        };
+    }, []);
 
     const [callOptionsPosition, setCallOptionsPosition] = useState({ x: 0, y: 0 });
     const [isExpanded, setIsExpanded] = useState(false);
@@ -645,109 +663,110 @@ export default function SingleChatScreen({ user: propsUser, onBack, sourceY: pro
                     {/* Opaque Background Layer - this fades out to reveal Home screen */}
                     <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000000' }]} />
                 
-                {/* Chat content */}
-                <View style={{ flex: 1 }}>
-                {/* Messages */}
-                <FlatList
-                    ref={flatListRef}
-                    data={chatMessages}
-                    keyExtractor={item => item.id}
-                    renderItem={renderMessage}
-                    style={styles.messagesList}
-                    contentContainerStyle={styles.messagesContent}
-                    showsVerticalScrollIndicator={false}
-                    // Performance Optimizations
-                    initialNumToRender={12}
-                    maxToRenderPerBatch={10}
-                    windowSize={5}
-                    removeClippedSubviews={Platform.OS === 'android'}
-                    ListEmptyComponent={
-                        <View style={styles.emptyChat}>
-                            <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.1)" />
-                            <Text style={styles.emptyChatText}>No messages yet</Text>
-                            <Text style={styles.emptyChatHint}>Say hi to {contact.name}!</Text>
-                        </View>
-                    }
-                />
-
-                {/* iOS-style Progressive Blur Effects */}
-                <ProgressiveBlur position="top" height={160} intensity={80} />
-                <ProgressiveBlur position="bottom" height={200} intensity={80} />
-
-                {/* Typing Indicator */}
-                {isTyping && (
-                    <View style={styles.typingContainer}>
-                        <Text style={[styles.typingText, { color: activeTheme.primary }]}>typing...</Text>
-                    </View>
-                )}
-
-                {/* Reply Preview */}
-                {replyingTo && (
-                    <BlurView intensity={60} tint="dark" style={styles.replyPreview}>
-                        <View style={styles.replyContent}>
-                            <View style={styles.quoteBar} />
-                            <View style={styles.replyTextContainer}>
-                                <Text style={styles.replySender}>REPLYING TO</Text>
-                                <Text numberOfLines={1} style={styles.replyText}>{replyingTo.text}</Text>
-                            </View>
-                        </View>
-                        <Pressable onPress={() => setReplyingTo(null)}>
-                            <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
-                        </Pressable>
-                    </BlurView>
-                )}
-
-                {/* Input Area */}
-                <View style={styles.inputArea}>
-                {/* Unified Pill Container */}
-                <View style={styles.unifiedPillContainer}>
-                    <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
-                    
-                    <View style={styles.inputWrapper}>
-                        {/* + Button on left inside */}
-                        <Pressable style={styles.attachButton} onPress={toggleOptions}>
-                            <Animated.View style={animatedPlusStyle}>
-                                <MaterialIcons name="add" size={20} color="rgba(255,255,255,0.7)" />
-                            </Animated.View>
-                        </Pressable>
-
-                        <TextInput
-                            style={styles.input}
-                            value={inputText}
-                            onChangeText={(text) => {
-                                setInputText(text);
-                                
-                                // Typing indicator logic
-                                sendTyping(true);
-                                
-                                if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-                                typingTimeoutRef.current = setTimeout(() => {
-                                    sendTyping(false);
-                                }, 2000) as unknown as NodeJS.Timeout;
-                            }}
-                            onFocus={handleFocus}
-                            placeholder="Sync fragment..."
-                            placeholderTextColor="rgba(255,255,255,0.3)"
-                            multiline
-                            maxLength={1000}
+                {/* Chat content - Deferred Rendering for Performance */}
+                {isReady && (
+                    <View style={{ flex: 1 }}>
+                        {/* Messages */}
+                        <FlatList
+                            ref={flatListRef}
+                            data={chatMessages}
+                            keyExtractor={item => item.id}
+                            renderItem={renderMessage}
+                            style={styles.messagesList}
+                            contentContainerStyle={styles.messagesContent}
+                            showsVerticalScrollIndicator={false}
+                            // Performance Optimizations
+                            initialNumToRender={12}
+                            maxToRenderPerBatch={10}
+                            windowSize={5}
+                            removeClippedSubviews={Platform.OS === 'android'}
+                            ListEmptyComponent={
+                                <View style={styles.emptyChat}>
+                                    <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.1)" />
+                                    <Text style={styles.emptyChatText}>No messages yet</Text>
+                                    <Text style={styles.emptyChatHint}>Say hi to {contact.name}!</Text>
+                                </View>
+                            }
                         />
 
-                        {/* Emoji button (optional, can remove if not needed) */}
-                        <Pressable style={styles.emojiInputButton}>
-                            <MaterialIcons name="sentiment-satisfied" size={20} color="rgba(255,255,255,0.5)" />
-                        </Pressable>
+                        {/* iOS-style Progressive Blur Effects */}
+                        <ProgressiveBlur position="top" height={160} intensity={80} />
+                        <ProgressiveBlur position="bottom" height={200} intensity={80} />
 
-                        {/* Mic button on right inside */}
-                        <Pressable
-                            style={styles.sendButton}
-                            onPress={handleSend}
-                        >
-                            <MaterialIcons
-                                name={inputText.trim() ? 'arrow-upward' : 'mic'}
-                                size={18}
-                                color={inputText.trim() ? activeTheme.primary : 'rgba(255,255,255,0.7)'}
-                            />
-                        </Pressable>
+                        {/* Typing Indicator */}
+                        {isTyping && (
+                            <View style={styles.typingContainer}>
+                                <Text style={[styles.typingText, { color: activeTheme.primary }]}>typing...</Text>
+                            </View>
+                        )}
+
+                        {/* Reply Preview */}
+                        {replyingTo && (
+                            <BlurView intensity={60} tint="dark" style={styles.replyPreview}>
+                                <View style={styles.replyContent}>
+                                    <View style={styles.quoteBar} />
+                                    <View style={styles.replyTextContainer}>
+                                        <Text style={styles.replySender}>REPLYING TO</Text>
+                                        <Text numberOfLines={1} style={styles.replyText}>{replyingTo.text}</Text>
+                                    </View>
+                                </View>
+                                <Pressable onPress={() => setReplyingTo(null)}>
+                                    <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
+                                </Pressable>
+                            </BlurView>
+                        )}
+
+                        {/* Input Area */}
+                        <View style={styles.inputArea}>
+                        {/* Unified Pill Container */}
+                        <View style={styles.unifiedPillContainer}>
+                            <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
+                            
+                            <View style={styles.inputWrapper}>
+                                {/* + Button on left inside */}
+                                <Pressable style={styles.attachButton} onPress={toggleOptions}>
+                                    <Animated.View style={animatedPlusStyle}>
+                                        <MaterialIcons name="add" size={20} color="rgba(255,255,255,0.7)" />
+                                    </Animated.View>
+                                </Pressable>
+
+                                <TextInput
+                                    style={styles.input}
+                                    value={inputText}
+                                    onChangeText={(text) => {
+                                        setInputText(text);
+                                        
+                                        // Typing indicator logic
+                                        sendTyping(true);
+                                        
+                                        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+                                        typingTimeoutRef.current = setTimeout(() => {
+                                            sendTyping(false);
+                                        }, 2000) as unknown as NodeJS.Timeout;
+                                    }}
+                                    onFocus={handleFocus}
+                                    placeholder="Sync fragment..."
+                                    placeholderTextColor="rgba(255,255,255,0.3)"
+                                    multiline
+                                    maxLength={1000}
+                                />
+
+                                {/* Emoji button (optional, can remove if not needed) */}
+                                <Pressable style={styles.emojiInputButton}>
+                                    <MaterialIcons name="sentiment-satisfied" size={20} color="rgba(255,255,255,0.5)" />
+                                </Pressable>
+
+                                {/* Mic button on right inside */}
+                                <Pressable
+                                    style={styles.sendButton}
+                                    onPress={handleSend}
+                                >
+                                    <MaterialIcons
+                                        name={inputText.trim() ? 'arrow-upward' : 'mic'}
+                                        size={18}
+                                        color={inputText.trim() ? activeTheme.primary : 'rgba(255,255,255,0.7)'}
+                                    />
+                                </Pressable>
                     </View>
                     
                     {/* Expandable Options Menu - Now inside the pill */}
@@ -780,6 +799,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, sourceY: pro
                 </View>
             </View>
             </View>
+            )}
             </Animated.View>
 
             {/* Reaction Modal */}
