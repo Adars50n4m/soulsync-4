@@ -302,17 +302,21 @@ export default function SingleChatScreen() {
     const handleBack = useCallback(() => {
         if (sourceY !== undefined) {
             // 1. Start sliding header back to original row position
-            morphTranslateY.value = withTiming(sourceY - HEADER_TOP, { duration: MORPH_OUT_DURATION, easing: MORPH_EASING });
+            const targetY = sourceY - HEADER_TOP;
+            morphTranslateY.value = withTiming(targetY, { duration: MORPH_OUT_DURATION, easing: MORPH_EASING });
             
             // 2. Fade out body and background layer in sync
             chatBodyOpacity.value = withTiming(0, { duration: MORPH_OUT_DURATION, easing: MORPH_EASING });
             
             // 3. Navigate back precisely when landing on the row
-            setTimeout(() => router.back(), MORPH_OUT_DURATION);
+            // We use the full duration to ensure the pill is seen reaching the target
+            setTimeout(() => {
+                router.back();
+            }, MORPH_OUT_DURATION);
         } else {
             router.back();
         }
-    }, [sourceY, morphTranslateY, chatBodyOpacity, router]);
+    }, [sourceY, router]); // morphTranslateY and chatBodyOpacity are stable refs
 
     // Animation Values
     const plusRotation = useSharedValue(0);
