@@ -175,7 +175,6 @@ export default function HomeScreen() {
       <Animated.View 
         style={styles.fullScreenContent} 
         entering={FadeIn.duration(350).delay(50)} 
-        exiting={FadeOut.duration(300)}
         layout={LinearTransition.springify().damping(18)}
       >
         <SingleChatScreen user={selectedUser} sourceY={sourceY} onBack={() => setSelectedUser(null)} />
@@ -186,7 +185,6 @@ export default function HomeScreen() {
   return (
     <Animated.View 
         style={styles.container} 
-        entering={FadeIn.duration(350)} 
         exiting={FadeOut.duration(300)}
         layout={LinearTransition.springify().damping(18)}
     >
