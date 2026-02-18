@@ -52,29 +52,31 @@ export function SheetTransition({
     const opacity = useSharedValue(0);
     const borderRadius = useSharedValue(initialBorderRadius);
 
-    // Animate in on mount
+    const handleClose = useCallback(() => {
+        translateY.value = withSpring(distance, { 
+            damping: 24, 
+            stiffness: 120, 
+            mass: 0.8 
+        });
+        scale.value = withSpring(scaleFactor, springConfig);
+        opacity.value = withTiming(0, { duration: 250 });
+        
+        setTimeout(() => {
+            runOnJS(onClose)();
+        }, 300);
+    }, [onClose, distance, scaleFactor, springConfig]);
+
+    // Animate in/out on prop change
     useEffect(() => {
         if (isOpen) {
             translateY.value = withSpring(0, springConfig);
             scale.value = withSpring(1, springConfig);
             opacity.value = withTiming(1, { duration: 400 });
             borderRadius.value = withTiming(0, { duration: 500 });
+        } else {
+            handleClose();
         }
-    }, [isOpen]);
-
-    const handleClose = useCallback(() => {
-        translateY.value = withSpring(distance, { 
-            damping: 20, 
-            stiffness: 90, 
-            mass: 1 
-        });
-        scale.value = withSpring(scaleFactor, springConfig);
-        opacity.value = withTiming(0, { duration: 300 });
-        
-        setTimeout(() => {
-            runOnJS(onClose)();
-        }, 350);
-    }, [onClose, scaleFactor, springConfig]);
+    }, [isOpen, handleClose, springConfig]);
 
     const panGesture = Gesture.Pan()
         .activeOffsetY([10, Number.MAX_SAFE_INTEGER])
