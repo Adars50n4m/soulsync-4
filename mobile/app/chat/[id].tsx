@@ -298,25 +298,27 @@ export default function SingleChatScreen() {
         }
     }, []);
 
-    // Animate OUT on back
+    // Animate OUT on back - High Performance Callback Logic
     const handleBack = useCallback(() => {
         if (sourceY !== undefined) {
-            // 1. Start sliding header back to original row position
             const targetY = sourceY - HEADER_TOP;
-            morphTranslateY.value = withTiming(targetY, { duration: MORPH_OUT_DURATION, easing: MORPH_EASING });
             
-            // 2. Fade out body and background layer in sync
-            chatBodyOpacity.value = withTiming(0, { duration: MORPH_OUT_DURATION, easing: MORPH_EASING });
+            // 1. Sync chat body fade-out instantly
+            chatBodyOpacity.value = withTiming(0, { duration: MORPH_OUT_DURATION - 50, easing: MORPH_EASING });
             
-            // 3. Navigate back precisely when landing on the row
-            // We use the full duration to ensure the pill is seen reaching the target
-            setTimeout(() => {
-                router.back();
-            }, MORPH_OUT_DURATION);
+            // 2. Start morph slide-down with runOnJS callback for precise unmount
+            morphTranslateY.value = withTiming(targetY, 
+                { duration: MORPH_OUT_DURATION, easing: MORPH_EASING },
+                (finished) => {
+                    if (finished) {
+                        runOnJS(router.back)();
+                    }
+                }
+            );
         } else {
             router.back();
         }
-    }, [sourceY, router]); // morphTranslateY and chatBodyOpacity are stable refs
+    }, [sourceY, router]);
 
     // Animation Values
     const plusRotation = useSharedValue(0);
