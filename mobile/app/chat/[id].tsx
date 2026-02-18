@@ -300,17 +300,19 @@ export default function SingleChatScreen() {
 
     // Animate OUT on back
     const handleBack = useCallback(() => {
-        if (id) {
-            // Rapid fade of body to reveal Home screen
-            chatBodyOpacity.value = withTiming(0, { duration: 150 });
+        if (sourceY !== undefined) {
+            // 1. Start sliding header back to original row position
+            morphTranslateY.value = withTiming(sourceY - HEADER_TOP, { duration: MORPH_OUT_DURATION, easing: MORPH_EASING });
             
-            // SharedTransition kicks in as soon as we navigate back.
-            // A tiny delay ensures the opacity animation starts before unmount.
-            setTimeout(() => router.back(), 16);
+            // 2. Fade out body and background layer in sync
+            chatBodyOpacity.value = withTiming(0, { duration: MORPH_OUT_DURATION, easing: MORPH_EASING });
+            
+            // 3. Navigate back precisely when landing on the row
+            setTimeout(() => router.back(), MORPH_OUT_DURATION);
         } else {
             router.back();
         }
-    }, [id, chatBodyOpacity, router]);
+    }, [sourceY, morphTranslateY, chatBodyOpacity, router]);
 
     // Animation Values
     const plusRotation = useSharedValue(0);
@@ -547,11 +549,8 @@ export default function SingleChatScreen() {
         >
             <StatusBar barStyle="light-content" />
 
-            {/* Header - morphs up from source pill position using Shared Element Transition */}
-            <Animated.View 
-                sharedTransitionTag={`pill-${id}`}
-                style={[styles.headerContainer, headerMorphStyle]}
-            >
+            {/* Header - morphs up from source pill position */}
+            <Animated.View style={[styles.headerContainer, headerMorphStyle]}>
                 <BlurView intensity={100} tint="dark" style={styles.header}>
                     <Pressable onPress={handleBack} style={styles.backButton}>
                         <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
