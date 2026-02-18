@@ -570,10 +570,12 @@ export default function SingleChatScreen() {
                 style={[
                     styles.headerContainer, 
                     headerMorphStyle,
-                    { backgroundColor: '#151515' }
                 ]}
             >
-                <BlurView intensity={100} tint="dark" style={styles.header}>
+                {/* Background Blur Matching Input Area */}
+                <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
+                
+                <View style={styles.header}>
                     <Pressable onPress={handleBack} style={styles.backButton}>
                         <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
                     </Pressable>
@@ -610,7 +612,7 @@ export default function SingleChatScreen() {
                             <MaterialIcons name="call" size={20} color={activeTheme.primary} />
                         </Pressable>
                     </View>
-                </BlurView>
+                </View>
             </Animated.View>
 
             {/* Chat background and body — fades in/out during morph */}
@@ -851,7 +853,7 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(30, 30, 35, 0.4)', // Blurred feel to match input
     },
     header: {
-        backgroundColor: 'rgba(30, 30, 35, 0.4)',
+        backgroundColor: 'transparent', // Transparent content layer
         paddingHorizontal: 16,
         paddingVertical: 10,
         flexDirection: 'row',
