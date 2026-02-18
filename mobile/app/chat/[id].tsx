@@ -290,11 +290,10 @@ export default function SingleChatScreen() {
                 { translateY: interpolate(morphProgress.value, [0, 1], [distance, 0]) },
                 { scale: interpolate(morphProgress.value, [0, 1], [0.96, 1]) }
             ],
-            // Visual Shape Morph: Animate from 16px horizontal spacing to 0
-            left: interpolate(morphProgress.value, [0, 1], [16, 0]),
-            right: interpolate(morphProgress.value, [0, 1], [16, 0]),
-            // Animate border radius from Pill (36) to Header (0)
-            borderRadius: interpolate(morphProgress.value, [0, 1], [36, 0]),
+            // Fixed Pill Shape Restored
+            left: 16,
+            right: 16,
+            borderRadius: 36,
         };
     });
 
@@ -566,33 +565,12 @@ export default function SingleChatScreen() {
         >
             <StatusBar barStyle="light-content" />
 
-            {/* 1. Source Mask - Covers the Home screen pill so we don't see duplicates */}
-            {sourceY !== undefined && (
-                <Animated.View
-                    style={[
-                        {
-                            position: 'absolute',
-                            top: sourceY,
-                            left: 16,
-                            right: 16,
-                            height: 72,
-                            borderRadius: 36,
-                            backgroundColor: '#151515', // Matches list item background
-                            zIndex: 1,
-                        },
-                        {
-                            opacity: interpolate(chatBodyOpacity.value, [0, 0.4], [1, 0])
-                        }
-                    ]}
-                />
-            )}
-
-            {/* 2. Header - Morphs up from source position */}
+            {/* Header - Morphs up from source position - Pill Shape Restored */}
             <Animated.View 
                 style={[
                     styles.headerContainer, 
                     headerMorphStyle,
-                    { backgroundColor: '#151515' } // Solid background
+                    { backgroundColor: '#151515' }
                 ]}
             >
                 <BlurView intensity={100} tint="dark" style={styles.header}>
