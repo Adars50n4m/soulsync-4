@@ -22,7 +22,6 @@ import Animated, {
 } from 'react-native-reanimated';
 import { MORPH_EASING, MORPH_IN_DURATION, MORPH_OUT_DURATION, MORPH_SPRING_CONFIG } from '../../constants/transitions';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { SheetTransition } from '../../components/SheetTransition';
 
 import { useApp } from '../../context/AppContext';
 import { MusicPlayerOverlay } from '../../components/MusicPlayerOverlay';
@@ -270,14 +269,15 @@ const ReactionModal = ({ visible, onClose, onSelect }: any) => {
 interface SingleChatScreenProps {
     user?: Contact;
     onBack?: () => void;
+    sourceY?: number;
 }
 
-export default function SingleChatScreen({ user: propsUser, onBack }: SingleChatScreenProps) {
+export default function SingleChatScreen({ user: propsUser, onBack, sourceY: propsSourceY }: SingleChatScreenProps) {
     const { id: paramsId, sourceY: paramsSourceY } = useLocalSearchParams();
-    
+
     // Support both direct routing (params) and inline rendering (props)
     const id = propsUser?.id || (Array.isArray(paramsId) ? paramsId[0] : paramsId);
-    const sourceY = paramsSourceY ? Number(Array.isArray(paramsSourceY) ? paramsSourceY[0] : paramsSourceY) : undefined;
+    const sourceY = propsSourceY ?? (paramsSourceY ? Number(Array.isArray(paramsSourceY) ? paramsSourceY[0] : paramsSourceY) : undefined);
     
     const router = useRouter();
     const { contacts, messages, sendChatMessage, startCall, activeCall, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers } = useApp();
@@ -289,23 +289,29 @@ export default function SingleChatScreen({ user: propsUser, onBack }: SingleChat
 
     // Morph Animation — iOS-style smooth bezier, no spring jitter
     const HEADER_TOP = 50;
+    const ITEM_HEIGHT = 72;
+    const ITEM_MARGIN = 16;
+    const ITEM_RADIUS = 36;
+    
     // Morph Animation — 0 = Home (Pill), 1 = Chat (Header)
     const morphProgress = useSharedValue(sourceY !== undefined ? 0 : 1);
     const chatBodyOpacity = useSharedValue(sourceY !== undefined ? 0 : 1);
-    const [screenOpen, setScreenOpen] = useState(true);
 
     const headerMorphStyle = useAnimatedStyle(() => {
-        const morph = morphProgress.value;
+        const p = morphProgress.value;
+        const distance = sourceY !== undefined ? sourceY - HEADER_TOP : 0;
         return {
+            // Position Morph
             transform: [
-                { scale: interpolate(morph, [0, 1], [0.96, 1]) }
+                { translateY: interpolate(p, [0, 1], [distance, 0]) },
+                { scale: interpolate(p, [0, 1], [0.96, 1]) }
             ],
-            // Reshape Animation: Interpolating horizontal margins
-            // 0 (Home) = Large margins (~20), 1 (Chat) = Standard margins (16)
-            left: interpolate(morph, [0, 1], [20, 16]),
-            right: interpolate(morph, [0, 1], [20, 16]),
-            borderRadius: 36, // Consistent Pill Shape
-            opacity: interpolate(morph, [0, 0.4, 1], [0.1, 1, 1]), // Subtle fade-in glow
+            // Persistent Pill Shape
+            left: ITEM_MARGIN,
+            right: ITEM_MARGIN,
+            borderRadius: ITEM_RADIUS,
+            height: ITEM_HEIGHT,
+            opacity: interpolate(p, [0, 0.4, 1], [0.1, 1, 1]), // Subtle fade-in glow
         };
     });
 
@@ -316,38 +322,38 @@ export default function SingleChatScreen({ user: propsUser, onBack }: SingleChat
     // Animate IN with staggered delay to prevent rendering lag
     useLayoutEffect(() => {
         if (sourceY !== undefined) {
-             // 1. Start shape morph slightly after slide initiation
-            morphProgress.value = withDelay(50, withTiming(1, { 
-                duration: MORPH_IN_DURATION, 
-                easing: MORPH_EASING 
+            // 1. Start shape morph slightly after slide initiation
+            morphProgress.value = withDelay(50, withTiming(1, {
+                duration: MORPH_IN_DURATION,
+                easing: MORPH_EASING
             }));
-            
+
             // 2. Delay heavy body fade-in until list is partially rendered
-            chatBodyOpacity.value = withDelay(150, withTiming(1, { 
-                duration: 400, 
-                easing: Easing.out(Easing.quad) 
+            chatBodyOpacity.value = withDelay(150, withTiming(1, {
+                duration: 400,
+                easing: Easing.out(Easing.quad)
             }));
         }
     }, []);
 
-    // Animate OUT on back - Synchronized with SheetTransition
+    // Animate OUT on back - Morph back to pill shape
     const handleBack = useCallback(() => {
-        if (onBack) {
-            onBack();
-            return;
-        }
-        
-        setScreenOpen(false); // Triggers SheetTransition exit
-        // Mirror the morph logic for exit
-        morphProgress.value = withTiming(0, { 
-            duration: MORPH_OUT_DURATION, 
-            easing: MORPH_EASING 
+        // Morph back to pill shape
+        morphProgress.value = withTiming(0, {
+            duration: 300,
+            easing: Easing.out(Easing.quad)
         });
-        chatBodyOpacity.value = withTiming(0, { 
-            duration: MORPH_OUT_DURATION - 100, 
-            easing: Easing.in(Easing.quad) 
-        });
-    }, []);
+        chatBodyOpacity.value = withTiming(0, { duration: 150 });
+
+        // Call onBack after animation completes
+        setTimeout(() => {
+            if (onBack) {
+                onBack();
+            } else {
+                router.back();
+            }
+        }, 300);
+    }, [onBack, router]);
 
     // Animation Values
     const plusRotation = useSharedValue(0);
@@ -577,47 +583,35 @@ export default function SingleChatScreen({ user: propsUser, onBack }: SingleChat
     }
 
     return (
-        <SheetTransition
-            onClose={() => router.back()}
-            isOpen={screenOpen}
-            sourceY={sourceY}
-            headerTop={HEADER_TOP}
-            springConfig={{ damping: 20, stiffness: 90, mass: 1 }}
-            scaleFactor={0.92}
-            dragThreshold={100}
-            initialBorderRadius={36}
-            opacityOnGestureMove={true}
-            containerRadiusSync={true}
+        <KeyboardAvoidingView
+            style={styles.container}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            keyboardVerticalOffset={0}
         >
-            <KeyboardAvoidingView
-                style={styles.container}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                keyboardVerticalOffset={0}
+            <StatusBar barStyle="light-content" />
+
+            {/* Header - Morphs up from source position - Pill Shape Restored */}
+            <Animated.View
+                style={[
+                    styles.headerContainer,
+                    headerMorphStyle,
+                ]}
             >
-                <StatusBar barStyle="light-content" />
+                {/* Background Blur Matching Input Area */}
+                <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
 
-                {/* Header - Morphs up from source position - Pill Shape Restored */}
-                <Animated.View
-                    style={[
-                        styles.headerContainer,
-                        headerMorphStyle,
-                    ]}
-                >
-                    {/* Background Blur Matching Input Area */}
-                    <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
+                <View style={styles.header}>
+                    <Pressable onPress={handleBack} style={styles.backButton}>
+                        <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
+                    </Pressable>
 
-                    <View style={styles.header}>
-                        <Pressable onPress={handleBack} style={styles.backButton}>
-                            <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
-                        </Pressable>
+                    <Pressable style={styles.avatarWrapper} onPress={() => router.push(`/profile/${contact.id}` as any)}>
+                        <Image source={{ uri: contact.avatar }} style={styles.avatar} />
+                        {contact.status === 'online' && <View style={styles.onlineIndicator} />}
+                    </Pressable>
 
-                        <Pressable style={styles.avatarWrapper} onPress={() => router.push(`/profile/${contact.id}` as any)}>
-                            <Image source={{ uri: contact.avatar }} style={styles.avatar} />
-                            {contact.status === 'online' && <View style={styles.onlineIndicator} />}
-                        </Pressable>
-
-                        <View style={styles.headerInfo}>
-                            <Text style={styles.contactName}>{contact.name}</Text>
+                    <View style={styles.headerInfo}>
+                        <Text style={styles.contactName}>{contact.name}</Text>
                             {musicState.currentSong ? (
                                 <View style={styles.nowPlayingStatus}>
                                     <MaterialIcons name="audiotrack" size={12} color={activeTheme.primary} />
@@ -870,7 +864,6 @@ export default function SingleChatScreen({ user: propsUser, onBack }: SingleChat
 
 
         </KeyboardAvoidingView>
-        </SheetTransition>
     );
 }
 

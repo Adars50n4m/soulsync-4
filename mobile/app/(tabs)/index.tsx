@@ -23,13 +23,14 @@ import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { Contact, Story } from '../../types';
 import SingleChatScreen from '../chat/[id]';
 
-const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping }: { 
-  item: Contact, 
-  lastMsg: any, 
-  onSelect: (contact: Contact) => void,
+const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping }: {
+  item: Contact,
+  lastMsg: any,
+  onSelect: (contact: Contact, y: number) => void,
   isTyping: boolean
 }) => {
   const scaleAnim = useSharedValue(1);
+  const itemRef = useRef<View>(null);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scaleAnim.value }]
@@ -43,9 +44,16 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping }: {
     scaleAnim.value = withSpring(1);
   };
 
+  const handlePress = () => {
+    itemRef.current?.measure((x, y, width, height, pageX, pageY) => {
+      onSelect(item, pageY);
+    });
+  };
+
   return (
     <Pressable
-      onPress={() => onSelect(item)}
+      ref={itemRef}
+      onPress={handlePress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
       style={styles.chatItem}
@@ -79,7 +87,9 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping }: {
 
 export default function HomeScreen() {
   const { contacts, messages, activeTheme, typingUsers, currentUser, statuses, addStatus } = useApp();
+  const router = useRouter();
   const [selectedUser, setSelectedUser] = useState<Contact | null>(null);
+  const [sourceY, setSourceY] = useState<number | undefined>(undefined);
 
   // Status Handlers
   const [selectedStatusContact, setSelectedStatusContact] = useState<Contact | null>(null);
@@ -139,32 +149,37 @@ export default function HomeScreen() {
       createStatus(result);
   };
 
+  const handleUserSelect = useCallback((contact: Contact, y: number) => {
+    setSourceY(y);
+    setSelectedUser(contact);
+  }, []);
+
   const renderItem = ({ item }: { item: Contact }) => {
     const chatMessages = messages[item.id] || [];
     const lastMsg = chatMessages[chatMessages.length - 1] || { text: item.lastMessage, timestamp: '' };
     const isTyping = typingUsers.includes(item.id);
-    return <ChatListItem item={item} lastMsg={lastMsg} onSelect={setSelectedUser} isTyping={isTyping} />;
+    return <ChatListItem item={item} lastMsg={lastMsg} onSelect={handleUserSelect} isTyping={isTyping} />;
   };
 
   if (selectedUser) {
     return (
-      <Animated.View 
-        style={styles.fullScreenContent} 
-        entering={FadeIn.duration(300)} 
-        exiting={FadeOut.duration(200)}
-        layout={LinearTransition.springify().damping(20)}
+      <Animated.View
+        style={styles.fullScreenContent}
+        entering={FadeIn.duration(350)}
+        exiting={FadeOut.duration(300)}
+        layout={LinearTransition.springify().damping(18)}
       >
-        <SingleChatScreen user={selectedUser} onBack={() => setSelectedUser(null)} />
+        <SingleChatScreen user={selectedUser} sourceY={sourceY} onBack={() => setSelectedUser(null)} />
       </Animated.View>
     );
   }
 
   return (
-    <Animated.View 
-        style={styles.container} 
-        entering={FadeIn.duration(300)} 
-        exiting={FadeOut.duration(200)}
-        layout={LinearTransition.springify().damping(20)}
+    <Animated.View
+        style={styles.container}
+        entering={FadeIn.duration(350)}
+        exiting={FadeOut.duration(300)}
+        layout={LinearTransition.springify().damping(18)}
     >
       <StatusBar barStyle="light-content" />
       
