@@ -55,7 +55,10 @@ const ChatListItem = React.memo(({ item, lastMsg, router, isTyping, index, scrol
       onPressOut={handlePressOut}
       style={styles.chatItem}
     >
-      <Animated.View style={[styles.chatPillContainer, animatedStyle]}>
+      <Animated.View 
+        sharedTransitionTag={`pill-${item.id}`}
+        style={[styles.chatPillContainer, animatedStyle]}
+      >
         {/* Absolute Background Layers */}
         <View style={styles.pillBackground} />
         <BlurView intensity={40} tint="dark" style={styles.pillBlur} />
