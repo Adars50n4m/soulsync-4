@@ -592,8 +592,13 @@ export default function SingleChatScreen() {
                 </BlurView>
             </Animated.View>
 
-            {/* Chat body — fades in/out during morph */}
-            <Animated.View style={[{ flex: 1 }, chatBodyAnimStyle]}>
+            {/* Chat background and body — fades in/out during morph */}
+            <Animated.View style={[StyleSheet.absoluteFill, chatBodyAnimStyle]}>
+                {/* Opaque Background Layer - this fades out to reveal Home screen */}
+                <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000000' }]} />
+                
+                {/* Chat content */}
+                <View style={{ flex: 1 }}>
                 {/* Messages */}
                 <FlatList
                     ref={flatListRef}
@@ -721,6 +726,7 @@ export default function SingleChatScreen() {
                     </Animated.View>
                 </View>
             </View>
+            </View>
             </Animated.View>
 
             {/* Reaction Modal */}
@@ -810,7 +816,7 @@ export default function SingleChatScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#000000',
+        backgroundColor: 'transparent',
     },
     headerContainer: {
         position: 'absolute',

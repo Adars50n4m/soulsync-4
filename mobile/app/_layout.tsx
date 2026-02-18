@@ -48,6 +48,7 @@ function RootContent() {
           animation: 'none',
           headerShown: false,
           gestureEnabled: true,
+          contentStyle: { backgroundColor: 'transparent' },
         }} />
         <Stack.Screen name="+not-found" />
       </Stack>
