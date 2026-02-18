@@ -91,12 +91,9 @@ export default function HomeScreen() {
 
   // Hide Tab Bar when Chat is open
   React.useLayoutEffect(() => {
-    const parent = navigation.getParent();
-    if (parent) {
-      parent.setOptions({
-        tabBarStyle: selectedUser ? { display: 'none' } : undefined
-      });
-    }
+    navigation.setOptions({
+      tabBarStyle: selectedUser ? { display: 'none' } : undefined
+    });
   }, [navigation, selectedUser]);
 
   // Status Handlers
