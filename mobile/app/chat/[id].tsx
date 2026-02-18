@@ -298,23 +298,26 @@ export default function SingleChatScreen() {
         }
     }, []);
 
-    // Animate OUT on back - High Performance Callback Logic
+    // Animate OUT on back - Refined for zero-stutter and instant response
     const handleBack = useCallback(() => {
         if (sourceY !== undefined) {
             const targetY = sourceY - HEADER_TOP;
             
-            // 1. Sync chat body fade-out instantly
-            chatBodyOpacity.value = withTiming(0, { duration: MORPH_OUT_DURATION - 50, easing: MORPH_EASING });
+            // 1. Morph the pill back to its row - slightly faster (300ms)
+            // Using a spring-like snappy easing for premium feel
+            morphTranslateY.value = withTiming(targetY, { 
+                duration: 300, 
+                easing: Easing.out(Easing.quad) 
+            });
             
-            // 2. Start morph slide-down with runOnJS callback for precise unmount
-            morphTranslateY.value = withTiming(targetY, 
-                { duration: MORPH_OUT_DURATION, easing: MORPH_EASING },
-                (finished) => {
-                    if (finished) {
-                        runOnJS(router.back)();
-                    }
-                }
-            );
+            // 2. Fade out chat body ultra-quickly (150ms) to reveal Home screen
+            chatBodyOpacity.value = withTiming(0, { duration: 150 });
+            
+            // 3. Navigate back at 250ms (80% through)
+            // This hides the last few frames of misalignment and removes all delay
+            setTimeout(() => {
+                router.back();
+            }, 250);
         } else {
             router.back();
         }
