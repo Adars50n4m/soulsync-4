@@ -45,7 +45,7 @@ function RootContent() {
         }} />
         <Stack.Screen name="chat/[id]" options={{
           presentation: 'card',
-          animation: 'none', // Disable page transition so only the shared element morph is visible
+          animation: 'none',
           headerShown: false,
           gestureEnabled: true,
         }} />

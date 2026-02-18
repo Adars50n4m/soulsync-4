@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react';
 import {
     View, Text, Image, FlatList, TextInput, Pressable,
     StyleSheet, StatusBar, KeyboardAvoidingView, Platform,
@@ -17,8 +17,9 @@ import Animated, {
     runOnJS,
     interpolate,
     Extrapolation,
-    SharedTransition
+    Easing,
 } from 'react-native-reanimated';
+import { MORPH_EASING, MORPH_IN_DURATION, MORPH_OUT_DURATION } from '../../constants/transitions';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 import { useApp } from '../../context/AppContext';
@@ -265,8 +266,9 @@ const ReactionModal = ({ visible, onClose, onSelect }: any) => {
 };
 
 export default function SingleChatScreen() {
-    const { id: rawId } = useLocalSearchParams();
+    const { id: rawId, sourceY: rawSourceY } = useLocalSearchParams();
     const id = Array.isArray(rawId) ? rawId[0] : rawId;
+    const sourceY = rawSourceY ? Number(Array.isArray(rawSourceY) ? rawSourceY[0] : rawSourceY) : undefined;
     const router = useRouter();
     const { contacts, messages, sendChatMessage, startCall, activeCall, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers } = useApp();
     const [inputText, setInputText] = useState('');
@@ -274,6 +276,41 @@ export default function SingleChatScreen() {
 
     const [callOptionsPosition, setCallOptionsPosition] = useState({ x: 0, y: 0 });
     const [isExpanded, setIsExpanded] = useState(false);
+
+    // Morph Animation — iOS-style smooth bezier, no spring jitter
+    const HEADER_TOP = 50;
+    const morphTranslateY = useSharedValue(sourceY !== undefined ? sourceY - HEADER_TOP : 0);
+    const chatBodyOpacity = useSharedValue(sourceY !== undefined ? 0 : 1);
+
+    const headerMorphStyle = useAnimatedStyle(() => ({
+        transform: [{ translateY: morphTranslateY.value }],
+    }));
+
+    const chatBodyAnimStyle = useAnimatedStyle(() => ({
+        opacity: chatBodyOpacity.value,
+    }));
+
+    // Animate IN immediately before paint
+    useLayoutEffect(() => {
+        if (sourceY !== undefined) {
+            morphTranslateY.value = withTiming(0, { duration: MORPH_IN_DURATION, easing: MORPH_EASING });
+            chatBodyOpacity.value = withTiming(1, { duration: MORPH_IN_DURATION, easing: MORPH_EASING });
+        }
+    }, []);
+
+    // Animate OUT on back
+    const handleBack = useCallback(() => {
+        if (sourceY !== undefined) {
+            // Instant feedback: start sliding header back
+            morphTranslateY.value = withTiming(sourceY - HEADER_TOP, { duration: MORPH_OUT_DURATION, easing: MORPH_EASING });
+            
+            // Navigate back mid-way through animation for snappiness
+            // This prevents seeing the "black" gap as the room switches instantly
+            setTimeout(() => router.back(), MORPH_OUT_DURATION * 0.7);
+        } else {
+            router.back();
+        }
+    }, [sourceY]);
 
     // Animation Values
     const plusRotation = useSharedValue(0);
@@ -510,13 +547,10 @@ export default function SingleChatScreen() {
         >
             <StatusBar barStyle="light-content" />
 
-            {/* Header */}
-            <Animated.View
-                style={styles.headerContainer}
-                sharedTransitionTag={`pill-container-${id}`}
-            >
+            {/* Header - morphs up from source pill position */}
+            <Animated.View style={[styles.headerContainer, headerMorphStyle]}>
                 <BlurView intensity={100} tint="dark" style={styles.header}>
-                    <Pressable onPress={() => router.back()} style={styles.backButton}>
+                    <Pressable onPress={handleBack} style={styles.backButton}>
                         <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
                     </Pressable>
 
@@ -555,53 +589,55 @@ export default function SingleChatScreen() {
                 </BlurView>
             </Animated.View>
 
-            {/* Messages */}
-            <FlatList
-                ref={flatListRef}
-                data={chatMessages}
-                keyExtractor={item => item.id}
-                renderItem={renderMessage}
-                style={styles.messagesList}
-                contentContainerStyle={styles.messagesContent}
-                showsVerticalScrollIndicator={false}
-                ListEmptyComponent={
-                    <View style={styles.emptyChat}>
-                        <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.1)" />
-                        <Text style={styles.emptyChatText}>No messages yet</Text>
-                        <Text style={styles.emptyChatHint}>Say hi to {contact.name}!</Text>
-                    </View>
-                }
-            />
-
-            {/* iOS-style Progressive Blur Effects */}
-            <ProgressiveBlur position="top" height={160} intensity={80} />
-            <ProgressiveBlur position="bottom" height={200} intensity={80} />
-
-            {/* Typing Indicator */}
-            {isTyping && (
-                <View style={styles.typingContainer}>
-                    <Text style={[styles.typingText, { color: activeTheme.primary }]}>typing...</Text>
-                </View>
-            )}
-
-            {/* Reply Preview */}
-            {replyingTo && (
-                <BlurView intensity={60} tint="dark" style={styles.replyPreview}>
-                    <View style={styles.replyContent}>
-                        <View style={styles.quoteBar} />
-                        <View style={styles.replyTextContainer}>
-                            <Text style={styles.replySender}>REPLYING TO</Text>
-                            <Text numberOfLines={1} style={styles.replyText}>{replyingTo.text}</Text>
+            {/* Chat body — fades in/out during morph */}
+            <Animated.View style={[{ flex: 1 }, chatBodyAnimStyle]}>
+                {/* Messages */}
+                <FlatList
+                    ref={flatListRef}
+                    data={chatMessages}
+                    keyExtractor={item => item.id}
+                    renderItem={renderMessage}
+                    style={styles.messagesList}
+                    contentContainerStyle={styles.messagesContent}
+                    showsVerticalScrollIndicator={false}
+                    ListEmptyComponent={
+                        <View style={styles.emptyChat}>
+                            <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.1)" />
+                            <Text style={styles.emptyChatText}>No messages yet</Text>
+                            <Text style={styles.emptyChatHint}>Say hi to {contact.name}!</Text>
                         </View>
-                    </View>
-                    <Pressable onPress={() => setReplyingTo(null)}>
-                        <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
-                    </Pressable>
-                </BlurView>
-            )}
+                    }
+                />
 
-            {/* Input Area */}
-            <View style={styles.inputArea}>
+                {/* iOS-style Progressive Blur Effects */}
+                <ProgressiveBlur position="top" height={160} intensity={80} />
+                <ProgressiveBlur position="bottom" height={200} intensity={80} />
+
+                {/* Typing Indicator */}
+                {isTyping && (
+                    <View style={styles.typingContainer}>
+                        <Text style={[styles.typingText, { color: activeTheme.primary }]}>typing...</Text>
+                    </View>
+                )}
+
+                {/* Reply Preview */}
+                {replyingTo && (
+                    <BlurView intensity={60} tint="dark" style={styles.replyPreview}>
+                        <View style={styles.replyContent}>
+                            <View style={styles.quoteBar} />
+                            <View style={styles.replyTextContainer}>
+                                <Text style={styles.replySender}>REPLYING TO</Text>
+                                <Text numberOfLines={1} style={styles.replyText}>{replyingTo.text}</Text>
+                            </View>
+                        </View>
+                        <Pressable onPress={() => setReplyingTo(null)}>
+                            <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
+                        </Pressable>
+                    </BlurView>
+                )}
+
+                {/* Input Area */}
+                <View style={styles.inputArea}>
                 {/* Unified Pill Container */}
                 <View style={styles.unifiedPillContainer}>
                     <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
@@ -682,6 +718,7 @@ export default function SingleChatScreen() {
                     </Animated.View>
                 </View>
             </View>
+            </Animated.View>
 
             {/* Reaction Modal */}
             <ReactionModal
@@ -782,7 +819,7 @@ const styles = StyleSheet.create({
         overflow: 'hidden',
         borderWidth: 1,
         borderColor: 'rgba(255, 255, 255, 0.1)',
-        backgroundColor: 'transparent',
+        backgroundColor: 'rgba(21, 21, 21, 0.95)',
     },
     header: {
         backgroundColor: 'rgba(30, 30, 35, 0.4)',

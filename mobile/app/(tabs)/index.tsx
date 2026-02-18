@@ -16,6 +16,7 @@ import { Contact, Story } from '../../types';
 const ChatListItem = React.memo(({ item, lastMsg, router, isTyping }: { item: any, lastMsg: any, router: any, isTyping: boolean }) => {
   const scaleAnim = useSharedValue(1);
   const translateYAnim = useSharedValue(0);
+  const pillRef = useRef<View>(null);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scaleAnim.value }, { translateY: translateYAnim.value }]
@@ -27,26 +28,33 @@ const ChatListItem = React.memo(({ item, lastMsg, router, isTyping }: { item: an
   };
 
   const handlePressOut = () => {
-    scaleAnim.value = withSpring(1, { damping: 10, stiffness: 100 });
-    translateYAnim.value = withSpring(0, { damping: 10, stiffness: 100 });
+    scaleAnim.value = withSpring(1, { damping: 15, stiffness: 300 });
+    translateYAnim.value = withSpring(0, { damping: 15, stiffness: 300 });
+  };
+
+  const handlePress = () => {
+    pillRef.current?.measureInWindow((x, y, width, height) => {
+      router.push({
+        pathname: '/chat/[id]',
+        params: { id: item.id, sourceY: String(Math.round(y)) }
+      });
+    });
   };
 
   return (
     <Pressable
-      onPress={() => router.push(`/chat/${item.id}`)}
+      ref={pillRef}
+      onPress={handlePress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
       style={styles.chatItem}
     >
-      <Animated.View
-        style={[styles.chatPillContainer, animatedStyle]}
-        sharedTransitionTag={`pill-container-${item.id}`}
-      >
+      <Animated.View style={[styles.chatPillContainer, animatedStyle]}>
         {/* Absolute Background Layers */}
         <View style={styles.pillBackground} />
         <BlurView intensity={40} tint="dark" style={styles.pillBlur} />
 
-        {/* Content Layer (on top) */}
+        {/* Content Layer */}
         <View style={styles.pillContent}>
           {/* Avatar */}
           <View style={styles.avatarContainer}>
