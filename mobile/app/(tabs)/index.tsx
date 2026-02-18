@@ -170,23 +170,12 @@ export default function HomeScreen() {
     );
   };
 
-  if (selectedUser) {
-    return (
-      <Animated.View 
-        style={styles.fullScreenContent} 
-        entering={FadeIn.duration(350).delay(50)} 
-        layout={LinearTransition.springify().damping(18)}
-      >
-        <SingleChatScreen user={selectedUser} sourceY={sourceY} onBack={() => setSelectedUser(null)} />
-      </Animated.View>
-    );
-  }
 
   return (
     <Animated.View 
         style={styles.container} 
-        exiting={FadeOut.duration(300)}
-        layout={LinearTransition.springify().damping(18)}
+        exiting={FadeOut.duration(200)}
+        layout={LinearTransition.springify().damping(20)}
     >
       <StatusBar barStyle="light-content" />
       
@@ -252,13 +241,21 @@ export default function HomeScreen() {
         onSelectGallery={handleSelectGallery}
         onSelectAudio={() => Alert.alert("Audio Status", "Coming soon!")}
       />
+
+      {selectedUser && (
+        <Animated.View 
+          style={[styles.fullScreenContent, StyleSheet.absoluteFill, { zIndex: 100 }]}
+        >
+          <SingleChatScreen user={selectedUser} sourceY={sourceY} onBack={() => setSelectedUser(null)} />
+        </Animated.View>
+      )}
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
-  fullScreenContent: { flex: 1, backgroundColor: '#000' },
+  fullScreenContent: { flex: 1, backgroundColor: 'transparent' },
   statusRail: { marginTop: 60, marginBottom: 24 },
   statusContent: { paddingHorizontal: 20, gap: 12 },
   statusCard: { width: 110, height: 140, borderRadius: 28, overflow: 'hidden', backgroundColor: '#1a1a1a' },
