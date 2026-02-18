@@ -19,7 +19,7 @@ import Animated, {
     Extrapolation,
     Easing,
 } from 'react-native-reanimated';
-import { MORPH_EASING, MORPH_IN_DURATION, MORPH_OUT_DURATION } from '../../constants/transitions';
+import { MORPH_EASING, MORPH_IN_DURATION, MORPH_OUT_DURATION, MORPH_SPRING_CONFIG } from '../../constants/transitions';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 import { useApp } from '../../context/AppContext';
@@ -293,20 +293,20 @@ export default function SingleChatScreen() {
     // Animate IN immediately before paint
     useLayoutEffect(() => {
         if (sourceY !== undefined) {
-            morphTranslateY.value = withTiming(0, { duration: MORPH_IN_DURATION, easing: MORPH_EASING });
-            chatBodyOpacity.value = withTiming(1, { duration: MORPH_IN_DURATION, easing: MORPH_EASING });
+            morphTranslateY.value = withSpring(0, MORPH_SPRING_CONFIG);
+            chatBodyOpacity.value = withSpring(1, MORPH_SPRING_CONFIG);
         }
     }, []);
 
     // Animate OUT on back
     const handleBack = useCallback(() => {
         if (sourceY !== undefined) {
-            // Instant feedback: start sliding header back
-            morphTranslateY.value = withTiming(sourceY - HEADER_TOP, { duration: MORPH_OUT_DURATION, easing: MORPH_EASING });
+            // Instant feedback: start sliding header back with liquid spring
+            morphTranslateY.value = withSpring(sourceY - HEADER_TOP, MORPH_SPRING_CONFIG);
             
-            // Navigate back mid-way through animation for snappiness
-            // This prevents seeing the "black" gap as the room switches instantly
-            setTimeout(() => router.back(), MORPH_OUT_DURATION * 0.7);
+            // Navigate back even sooner for maximum snappiness
+            // Timing it to hit when the spring is almost done but still moving
+            setTimeout(() => router.back(), 250);
         } else {
             router.back();
         }

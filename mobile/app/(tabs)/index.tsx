@@ -13,7 +13,7 @@ import { StatusViewerModal } from '../../components/StatusViewerModal';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { Contact, Story } from '../../types';
 
-const ChatListItem = React.memo(({ item, lastMsg, router, isTyping }: { item: any, lastMsg: any, router: any, isTyping: boolean }) => {
+const ChatListItem = React.memo(({ item, lastMsg, router, isTyping, index, scrollY }: { item: any, lastMsg: any, router: any, isTyping: boolean, index: number, scrollY: any }) => {
   const scaleAnim = useSharedValue(1);
   const translateYAnim = useSharedValue(0);
   const pillRef = useRef<View>(null);
@@ -33,11 +33,17 @@ const ChatListItem = React.memo(({ item, lastMsg, router, isTyping }: { item: an
   };
 
   const handlePress = () => {
-    pillRef.current?.measureInWindow((x, y, width, height) => {
-      router.push({
-        pathname: '/chat/[id]',
-        params: { id: item.id, sourceY: String(Math.round(y)) }
-      });
+    // Mathematical Absolute Y calculation for Instant Navigation
+    // HEADER (StatusRail) = 60 (top) + 140 (card) + 24 (bottom) = 224
+    // ITEM = 72 (height) + 8 (margin) = 80
+    const HEADER_OFFSET = 224;
+    const ITEM_FULL_HEIGHT = 80;
+    
+    const absoluteY = HEADER_OFFSET + (index * ITEM_FULL_HEIGHT) - scrollY.value;
+    
+    router.push({
+      pathname: '/chat/[id]',
+      params: { id: item.id, sourceY: String(Math.round(absoluteY)) }
     });
   };
 
@@ -93,6 +99,7 @@ const ChatListItem = React.memo(({ item, lastMsg, router, isTyping }: { item: an
 
 export default function HomeScreen() {
   const router = useRouter();
+  const scrollY = useSharedValue(0);
   const { contacts, messages, activeTheme, musicState, typingUsers, currentUser, statuses, addStatus } = useApp();
   
   // Status State
@@ -199,7 +206,7 @@ export default function HomeScreen() {
     const lastMsg = chatMessages[chatMessages.length - 1] || { text: item.lastMessage || 'Start a conversation', timestamp: '' };
     const isTyping = typingUsers.includes(item.id);
 
-    return <ChatListItem item={item} lastMsg={lastMsg} router={router} isTyping={isTyping} />;
+    return <ChatListItem item={item} lastMsg={lastMsg} router={router} isTyping={isTyping} index={index} scrollY={scrollY} />;
   };
 
   // Status Rail Component
@@ -280,6 +287,10 @@ export default function HomeScreen() {
           ListHeaderComponent={StatusRail}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          onScroll={(event) => {
+            scrollY.value = event.nativeEvent.contentOffset.y;
+          }}
+          scrollEventThrottle={16}
         />
       )}
 
