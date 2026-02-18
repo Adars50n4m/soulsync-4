@@ -284,17 +284,8 @@ export default function SingleChatScreen() {
     const chatBodyOpacity = useSharedValue(sourceY !== undefined ? 0 : 1);
 
     const headerMorphStyle = useAnimatedStyle(() => {
-        const distance = sourceY !== undefined ? sourceY - HEADER_TOP : 0;
-        return {
-            transform: [
-                { translateY: interpolate(morphProgress.value, [0, 1], [distance, 0]) },
-                { scale: interpolate(morphProgress.value, [0, 1], [0.96, 1]) }
-            ],
-            // Fixed Pill Shape: Matching home screen exactly
-            left: 16,
-            right: 16,
-            borderRadius: 36,
-        };
+        // SharedTransition handle transforms automatically.
+        return {};
     });
 
     const chatBodyAnimStyle = useAnimatedStyle(() => ({
@@ -309,26 +300,21 @@ export default function SingleChatScreen() {
         }
     }, []);
 
-    // Animate OUT on back - Final Shape-Shifting Morph
+    // Animate OUT on back - Restored Shared Element Transition
     const handleBack = useCallback(() => {
-        if (sourceY !== undefined) {
-            // 1. Morph everything back to home state (width, position, radius)
-            morphProgress.value = withTiming(0, { 
-                duration: 300, 
-                easing: Easing.out(Easing.quad) 
-            });
+        if (id) {
+            // Rapid fade of body to reveal Home screen underneath at the end
+            chatBodyOpacity.value = withTiming(0, { duration: 200 });
             
-            // 2. Fade out chat body ultra-quickly
-            chatBodyOpacity.value = withTiming(0, { duration: 150 });
-            
-            // 3. Navigate back at 250ms (consistent snappy feel)
+            // SharedTransition is automatic when navigating back.
+            // Tiny delay ensures JS sync before unmount.
             setTimeout(() => {
                 router.back();
-            }, 250);
+            }, 16);
         } else {
             router.back();
         }
-    }, [sourceY, router, morphProgress, chatBodyOpacity]);
+    }, [id, router, chatBodyOpacity]);
 
     // Animation Values
     const plusRotation = useSharedValue(0);
@@ -565,8 +551,11 @@ export default function SingleChatScreen() {
         >
             <StatusBar barStyle="light-content" />
 
-            {/* Header - morphs up from source pill position */}
-            <Animated.View style={[styles.headerContainer, headerMorphStyle]}>
+            {/* Header - morphs using True Shared Element Transition */}
+            <Animated.View 
+                sharedTransitionTag={`pill-${id}`}
+                style={[styles.headerContainer, headerMorphStyle]}
+            >
                 <BlurView intensity={100} tint="dark" style={styles.header}>
                     <Pressable onPress={handleBack} style={styles.backButton}>
                         <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
@@ -831,7 +820,7 @@ export default function SingleChatScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: 'transparent',
+        backgroundColor: 'transparent', // Allow home screen to be visible for true morph feel
     },
     headerContainer: {
         position: 'absolute',
