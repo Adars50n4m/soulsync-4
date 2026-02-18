@@ -566,8 +566,35 @@ export default function SingleChatScreen() {
         >
             <StatusBar barStyle="light-content" />
 
-            {/* Header - morphs up from source pill position */}
-            <Animated.View style={[styles.headerContainer, headerMorphStyle]}>
+            {/* 1. Source Mask - Covers the Home screen pill so we don't see duplicates */}
+            {sourceY !== undefined && (
+                <Animated.View
+                    style={[
+                        {
+                            position: 'absolute',
+                            top: sourceY,
+                            left: 16,
+                            right: 16,
+                            height: 72,
+                            borderRadius: 36,
+                            backgroundColor: '#151515', // Matches list item background
+                            zIndex: 1,
+                        },
+                        {
+                            opacity: interpolate(chatBodyOpacity.value, [0, 0.4], [1, 0])
+                        }
+                    ]}
+                />
+            )}
+
+            {/* 2. Header - Morphs up from source position */}
+            <Animated.View 
+                style={[
+                    styles.headerContainer, 
+                    headerMorphStyle,
+                    { backgroundColor: '#151515' } // Solid background
+                ]}
+            >
                 <BlurView intensity={100} tint="dark" style={styles.header}>
                     <Pressable onPress={handleBack} style={styles.backButton}>
                         <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
