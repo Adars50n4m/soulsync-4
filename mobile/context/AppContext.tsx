@@ -940,9 +940,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 [chatId]: chatMessages.map((msg) => {
                     if (msg.id === messageId) {
                         const reactions = msg.reactions || [];
-                        const newReactions = reactions.includes(emoji)
-                            ? reactions.filter((r) => r !== emoji)
-                            : [...reactions, emoji];
+                        const isSame = reactions.includes(emoji);
+                        const newReactions = isSame ? [] : [emoji];
                         return { ...msg, reactions: newReactions };
                     }
                     return msg;

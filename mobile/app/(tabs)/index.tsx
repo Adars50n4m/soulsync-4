@@ -21,11 +21,12 @@ import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { Contact, Story } from '../../types';
 import SingleChatScreen from '../chat/[id]';
 
-const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping }: { 
+const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }: { 
   item: Contact, 
   lastMsg: any, 
   onSelect: (contact: Contact, y: number) => void,
-  isTyping: boolean
+  isTyping: boolean,
+  isHidden?: boolean
 }) => {
   const scaleAnim = useSharedValue(1);
   const itemRef = useRef<View>(null);
@@ -35,14 +36,17 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping }: {
   }));
 
   const handlePressIn = () => {
+    if (isHidden) return;
     scaleAnim.value = withSpring(0.96);
   };
 
   const handlePressOut = () => {
+    if (isHidden) return;
     scaleAnim.value = withSpring(1);
   };
 
   const handlePress = () => {
+    if (isHidden) return;
     itemRef.current?.measure((x, y, width, height, pageX, pageY) => {
       onSelect(item, pageY);
     });
@@ -54,7 +58,8 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping }: {
       onPress={handlePress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
-      style={styles.chatItem}
+      style={[styles.chatItem, isHidden && { opacity: 0 }]}
+      disabled={isHidden}
     >
       <Animated.View style={[styles.chatPillContainer, animatedStyle]}>
         <View style={styles.pillBackground} />
@@ -88,6 +93,7 @@ export default function HomeScreen() {
   const navigation = useNavigation();
   const [selectedUser, setSelectedUser] = useState<Contact | null>(null);
   const [sourceY, setSourceY] = useState<number | undefined>(undefined);
+  const [hiddenUserId, setHiddenUserId] = useState<string | null>(null);
 
   // Hide Tab Bar when Chat is open
   React.useLayoutEffect(() => {
@@ -95,6 +101,13 @@ export default function HomeScreen() {
       tabBarStyle: selectedUser ? { display: 'none' } : undefined
     });
   }, [navigation, selectedUser]);
+
+  // Ensure hidden item reappears if selectedUser is cleared externally
+  React.useEffect(() => {
+    if (!selectedUser && hiddenUserId) {
+      setHiddenUserId(null);
+    }
+  }, [selectedUser, hiddenUserId]);
 
   // Status Handlers
   const [selectedStatusContact, setSelectedStatusContact] = useState<Contact | null>(null);
@@ -157,6 +170,7 @@ export default function HomeScreen() {
   const handleUserSelect = useCallback((contact: Contact, y: number) => {
     setSourceY(y);
     setSelectedUser(contact);
+    setHiddenUserId(contact.id);
   }, []);
 
   const renderItem = ({ item }: { item: Contact }) => {
@@ -164,8 +178,14 @@ export default function HomeScreen() {
     const lastMsg = chatMessages[chatMessages.length - 1] || { text: item.lastMessage, timestamp: '' };
     const isTyping = typingUsers.includes(item.id);
     return (
-      <View style={{ opacity: selectedUser?.id === item.id ? 0 : 1 }}>
-        <ChatListItem item={item} lastMsg={lastMsg} onSelect={handleUserSelect} isTyping={isTyping} />
+      <View>
+        <ChatListItem 
+            item={item} 
+            lastMsg={lastMsg} 
+            onSelect={handleUserSelect} 
+            isTyping={isTyping} 
+            isHidden={hiddenUserId === item.id}
+        />
       </View>
     );
   };
@@ -246,7 +266,15 @@ export default function HomeScreen() {
         <Animated.View 
           style={[styles.fullScreenContent, StyleSheet.absoluteFill, { zIndex: 100 }]}
         >
-          <SingleChatScreen user={selectedUser} sourceY={sourceY} onBack={() => setSelectedUser(null)} />
+          <SingleChatScreen 
+            user={selectedUser} 
+            sourceY={sourceY} 
+            onBackStart={() => setHiddenUserId(null)}
+            onBack={() => {
+                setSelectedUser(null);
+                setHiddenUserId(null); // Safety clear
+            }} 
+          />
         </Animated.View>
       )}
     </Animated.View>

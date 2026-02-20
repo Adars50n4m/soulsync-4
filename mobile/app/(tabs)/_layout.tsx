@@ -61,22 +61,27 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
 
   const indicatorStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
-    backgroundColor: `${activeTheme.primary}1A`, // 10% opacity for shifting pill to keep icons visible
+    backgroundColor: `${activeTheme.primary}1A`, // Restored to subtle 10% dark glass tone
   }));
 
   return (
     <View style={styles.tabBarContainer}>
-      <View style={styles.tabBarSolid}>
-        <View style={styles.tabBarInner}>
-          {/* Shifting Indicator */}
-          <Animated.View 
-            style={[
-              styles.indicatorPill, 
-              { width: tabWidth }, 
-              indicatorStyle
-            ]} 
-          />
+      <View style={styles.tabBarGlassContainer}>
+        {/* Layer 1: The Glass background */}
+        <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill} />
+        <View style={styles.tabBarOverlay} />
+        
+        {/* Layer 2: The Indicator Pill (Vibrant & SOLID) */}
+        <Animated.View 
+          style={[
+            styles.indicatorPill, 
+            { width: tabWidth }, 
+            indicatorStyle
+          ]} 
+        />
 
+        {/* Layer 3: The Interactive Icons */}
+        <View style={styles.tabBarInner}>
           {state.routes.map((route: any, index: number) => {
             const isFocused = state.index === index;
 
@@ -148,33 +153,37 @@ export default function TabLayout() {
 const styles = StyleSheet.create({
   tabBarContainer: {
     position: 'absolute',
-    bottom: 30, // Elevated floating look
+    bottom: 34, // Slightly higher for premium feel
     left: 0,
     right: 0,
     alignItems: 'center',
     paddingHorizontal: 16,
   },
-  tabBarSolid: {
+  tabBarGlassContainer: {
     width: TAB_BAR_WIDTH,
     borderRadius: 40,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    backgroundColor: '#09090b', // Solid Midnight Black
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'transparent',
+  },
+  tabBarOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(21,21,21,0.8)', // Matching userlist pill background tone
   },
   tabBarInner: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 10,
     paddingHorizontal: 12,
-    height: 64,
+    height: 72,
   },
   indicatorPill: {
     position: 'absolute',
-    left: 12, // Match inner horizontal padding
-    height: 44,
-    borderRadius: 22,
-    zIndex: -1,
+    top: 10, // Perfectly centered (72 - 52) / 2
+    left: 12,
+    height: 52,
+    borderRadius: 26,
   },
   tabButton: {
     flex: 1,

@@ -59,10 +59,19 @@ const SingleChatScreen: React.FC = () => {
 
   const contact = contacts.find(c => c.id === id);
   const chatMessages = messages[id || ''] || [];
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
+  // Auto-scroll to bottom on initial load and new messages
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages]);
+    if (isInitialLoad) {
+      // Initial load - scroll instantly to bottom
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      setIsInitialLoad(false);
+    } else {
+      // New messages - smooth scroll
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages?.length]);
 
   const handleSendMessage = (text?: string, media?: Message['media']) => {
     if (!id) return;
