@@ -3,7 +3,7 @@ import {
     View, Text, Image, StyleSheet, StatusBar,
     Dimensions, Platform, Pressable, Alert, TextInput, Keyboard, Modal, KeyboardAvoidingView, ScrollView
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { 
@@ -58,14 +58,16 @@ export default function ViewStatusScreen() {
         }
     }, [currentStatus, isMyStatus, addStatusView]);
 
+    const navigation = useNavigation();
+
     const handleNext = useCallback(() => {
         if (currentIndex < userStatuses.length - 1) {
             progress.value = 0;
             setCurrentIndex(prev => prev + 1);
-        } else {
-            router.back();
+        } else if (navigation.canGoBack()) {
+            navigation.goBack();
         }
-    }, [currentIndex, userStatuses.length]);
+    }, [currentIndex, userStatuses.length, navigation]);
 
     const handlePrev = useCallback(() => {
         if (currentIndex > 0) {
@@ -123,7 +125,7 @@ export default function ViewStatusScreen() {
         })
         .onEnd((e) => {
             if (e.translationY > 100) {
-                runOnJS(router.back)();
+                if (navigation.canGoBack()) runOnJS(navigation.goBack)();
             } else {
                 translateY.value = withSpring(0);
                 scale.value = withSpring(1);
@@ -176,7 +178,7 @@ export default function ViewStatusScreen() {
                     style: "destructive", 
                     onPress: () => {
                         if (currentStatus) deleteStatus(currentStatus.id);
-                        router.back();
+                        if (navigation.canGoBack()) navigation.goBack();
                     }
                 }
             ]

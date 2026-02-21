@@ -1,72 +1,210 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
     View, Text, Image, Pressable, StyleSheet, StatusBar,
-    ScrollView, Animated, Dimensions
+    ScrollView, Animated, Dimensions, Alert, Modal, Share, FlatList
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
-import { MaterialIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../../context/AppContext';
+import Animated2, { 
+    useSharedValue, useAnimatedStyle, withSpring, withTiming, interpolate, Extrapolate, runOnJS, Easing
+} from 'react-native-reanimated';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
+
+const MediaGalleryItem = ({ item, activeCategory, morphProgress }: any) => {
+    const itemStyle = useAnimatedStyle(() => {
+        return {
+            transform: [
+                { scale: interpolate(morphProgress.value, [0, 1], [0.1, 1]) },
+                { translateY: interpolate(morphProgress.value, [0, 1], [-height / 4, 0]) }
+            ],
+            borderRadius: interpolate(morphProgress.value, [0, 1], [40, 0]),
+            opacity: morphProgress.value,
+        };
+    });
+
+    return (
+        <View style={styles.viewerContent}>
+            <Animated2.View style={[styles.morphContainer, itemStyle]}>
+                {activeCategory === 'videos' ? (
+                    <View style={styles.videoPlaceholder}>
+                        <Image source={{ uri: item.url }} style={styles.viewerImage} resizeMode="contain" />
+                        <View style={styles.viewerPlayBtn}>
+                            <Ionicons name="play" size={40} color="#fff" />
+                        </View>
+                    </View>
+                ) : (
+                    <Image 
+                        source={{ uri: item.url }} 
+                        style={styles.viewerImage} 
+                        resizeMode="contain" 
+                    />
+                )}
+            </Animated2.View>
+        </View>
+    );
+};
 
 export default function ProfileScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
+    const navigation = useNavigation();
     const { currentUser, otherUser, messages, activeTheme } = useApp();
 
     // Determine which user's profile to show
     const isOwnProfile = id === currentUser?.id;
     const profileUser = isOwnProfile ? currentUser : otherUser;
 
+    const [activeCategory, setActiveCategory] = useState<'photos' | 'videos' | 'audio' | 'docs'>('photos');
+    const [viewerVisible, setViewerVisible] = useState(false);
+    const [selectedIndex, setSelectedIndex] = useState(0);
+    
+    // Reanimated shared values for seamless morph
+    const morphProgress = useSharedValue(0);
+    const origin = useSharedValue({ x: 0, y: 0, width: 0, height: 0 });
+    const isReady = useSharedValue(false);
+
+    const gridRefs = useRef<any[]>([]);
+
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const slideAnim = useRef(new Animated.Value(30)).current;
 
-    // Get shared media from messages
-    const chatMessages = messages[otherUser?.id || ''] || [];
-    const sharedMedia = chatMessages
-        .filter(m => m.media?.type === 'image')
-        .map(m => m.media?.url)
-        .filter(Boolean);
+    const chatMessages = (messages[id as string] || []).filter(m => m.media);
+
+    const categorizedMedia = {
+        photos: chatMessages.filter(m => m.media?.type === 'image').map(m => m.media!),
+        videos: chatMessages.filter(m => m.media?.type === 'video').map(m => m.media!),
+        audio: chatMessages.filter(m => m.media?.type === 'audio').map(m => m.media!),
+        docs: chatMessages.filter(m => m.media?.type === 'file').map(m => m.media!),
+    };
+
+    const sharedMedia = categorizedMedia[activeCategory];
+
+    const openViewer = (index: number, layout: any) => {
+        setSelectedIndex(index);
+        origin.value = layout;
+        setViewerVisible(true);
+        isReady.value = false;
+        morphProgress.value = withTiming(1, { 
+            duration: 600, 
+            easing: Easing.bezier(0.16, 1, 0.3, 1) 
+        }, () => {
+            isReady.value = true;
+        });
+    };
+
+    const closeViewer = () => {
+        isReady.value = false;
+        morphProgress.value = withTiming(0, { 
+            duration: 450,
+            easing: Easing.out(Easing.quad)
+        }, () => {
+            runOnJS(setViewerVisible)(false);
+        });
+    };
+
+    const handleDownload = (item: any) => {
+        if (!item) return;
+        const type = item.type === 'image' ? 'Photo' : item.type === 'video' ? 'Video' : item.type === 'audio' ? 'Audio' : 'Document';
+        Alert.alert(
+            'Download',
+            `Save this ${type} to your device?`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                { 
+                    text: 'Save', 
+                    onPress: () => {
+                        // Simulate download
+                        setTimeout(() => {
+                            Alert.alert('Success', `${type} saved successfully!`);
+                        }, 1000);
+                    }
+                }
+            ]
+        );
+    };
+
+    const handleShare = async (item: any) => {
+        try {
+            await Share.share({
+                url: item.url,
+                message: `Check out this ${item.type} from SoulSync!`,
+            });
+        } catch (error) {
+            console.error(error);
+        }
+    };
 
     useEffect(() => {
+        if (!profileUser) return;
         Animated.parallel([
             Animated.timing(fadeAnim, {
                 toValue: 1,
-                duration: 400,
+                duration: 800,
                 useNativeDriver: true,
             }),
-            Animated.spring(slideAnim, {
+            Animated.timing(slideAnim, {
                 toValue: 0,
-                tension: 50,
-                friction: 10,
+                duration: 800,
+                easing: Easing.out(Easing.back(1.5)),
                 useNativeDriver: true,
             }),
         ]).start();
-    }, []);
+    }, [id, profileUser]);
 
     if (!profileUser) {
         return (
             <View style={styles.container}>
-                <Text style={styles.errorText}>Profile not found</Text>
+                <StatusBar barStyle="light-content" translucent />
+                <View style={styles.header}>
+                    <Pressable 
+                        onPress={() => {
+                            if (navigation.canGoBack()) navigation.goBack();
+                        }} 
+                        style={styles.backButton}
+                    >
+                        <Ionicons name="chevron-back" size={28} color="#ffffff" />
+                    </Pressable>
+                </View>
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                    <Text style={styles.errorText}>User profile not found</Text>
+                </View>
             </View>
         );
     }
 
     return (
         <View style={styles.container}>
-            <StatusBar barStyle="light-content" />
+            <StatusBar barStyle="light-content" translucent />
 
-            {/* Background Glow - Removed */}
+            {/* Ambient Background Orbs */}
+            <View style={StyleSheet.absoluteFill}>
+                <LinearGradient
+                    colors={['rgba(244, 63, 94, 0.08)', 'transparent']}
+                    style={[styles.orb, { top: -100, left: -50 }]}
+                />
+                <LinearGradient
+                    colors={['rgba(168, 85, 247, 0.08)', 'transparent']}
+                    style={[styles.orb, { bottom: 100, right: -100 }]}
+                />
+            </View>
 
-            {/* Header */}
-            <BlurView intensity={60} tint="dark" style={styles.header}>
-                <Pressable onPress={() => router.back()} style={styles.backButton}>
-                    <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
+            {/* Header - Transparent & Minimal */}
+            <View style={styles.header}>
+                <Pressable 
+                    onPress={() => {
+                        if (navigation.canGoBack()) navigation.goBack();
+                    }} 
+                    style={styles.backButton}
+                >
+                    <Ionicons name="chevron-back" size={28} color="#ffffff" />
                 </Pressable>
                 <Text style={styles.headerTitle}>PROFILE</Text>
-                <View style={styles.headerSpacer} />
-            </BlurView>
+                <View style={{ width: 44 }} />
+            </View>
 
             <ScrollView
                 style={styles.scrollView}
@@ -75,77 +213,68 @@ export default function ProfileScreen() {
             >
                 <Animated.View
                     style={[
-                        styles.profileSection,
+                        styles.heroSection,
                         {
                             opacity: fadeAnim,
                             transform: [{ translateY: slideAnim }]
                         }
                     ]}
                 >
-                    {/* Avatar */}
-                    <View style={styles.avatarContainer}>
-                        <Image
-                            source={{ uri: profileUser.avatar }}
-                            style={styles.avatar}
-                        />
-                        <View style={styles.onlineIndicator} />
+                    {/* Centered Hero Avatar with Glow */}
+                    <View style={styles.avatarGlowContainer}>
+                        <Image source={{ uri: profileUser.avatar }} style={styles.profileAvatar} />
+                        <View style={styles.avatarGlassBorder} />
                     </View>
 
-                    {/* Name & Bio */}
-                    <Text style={styles.userName}>{profileUser.name}</Text>
-                    <Text style={styles.userBio}>{profileUser.bio}</Text>
+                    <View style={styles.nameRow}>
+                        <Text style={styles.userName}>{profileUser.name}</Text>
+                        <MaterialIcons name="verified" size={24} color="#3b82f6" style={{ marginTop: 8 }} />
+                    </View>
+                    <Text style={styles.userBio}>{profileUser.bio || 'Forever in sync'}</Text>
 
-                    {/* Stats */}
-                    <BlurView intensity={40} tint="dark" style={styles.statsCard}>
-                        <View style={styles.statItem}>
-                            <Text style={styles.statValue}>{chatMessages.length}</Text>
-                            <Text style={styles.statLabel}>MESSAGES</Text>
-                        </View>
-                        <View style={styles.statDivider} />
-                        <View style={styles.statItem}>
-                            <Text style={styles.statValue}>{sharedMedia.length}</Text>
-                            <Text style={styles.statLabel}>MEDIA</Text>
-                        </View>
-                        <View style={styles.statDivider} />
-                        <View style={styles.statItem}>
-                            <Text style={styles.statValue}>∞</Text>
-                            <Text style={styles.statLabel}>BOND</Text>
-                        </View>
-                    </BlurView>
+                    {/* Glassmorphism Stats Card */}
+                    <View style={styles.glassStatsCard}>
+                        <BlurView intensity={20} tint="dark" style={styles.glassEffect}>
+                            <View style={styles.statItem}>
+                                <Text style={styles.statValue}>{chatMessages.length}</Text>
+                                <Text style={styles.statLabel}>MESSAGES</Text>
+                            </View>
+                            <View style={styles.statDivider} />
+                            <View style={styles.statItem}>
+                                <Text style={styles.statValue}>{sharedMedia.length}</Text>
+                                <Text style={styles.statLabel}>MEDIA</Text>
+                            </View>
+                            <View style={styles.statDivider} />
+                            <View style={styles.statItem}>
+                                <Text style={styles.statValue}>∞</Text>
+                                <Text style={styles.statLabel}>BOND</Text>
+                            </View>
+                        </BlurView>
+                    </View>
 
-                    {/* Quick Actions */}
+                    {/* Glass Actions */}
                     {!isOwnProfile && (
-                        <View style={styles.actionsRow}>
-                            <Pressable
-                                style={({ pressed }) => [
-                                    styles.actionButton,
-                                    { backgroundColor: `${activeTheme.primary}1A`, borderColor: `${activeTheme.primary}33` },
-                                    pressed && styles.actionButtonPressed
-                                ]}
+                        <View style={styles.actionRow}>
+                            <Pressable 
+                                style={styles.primaryGlassAction}
                                 onPress={() => router.push(`/chat/${profileUser.id}`)}
                             >
-                                <MaterialIcons name="chat-bubble" size={20} color={activeTheme.primary} />
-                                <Text style={[styles.actionText, { color: activeTheme.primary }]}>MESSAGE</Text>
+                                <BlurView intensity={30} tint="dark" style={styles.actionGlassEffect}>
+                                    <Ionicons name="chatbubble" size={20} color="#fff" />
+                                    <Text style={styles.actionText}>MESSAGE</Text>
+                                </BlurView>
                             </Pressable>
-                            <Pressable
-                                style={({ pressed }) => [
-                                    styles.actionButton,
-                                    { backgroundColor: `${activeTheme.primary}1A`, borderColor: `${activeTheme.primary}33` },
-                                    pressed && styles.actionButtonPressed
-                                ]}
-                            >
-                                <MaterialIcons name="call" size={20} color={activeTheme.primary} />
-                                <Text style={[styles.actionText, { color: activeTheme.primary }]}>CALL</Text>
+
+                            <Pressable style={styles.secondaryGlassAction}>
+                                <BlurView intensity={20} tint="dark" style={styles.actionGlassEffect}>
+                                    <Ionicons name="call" size={20} color="#fff" />
+                                </BlurView>
                             </Pressable>
-                            <Pressable
-                                style={({ pressed }) => [
-                                    styles.actionButton,
-                                    { backgroundColor: `${activeTheme.primary}1A`, borderColor: `${activeTheme.primary}33` },
-                                    pressed && styles.actionButtonPressed
-                                ]}
-                            >
-                                <MaterialIcons name="videocam" size={20} color={activeTheme.primary} />
-                                <Text style={[styles.actionText, { color: activeTheme.primary }]}>VIDEO</Text>
+
+                            <Pressable style={styles.secondaryGlassAction}>
+                                <BlurView intensity={20} tint="dark" style={styles.actionGlassEffect}>
+                                    <Ionicons name="videocam" size={20} color="#fff" />
+                                </BlurView>
                             </Pressable>
                         </View>
                     )}
@@ -162,23 +291,92 @@ export default function ProfileScreen() {
                     ]}
                 >
                     <Text style={styles.sectionTitle}>SHARED MEDIA</Text>
-
-                    {sharedMedia.length > 0 ? (
-                        <View style={styles.mediaGrid}>
-                            {sharedMedia.slice(0, 9).map((url, index) => (
-                                <Pressable key={index} style={styles.mediaItem}>
-                                    <Image
-                                        source={{ uri: url as string }}
-                                        style={styles.mediaImage}
-                                    />
+                    
+                    {/* Category Tabs */}
+                    <View style={styles.tabContainer}>
+                        <BlurView intensity={20} tint="dark" style={styles.tabGlass}>
+                            {(['photos', 'videos', 'audio', 'docs'] as const).map((cat) => (
+                                <Pressable
+                                    key={cat}
+                                    onPress={() => setActiveCategory(cat)}
+                                    style={[
+                                        styles.tabBtn,
+                                        activeCategory === cat && styles.tabBtnActive
+                                    ]}
+                                >
+                                    <Text style={[
+                                        styles.tabText,
+                                        activeCategory === cat && styles.tabTextActive
+                                    ]}>
+                                        {cat.toUpperCase()}
+                                    </Text>
                                 </Pressable>
                             ))}
-                        </View>
-                    ) : (
-                        <BlurView intensity={30} tint="dark" style={styles.emptyMedia}>
-                            <MaterialIcons name="photo-library" size={32} color="rgba(255,255,255,0.2)" />
-                            <Text style={styles.emptyText}>No shared media yet</Text>
                         </BlurView>
+                    </View>
+
+                        {sharedMedia.length > 0 ? (
+                            <View style={activeCategory === 'audio' || activeCategory === 'docs' ? styles.mediaList : styles.mediaGrid}>
+                                {sharedMedia.map((item: any, index: number) => {
+                                    if (activeCategory === 'photos' || activeCategory === 'videos') {
+                                        return (
+                                            <Pressable 
+                                                key={index} 
+                                                ref={(el) => { gridRefs.current[index] = el; }}
+                                                style={[styles.mediaItem, (viewerVisible && selectedIndex === index) && { opacity: 0 }]}
+                                                onPress={() => {
+                                                    gridRefs.current[index]?.measure((x: number, y: number, width: number, height: number, px: number, py: number) => {
+                                                        openViewer(index, { x: px, y: py, width, height });
+                                                    });
+                                                }}
+                                            >
+                                                <Image source={{ uri: item.url }} style={styles.mediaImage} />
+                                                {item.type === 'video' && (
+                                                    <View style={styles.playIconOverlay}>
+                                                        <Ionicons name="play" size={20} color="#fff" />
+                                                    </View>
+                                                )}
+                                            </Pressable>
+                                        );
+                                    } else {
+                                        return (
+                                            <Pressable key={index} style={styles.listItemGlass} onPress={() => handleDownload(item)}>
+                                                <BlurView intensity={10} tint="dark" style={styles.listItemContent}>
+                                                    <View style={[styles.listIconContainer, { backgroundColor: activeCategory === 'audio' ? 'rgba(168, 85, 247, 0.1)' : 'rgba(59, 130, 246, 0.1)' }]}>
+                                                        <Ionicons 
+                                                            name={activeCategory === 'audio' ? 'musical-notes' : 'document-text'} 
+                                                            size={20} 
+                                                            color={activeCategory === 'audio' ? '#a855f7' : '#3b82f6'} 
+                                                        />
+                                                    </View>
+                                                    <View style={styles.listTextContainer}>
+                                                        <Text style={styles.listTitle} numberOfLines={1}>
+                                                            {item.name || (activeCategory === 'audio' ? 'Audio Note' : 'Document')}
+                                                        </Text>
+                                                        <Text style={styles.listSubtitle}>
+                                                            {activeCategory === 'audio' ? 'Voice Message • 0:42' : 'PDF • 2.4 MB'}
+                                                        </Text>
+                                                    </View>
+                                                    <Ionicons name="download-outline" size={18} color="#fff" />
+                                                </BlurView>
+                                            </Pressable>
+                                        );
+                                    }
+                                })}
+                            </View>
+                    ) : (
+                        <View style={styles.emptyMedia}>
+                            <Ionicons 
+                                name={
+                                    activeCategory === 'photos' ? 'images-outline' : 
+                                    activeCategory === 'videos' ? 'videocam-outline' :
+                                    activeCategory === 'audio' ? 'musical-note-outline' : 'document-outline'
+                                } 
+                                size={40} 
+                                color="rgba(255,255,255,0.05)" 
+                            />
+                            <Text style={styles.emptyText}>No {activeCategory} found</Text>
+                        </View>
                     )}
                 </Animated.View>
 
@@ -194,6 +392,130 @@ export default function ProfileScreen() {
                     </View>
                 </BlurView>
             </ScrollView>
+
+            {/* Liquid Glass Media Viewer Modal with Seamless Morph Transition */}
+            <Modal
+                visible={viewerVisible}
+                transparent={true}
+                animationType="none"
+                onRequestClose={closeViewer}
+            >
+                <View style={[styles.viewerContainer, { backgroundColor: 'transparent' }]}>
+                    <Animated2.View style={[StyleSheet.absoluteFill, useAnimatedStyle(() => ({
+                        opacity: morphProgress.value,
+                        backgroundColor: 'black'
+                    }))]}>
+                        <BlurView intensity={90} tint="dark" style={StyleSheet.absoluteFill} />
+                    </Animated2.View>
+                    
+                    {/* Integrated Gallery & Transition Layer */}
+                    <Animated2.View style={[StyleSheet.absoluteFill, useAnimatedStyle(() => ({
+                        opacity: isReady.value ? 1 : 0
+                    }))]}>
+                        <FlatList
+                            data={sharedMedia}
+                            horizontal
+                            pagingEnabled
+                            initialScrollIndex={selectedIndex}
+                            getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
+                            onMomentumScrollEnd={(e) => {
+                                const index = Math.round(e.nativeEvent.contentOffset.x / width);
+                                if (index !== selectedIndex) {
+                                    setSelectedIndex(index);
+                                    // Dynamically update return origin for the new active index
+                                    gridRefs.current[index]?.measure((x: number, y: number, width: number, height: number, px: number, py: number) => {
+                                        origin.value = { x: px, y: py, width, height };
+                                    });
+                                }
+                            }}
+                            showsHorizontalScrollIndicator={false}
+                            keyExtractor={(_, i) => i.toString()}
+                            renderItem={({ item }) => (
+                                <View style={styles.viewerContent}>
+                                    <View style={styles.morphContainer}>
+                                        {activeCategory === 'videos' ? (
+                                            <View style={styles.videoPlaceholder}>
+                                                <Image source={{ uri: item.url }} style={styles.viewerImage} resizeMode="contain" />
+                                                <View style={styles.viewerPlayBtn}><Ionicons name="play" size={40} color="#fff" /></View>
+                                            </View>
+                                        ) : (
+                                            <Image source={{ uri: item.url }} style={styles.viewerImage} resizeMode="contain" />
+                                        )}
+                                    </View>
+                                </View>
+                            )}
+                        />
+                    </Animated2.View>
+
+                    {/* Morphing Overlay (GPU-Accelerated Butter-Smooth Transition) */}
+                    <Animated2.View 
+                        pointerEvents="none"
+                        style={[styles.morphingImageContainer, useAnimatedStyle(() => {
+                            const p = morphProgress.value;
+                            if (isReady.value) return { opacity: 0 };
+                            
+                            // Cinematic target dimensions
+                            const targetW = width;
+                            const targetH = height * 0.8;
+                            
+                            // Calculate centers for translating
+                            const gridCenterX = origin.value.x + (origin.value.width / 2);
+                            const gridCenterY = origin.value.y + (origin.value.height / 2);
+                            const screenCenterX = width / 2;
+                            const screenCenterY = height / 2;
+
+                            // Scale factors from grid to full
+                            const initialScaleX = origin.value.width / targetW;
+                            const initialScaleY = origin.value.height / targetH;
+
+                            return {
+                                width: targetW,
+                                height: targetH,
+                                top: (height - targetH) / 2,
+                                left: 0,
+                                transform: [
+                                    { translateX: interpolate(p, [0, 1], [gridCenterX - screenCenterX, 0]) },
+                                    { translateY: interpolate(p, [0, 1], [gridCenterY - screenCenterY, 0]) },
+                                    { scaleX: interpolate(p, [0, 1], [initialScaleX, 1]) },
+                                    { scaleY: interpolate(p, [0, 1], [initialScaleY, 1]) }
+                                ],
+                                borderRadius: interpolate(p, [0, 1], [18 / initialScaleX, 0]),
+                                opacity: interpolate(p, [0, 0.05], [0, 1]),
+                                shadowOpacity: interpolate(p, [0, 0.5, 1], [0, 0.5, 0]),
+                                shadowRadius: interpolate(p, [0, 1], [0, 20]),
+                                shadowColor: '#000',
+                            };
+                        })]}
+                    >
+                        <Image 
+                            source={{ uri: sharedMedia[selectedIndex]?.url }} 
+                            style={styles.fullImage} 
+                            resizeMode="contain" 
+                        />
+                    </Animated2.View>
+
+                    {/* Header/Footer Controls */}
+                    <Animated2.View style={[styles.viewerControlsContainer, useAnimatedStyle(() => ({
+                        opacity: isReady.value ? 1 : 0,
+                        transform: [{ translateY: interpolate(morphProgress.value, [0, 1], [20, 0]) }]
+                    }))]}>
+                        <View style={styles.viewerHeader}>
+                            <Pressable onPress={closeViewer} style={styles.viewerHeaderBtn}>
+                                <Ionicons name="close" size={28} color="#fff" />
+                            </Pressable>
+                            <View style={styles.viewerHeaderCenter}>
+                                <Text style={styles.viewerTitle}>{activeCategory.toUpperCase()}</Text>
+                                <Text style={styles.viewerSubtitle}>{selectedIndex + 1} of {sharedMedia.length}</Text>
+                            </View>
+                            <Pressable onPress={() => handleShare(sharedMedia[selectedIndex])} style={styles.viewerHeaderBtn}>
+                                <Ionicons name="share-outline" size={24} color="#fff" />
+                            </Pressable>
+                        </View>
+
+
+                    </Animated2.View>
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -201,11 +523,14 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#09090b',
+        backgroundColor: '#09090E',
     },
-    bgGlow: {
-        // Removed - no pink glow
-        display: 'none',
+    orb: {
+        position: 'absolute',
+        width: 300,
+        height: 300,
+        borderRadius: 150,
+        opacity: 0.6,
     },
     header: {
         flexDirection: 'row',
@@ -214,92 +539,91 @@ const styles = StyleSheet.create({
         paddingTop: 60,
         paddingHorizontal: 20,
         paddingBottom: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.05)',
     },
     backButton: {
-        width: 40,
-        height: 40,
+        width: 44,
+        height: 44,
         alignItems: 'center',
         justifyContent: 'center',
-        borderRadius: 20,
+        borderRadius: 22,
         backgroundColor: 'rgba(255,255,255,0.05)',
     },
     headerTitle: {
         color: '#ffffff',
-        fontSize: 12,
-        fontWeight: '800',
-        letterSpacing: 4,
-    },
-    headerSpacer: {
-        width: 40,
+        fontSize: 13,
+        fontWeight: '900',
+        letterSpacing: 3,
+        opacity: 0.8,
     },
     scrollView: {
         flex: 1,
     },
     scrollContent: {
-        paddingHorizontal: 20,
         paddingBottom: 120,
     },
-    profileSection: {
+    heroSection: {
+        width: '100%',
         alignItems: 'center',
-        paddingTop: 32,
+        paddingHorizontal: 20,
+        paddingTop: 20,
     },
-    avatarContainer: {
+    avatarGlowContainer: {
         position: 'relative',
+        padding: 10,
         marginBottom: 20,
     },
-    avatar: {
-        width: 120,
-        height: 120,
-        borderRadius: 60,
-        borderWidth: 2,
-        borderColor: 'rgba(255,255,255,0.15)',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
+    profileAvatar: {
+        width: 160,
+        height: 160,
+        borderRadius: 80,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)',
     },
-    onlineIndicator: {
-        position: 'absolute',
-        bottom: 6,
-        right: 6,
-        width: 20,
-        height: 20,
-        borderRadius: 10,
-        backgroundColor: '#10b981',
-        borderWidth: 3,
-        borderColor: '#09090b',
+    avatarGlassBorder: {
+        ...StyleSheet.absoluteFillObject,
+        borderRadius: 90,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.05)',
+        margin: -5,
+    },
+    nameRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
     },
     userName: {
         color: '#ffffff',
-        fontSize: 28,
+        fontSize: 36,
         fontWeight: '900',
-        letterSpacing: 4,
-        marginBottom: 8,
+        letterSpacing: -1,
     },
     userBio: {
         color: 'rgba(255,255,255,0.5)',
-        fontSize: 14,
-        fontWeight: '500',
-        marginBottom: 24,
+        fontSize: 15,
+        fontWeight: '400',
+        textAlign: 'center',
+        marginTop: 8,
+        paddingHorizontal: 40,
+        lineHeight: 20,
     },
-    statsCard: {
+    glassStatsCard: {
+        width: '100%',
+        marginTop: 32,
+        borderRadius: 30,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)',
+    },
+    glassEffect: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-around',
-        width: '100%',
-        borderRadius: 24,
-        paddingVertical: 20,
-        paddingHorizontal: 16,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.08)',
-        overflow: 'hidden',
-        marginBottom: 24,
+        paddingVertical: 24,
+        paddingHorizontal: 12,
+        backgroundColor: 'rgba(255,255,255,0.03)',
     },
     statItem: {
-        alignItems: 'center',
         flex: 1,
+        alignItems: 'center',
     },
     statValue: {
         color: '#ffffff',
@@ -309,60 +633,147 @@ const styles = StyleSheet.create({
     statLabel: {
         color: 'rgba(255,255,255,0.4)',
         fontSize: 9,
-        fontWeight: '700',
-        letterSpacing: 2,
+        fontWeight: '800',
+        letterSpacing: 1,
         marginTop: 4,
     },
     statDivider: {
         width: 1,
-        height: 32,
+        height: 30,
         backgroundColor: 'rgba(255,255,255,0.1)',
     },
-    actionsRow: {
+    actionRow: {
         flexDirection: 'row',
+        width: '100%',
+        marginTop: 24,
         gap: 12,
     },
-    actionButton: {
+    primaryGlassAction: {
+        flex: 2,
+        height: 64,
+        borderRadius: 32,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.15)',
+    },
+    secondaryGlassAction: {
+        width: 64,
+        height: 64,
+        borderRadius: 32,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)',
+    },
+    actionGlassEffect: {
+        flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.08)',
         gap: 8,
-        paddingVertical: 12,
-        paddingHorizontal: 20,
-        backgroundColor: 'rgba(244, 63, 94, 0.1)',
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: 'rgba(244, 63, 94, 0.2)',
-    },
-    actionButtonPressed: {
-        transform: [{ scale: 0.95 }],
-        opacity: 0.8,
     },
     actionText: {
-        color: '#f43f5e',
-        fontSize: 11,
-        fontWeight: '700',
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: '800',
         letterSpacing: 1,
     },
     mediaSection: {
-        marginTop: 40,
+        marginTop: 48,
+        paddingHorizontal: 20,
     },
     sectionTitle: {
-        color: 'rgba(255,255,255,0.4)',
-        fontSize: 10,
-        fontWeight: '700',
-        letterSpacing: 3,
+        color: 'rgba(255,255,255,0.3)',
+        fontSize: 11,
+        fontWeight: '900',
+        letterSpacing: 2,
         marginBottom: 16,
+    },
+    tabContainer: {
+        marginBottom: 20,
+        borderRadius: 20,
+        overflow: 'hidden',
+    },
+    tabGlass: {
+        flexDirection: 'row',
+        padding: 4,
+        backgroundColor: 'rgba(255,255,255,0.02)',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.05)',
+    },
+    tabBtn: {
+        flex: 1,
+        paddingVertical: 10,
+        alignItems: 'center',
+        borderRadius: 16,
+    },
+    tabBtnActive: {
+        backgroundColor: 'rgba(255,255,255,0.08)',
+    },
+    tabText: {
+        color: 'rgba(255,255,255,0.4)',
+        fontSize: 9,
+        fontWeight: '800',
+        letterSpacing: 1,
+    },
+    tabTextActive: {
+        color: '#ffffff',
     },
     mediaGrid: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 4,
+        gap: 10,
+    },
+    mediaList: {
+        gap: 12,
     },
     mediaItem: {
-        width: (width - 48) / 3,
-        height: (width - 48) / 3,
-        borderRadius: 12,
+        width: (width - 60) / 3,
+        height: (width - 60) / 3,
+        borderRadius: 18,
         overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.05)',
+        position: 'relative',
+    },
+    playIconOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: 'rgba(0,0,0,0.2)',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    listItemGlass: {
+        borderRadius: 20,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.05)',
+    },
+    listItemContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 16,
+        backgroundColor: 'rgba(255,255,255,0.02)',
+    },
+    listIconContainer: {
+        width: 44,
+        height: 44,
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 16,
+    },
+    listTextContainer: {
+        flex: 1,
+    },
+    listTitle: {
+        color: '#ffffff',
+        fontSize: 15,
+        fontWeight: '600',
+    },
+    listSubtitle: {
+        color: 'rgba(255,255,255,0.4)',
+        fontSize: 12,
+        marginTop: 2,
     },
     mediaImage: {
         width: '100%',
@@ -371,35 +782,34 @@ const styles = StyleSheet.create({
     emptyMedia: {
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 40,
-        borderRadius: 20,
+        paddingVertical: 48,
+        borderRadius: 28,
+        backgroundColor: 'rgba(255,255,255,0.02)',
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.05)',
-        overflow: 'hidden',
     },
     emptyText: {
-        color: 'rgba(255,255,255,0.3)',
-        fontSize: 12,
-        fontWeight: '500',
-        marginTop: 12,
+        color: 'rgba(255,255,255,0.2)',
+        fontSize: 14,
     },
     infoCard: {
+        marginHorizontal: 20,
         marginTop: 32,
-        borderRadius: 20,
-        padding: 20,
+        borderRadius: 30,
+        padding: 24,
+        backgroundColor: 'rgba(255,255,255,0.02)',
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.05)',
-        overflow: 'hidden',
-        gap: 16,
+        gap: 20,
     },
     infoRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        gap: 14,
     },
     infoText: {
         color: 'rgba(255,255,255,0.5)',
-        fontSize: 13,
+        fontSize: 15,
         fontWeight: '500',
     },
     errorText: {
@@ -407,5 +817,109 @@ const styles = StyleSheet.create({
         fontSize: 16,
         textAlign: 'center',
         marginTop: 100,
+    },
+    // Media Viewer Styles
+    viewerContainer: {
+        flex: 1,
+    },
+    viewerControlsContainer: {
+        ...StyleSheet.absoluteFillObject,
+        justifyContent: 'space-between',
+        pointerEvents: 'box-none',
+    },
+    morphingImageContainer: {
+        position: 'absolute',
+        overflow: 'hidden',
+        zIndex: 100,
+    },
+    fullImage: {
+        width: '100%',
+        height: '100%',
+    },
+    viewerHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingTop: 60,
+        paddingHorizontal: 20,
+        zIndex: 10,
+    },
+    viewerHeaderBtn: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: 'rgba(255,255,255,0.1)',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    viewerHeaderCenter: {
+        alignItems: 'center',
+    },
+    viewerTitle: {
+        color: '#fff',
+        fontSize: 12,
+        fontWeight: '900',
+        letterSpacing: 2,
+    },
+    viewerSubtitle: {
+        color: 'rgba(255,255,255,0.4)',
+        fontSize: 10,
+        marginTop: 2,
+    },
+    viewerContent: {
+        width: width,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    morphContainer: {
+        width: '100%',
+        height: '80%',
+        overflow: 'hidden',
+    },
+    viewerImage: {
+        width: '100%',
+        height: '100%',
+    },
+    videoPlaceholder: {
+        width: '100%',
+        height: '80%',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    viewerPlayBtn: {
+        position: 'absolute',
+        width: 80,
+        height: 80,
+        borderRadius: 40,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.2)',
+    },
+    viewerFooter: {
+        paddingBottom: 60,
+        paddingHorizontal: 40,
+    },
+    viewerActionBtn: {
+        height: 60,
+        borderRadius: 30,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.2)',
+    },
+    viewerActionBlur: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.1)',
+        gap: 12,
+    },
+    viewerActionText: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: '800',
+        letterSpacing: 1,
     },
 });

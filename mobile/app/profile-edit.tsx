@@ -4,7 +4,7 @@ import {
     TextInput, ScrollView, Alert, Modal, Animated, Dimensions,
     KeyboardAvoidingView, Platform
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useNavigation } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -16,14 +16,16 @@ const { width, height } = Dimensions.get('window');
 
 export default function ProfileEditScreen() {
     const router = useRouter();
+    const navigation = useNavigation();
     const { currentUser, updateProfile, activeTheme } = useApp();
 
     const [name, setName] = useState(currentUser?.name || '');
     const [bio, setBio] = useState(currentUser?.bio || '');
     const [avatar, setAvatar] = useState(currentUser?.avatar || '');
+    const [birthdate, setBirthdate] = useState(currentUser?.birthdate || '');
     const [showImageModal, setShowImageModal] = useState(false);
     const [showFullImage, setShowFullImage] = useState(false);
-    const [isEditing, setIsEditing] = useState<'name' | 'bio' | null>(null);
+    const [isEditing, setIsEditing] = useState<'name' | 'bio' | 'birthdate' | null>(null);
 
     const slideAnim = useRef(new Animated.Value(0)).current;
 
@@ -155,6 +157,11 @@ export default function ProfileEditScreen() {
         setIsEditing(null);
     };
 
+    const handleSaveBirthdate = () => {
+        updateProfile({ birthdate: birthdate.trim() });
+        setIsEditing(null);
+    };
+
     const SettingRow = ({ label, value, icon, onPress }: {
         label: string;
         value: string;
@@ -176,7 +183,12 @@ export default function ProfileEditScreen() {
 
             {/* Header */}
             <View style={styles.header}>
-                <Pressable style={styles.backButton} onPress={() => router.back()}>
+                <Pressable 
+                    style={styles.backButton} 
+                    onPress={() => {
+                        if (navigation.canGoBack()) navigation.goBack();
+                    }}
+                >
                     <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
                 </Pressable>
                 <Text style={styles.headerTitle}>Profile</Text>
@@ -269,6 +281,40 @@ export default function ProfileEditScreen() {
                                     value={name}
                                     icon="person"
                                     onPress={() => setIsEditing('name')}
+                                />
+                            )}
+                        </View>
+                    </View>
+
+                    <View style={styles.section}>
+                        <Text style={styles.sectionLabel}>Birthdate</Text>
+                        <View style={styles.settingsGroup}>
+                            {isEditing === 'birthdate' ? (
+                                <View style={styles.editRow}>
+                                    <TextInput
+                                        style={styles.editInput}
+                                        value={birthdate}
+                                        onChangeText={setBirthdate}
+                                        placeholder="YYYY-MM-DD"
+                                        placeholderTextColor="rgba(255,255,255,0.3)"
+                                        autoFocus
+                                        maxLength={10}
+                                    />
+                                    <View style={styles.editActions}>
+                                        <Pressable onPress={() => setIsEditing(null)} style={styles.cancelBtn}>
+                                            <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
+                                        </Pressable>
+                                        <Pressable onPress={handleSaveBirthdate} style={[styles.saveBtn, { backgroundColor: activeTheme.primary }]}>
+                                            <MaterialIcons name="check" size={20} color="#ffffff" />
+                                        </Pressable>
+                                    </View>
+                                </View>
+                            ) : (
+                                <SettingRow
+                                    label=""
+                                    value={birthdate}
+                                    icon="cake"
+                                    onPress={() => setIsEditing('birthdate')}
                                 />
                             )}
                         </View>

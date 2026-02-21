@@ -13,6 +13,16 @@ export interface Message {
   };
 }
 
+export interface Story {
+  id: string;
+  url: string;
+  type: 'image' | 'video';
+  timestamp: string;
+  seen: boolean;
+  duration?: number;
+  caption?: string;
+}
+
 export interface Contact {
   id: string;
   name: string;
@@ -22,6 +32,7 @@ export interface Contact {
   about?: string;
   lastMessage?: string;
   unreadCount?: number;
+  stories?: Story[];
 }
 
 export interface StatusUpdate {

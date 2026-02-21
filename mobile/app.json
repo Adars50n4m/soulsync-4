@@ -17,10 +17,14 @@
         "UIBackgroundModes": [
           "audio",
           "voip"
+        ],
+        "LSApplicationQueriesSchemes": [
+          "mailto"
         ]
       }
     },
     "android": {
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -31,6 +35,7 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.soulsync4.mobile",
       "permissions": [
+        "android.permission.POST_NOTIFICATIONS",
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS"
@@ -62,6 +67,7 @@
           "recordAudioAndroid": true
         }
       ],
+      "expo-notifications",
       "expo-sqlite"
     ],
     "experiments": {

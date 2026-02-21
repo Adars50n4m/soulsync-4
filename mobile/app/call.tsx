@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { Camera } from 'expo-camera';
 import { Audio as ExpoAudio } from 'expo-av';
-import { useRouter } from 'expo-router';
+import { useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
@@ -50,7 +50,8 @@ type CallState = 'idle' | 'ringing' | 'connecting' | 'connected' | 'ended';
 
 export default function CallScreen() {
     const router = useRouter();
-    const { activeCall, contacts, currentUser, otherUser, endCall: endAppCall, toggleMute: toggleAppMute, toggleMinimizeCall } = useApp();
+    const navigation = useNavigation();
+    const { activeCall, contacts, currentUser, otherUser, activeTheme, endCall: endAppCall, toggleMute: toggleAppMute, toggleMinimizeCall } = useApp();
     useKeepAwake(); // Prevents screen from sleeping during call
 
     const [callDuration, setCallDuration] = useState(0);
@@ -183,7 +184,7 @@ export default function CallScreen() {
                 "Development Build Required",
                 "Real calls require 'react-native-webrtc' which does not work in Expo Go.\n\nPlease run: npx expo run:android"
             );
-            router.back();
+            if (navigation.canGoBack()) navigation.goBack();
             return;
         }
 
@@ -255,6 +256,7 @@ export default function CallScreen() {
                     try { webRTCService.setCallbacks(null); } catch (e) { }
                 } else {
                     try { webRTCService.cleanup(); } catch (e) { }
+                    restoreMusicAudioMode();
                 }
             }
         };
@@ -263,7 +265,7 @@ export default function CallScreen() {
     // Sync state with activeCall
     useEffect(() => {
         if (!activeCall) {
-            router.back();
+            if (navigation.canGoBack()) navigation.goBack();
             return;
         }
         if (activeCall?.isAccepted && callState !== 'connected' && callState !== 'ended') {
@@ -305,6 +307,22 @@ export default function CallScreen() {
         opacity: pulseOpacity.value,
     }));
 
+    const restoreMusicAudioMode = useCallback(async () => {
+        try {
+            await ExpoAudio.setAudioModeAsync({
+                allowsRecordingIOS: false,
+                playsInSilentModeIOS: true,
+                staysActiveInBackground: true,
+                interruptionModeIOS: 1,
+                shouldDuckAndroid: true,
+                interruptionModeAndroid: 1,
+                playThroughEarpieceAndroid: false,
+            });
+        } catch (e) {
+            console.warn('Failed to restore music audio mode:', e);
+        }
+    }, []);
+
     const formatDuration = (seconds: number) => {
         const mins = Math.floor(seconds / 60);
         const secs = seconds % 60;
@@ -321,8 +339,9 @@ export default function CallScreen() {
             try { webRTCService.cleanup(); } catch (e) { }
         }
         if (endAppCallRef.current) endAppCallRef.current();
-        router.back();
-    }, []);
+        restoreMusicAudioMode();
+        if (navigation.canGoBack()) navigation.goBack();
+    }, [navigation, restoreMusicAudioMode]);
 
     const handleToggleMute = () => {
         toggleAppMute();
@@ -353,15 +372,22 @@ export default function CallScreen() {
     const handleMinimize = () => {
         isMinimizing.current = true;
         toggleMinimizeCall(true);
-        router.back();
+        if (navigation.canGoBack()) navigation.goBack();
     };
 
-    if (!activeCall || !contact) return null;
+    if (!activeCall || !contact) {
+        return (
+            <View style={[styles.container, { backgroundColor: activeTheme?.bg || '#000', justifyContent: 'center', alignItems: 'center' }]}>
+                <StatusBar hidden />
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 16 }}>Initializing...</Text>
+            </View>
+        );
+    }
 
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>
             <GestureDetector gesture={screenPanGesture}>
-            <Animated.View style={[styles.container, screenStyle]}>
+            <Animated.View style={[styles.container, { backgroundColor: activeTheme?.bg || '#000' }, screenStyle]}>
                 <StatusBar hidden />
 
                 {/* Background Layer */}
@@ -381,6 +407,13 @@ export default function CallScreen() {
                                 style={styles.backgroundImage}
                                 blurRadius={50}
                             />
+                        )}
+                        
+                        {/* Connecting / Initializing Overlay */}
+                        {(!remoteStream && isVideo && activeCall.isAccepted) && (
+                            <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }]}>
+                                <Text style={{ color: 'white', fontSize: 18, fontWeight: '600' }}>Connecting Video...</Text>
+                            </View>
                         )}
                     </View>
                 ) : (

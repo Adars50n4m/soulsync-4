@@ -4,7 +4,7 @@ import {
     FlatList, Dimensions, ActivityIndicator, ImageBackground,
     KeyboardAvoidingView, Platform, Keyboard, ScrollView
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -13,7 +13,10 @@ import Animated, {
     useAnimatedStyle, 
     withSpring, 
     FadeInDown, 
-    Layout 
+    Layout,
+    runOnJS,
+    interpolate,
+    Extrapolation
 } from 'react-native-reanimated';
 import { useApp } from '../context/AppContext';
 import { getSaavnApiUrl } from '../config/api';
@@ -43,6 +46,7 @@ export default function MusicScreen() {
     const [songs, setSongs] = useState<Song[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [progress, setProgress] = useState(0);
+    const [playbackMs, setPlaybackMs] = useState(0);
     const lastClickTime = useRef<{ [key: string]: number }>({});
     const [keyboardVisible, setKeyboardVisible] = useState(false);
     const isMountedRef = useRef(true);
@@ -52,27 +56,39 @@ export default function MusicScreen() {
     // Animations
     const slideY = useSharedValue(height);
 
+    const navigation = useNavigation();
+    const closeScreen = () => {
+        if (navigation.canGoBack()) {
+            navigation.goBack();
+            return;
+        }
+        router.back();
+    };
+
+    const handleClose = () => {
+        slideY.value = withSpring(height, {
+            damping: 20,
+            stiffness: 100,
+            mass: 0.8
+        }, (finished) => {
+            if (finished) {
+                runOnJS(closeScreen)();
+            }
+        });
+    };
+
     useEffect(() => {
         // Open the music overlay
         slideY.value = withSpring(0, {
-            damping: 15,
+            damping: 18,
             stiffness: 90,
             mass: 0.6,
             velocity: 2
         });
 
         // Initial Load Logic:
-        // 1. If song is already playing or selected, do nothing.
-        // 2. If no song, fetch trending but DO NOT auto-play.
-        if (!musicState.currentSong) {
-             searchSongs('Trending'); 
-             // Note: searchSongs sets 'songs' state but doesn't auto-play.
-             // We can optionally set the first result as currentSong (paused) if we want "ready to play".
-             // For now, just populating the list is safer.
-        } else {
-            // If we have a song, maybe show related? or just Keep current list.
-            if (songs.length === 0) searchSongs('Top Hits'); 
-        }
+        // Fetch Bollywood Trending but DO NOT auto-play.
+        searchSongs('Hindi Trending Top 20'); 
 
         const showSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', () => setKeyboardVisible(true));
         const hideSub = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setKeyboardVisible(false));
@@ -93,6 +109,10 @@ export default function MusicScreen() {
         transform: [{ translateY: slideY.value }]
     }));
 
+    const backgroundStyle = useAnimatedStyle(() => ({
+        opacity: interpolate(slideY.value, [0, height * 0.8], [1, 0], Extrapolation.CLAMP)
+    }));
+
     // Real Progress Sync
     useEffect(() => {
         let interval: any;
@@ -103,10 +123,17 @@ export default function MusicScreen() {
                 // Convert duration to ms for calculation
                 const progressPercent = (pos / (duration * 1000)) * 100;
                 setProgress(progressPercent);
+                setPlaybackMs(pos);
             }, 1000);
         }
         return () => clearInterval(interval);
     }, [musicState.isPlaying, musicState.currentSong]);
+
+    useEffect(() => {
+        // Reset when switching songs
+        setPlaybackMs(0);
+        setProgress(0);
+    }, [musicState.currentSong?.id]);
 
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
@@ -324,8 +351,17 @@ export default function MusicScreen() {
         const barWidth = width - 48; // Screen width - padding (24 * 2)
         const percent = Math.max(0, Math.min(1, locationX / barWidth));
         const duration = musicState.currentSong?.duration || 240;
-        seekTo(percent * duration * 1000);
+        const targetMs = percent * duration * 1000;
+        seekTo(targetMs);
         setProgress(percent * 100);
+        setPlaybackMs(targetMs);
+    };
+
+    const formatClock = (seconds: number) => {
+        const safe = Math.max(0, Math.floor(seconds));
+        const mins = Math.floor(safe / 60);
+        const secs = safe % 60;
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
     const renderOverlayHeader = () => (
@@ -333,22 +369,30 @@ export default function MusicScreen() {
             {/* Player Info Row */}
             <View style={styles.playerInfoRow}>
                 <View style={styles.artworkWrapper}>
-                    <Image
-                        source={{ uri: musicState.currentSong?.image || 'https://images.unsplash.com/photo-1614850523296-d8c1af93d400?w=400&h=400&fit=crop' }}
-                        style={styles.artwork}
-                    />
+                    {musicState.currentSong ? (
+                        <Image
+                            source={{ uri: musicState.currentSong.image }}
+                            style={styles.artwork}
+                        />
+                    ) : (
+                        <View style={[styles.artwork, { backgroundColor: '#1a1a1a', alignItems: 'center', justifyContent: 'center' }]}>
+                            <MaterialIcons name="music-note" size={60} color="rgba(255,255,255,0.1)" />
+                        </View>
+                    )}
                     <LinearGradient colors={['transparent', 'rgba(255,0,128,0.2)']} style={StyleSheet.absoluteFill} />
-                    <View style={styles.artworkBadge}>
-                        <MaterialIcons name="equalizer" size={16} color="#fff" />
-                    </View>
+                    {musicState.currentSong && (
+                        <View style={styles.artworkBadge}>
+                            <MaterialIcons name="equalizer" size={16} color="#fff" />
+                        </View>
+                    )}
                 </View>
 
                 <View style={styles.playerTextContainer}>
                     <Text style={styles.overlayTrackTitle} numberOfLines={1}>
-                        {musicState.currentSong?.name || "Midnight City"}
+                        {musicState.currentSong?.name || "Choose a song"}
                     </Text>
                     <Text style={styles.overlayTrackArtist} numberOfLines={1}>
-                        {musicState.currentSong?.artist || "M83"}
+                        {musicState.currentSong?.artist || "Search to start listening"}
                     </Text>
                     
                     <View style={styles.progressBarWrapper}>
@@ -358,8 +402,12 @@ export default function MusicScreen() {
                             </View>
                         </Pressable>
                         <View style={styles.timeLabels}>
-                            <Text style={styles.timeText}>1:24</Text>
-                            <Text style={styles.timeText}>4:03</Text>
+                            <Text style={styles.timeText}>{formatClock(playbackMs / 1000)}</Text>
+                            <Text style={styles.timeText}>
+                                {musicState.currentSong
+                                    ? formatClock(musicState.currentSong.duration || 0)
+                                    : "No Media"}
+                            </Text>
                         </View>
                     </View>
                 </View>
@@ -368,7 +416,10 @@ export default function MusicScreen() {
             {/* Controls Row */}
             <View style={styles.controlsRow}>
                 <Pressable><MaterialIcons name="skip-previous" size={36} color="rgba(255,255,255,0.4)" /></Pressable>
-                <Pressable onPress={togglePlayMusic} style={styles.playButton}>
+                <Pressable 
+                    onPress={() => musicState.currentSong ? togglePlayMusic() : null} 
+                    style={[styles.playButton, !musicState.currentSong && { opacity: 0.5 }]}
+                >
                     <MaterialIcons name={musicState.isPlaying ? "pause" : "play-arrow"} size={44} color="#000" />
                 </Pressable>
                 <Pressable><MaterialIcons name="skip-next" size={36} color="rgba(255,255,255,0.4)" /></Pressable>
@@ -392,7 +443,7 @@ export default function MusicScreen() {
             </View>
 
             <View style={styles.listHeader}>
-                <Text style={styles.listTitle}>{activeTab === 'music' ? 'ALL MUSIC' : 'FAVORITES'}</Text>
+                <Text style={styles.listTitle}>{activeTab === 'music' ? (searchQuery ? `RESULTS FOR "${searchQuery.toUpperCase()}"` : 'TRENDING HINDI SONGS') : 'FAVORITES'}</Text>
                 <MaterialIcons name="filter-list" size={18} color="rgba(255,255,255,0.2)" />
             </View>
         </View>
@@ -430,13 +481,13 @@ export default function MusicScreen() {
         <View style={styles.container}>
             <StatusBar barStyle="light-content" />
             
-            {/* Blurred Background - Blurs the content behind this modal */}
-            <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+            <Animated.View style={[StyleSheet.absoluteFill, backgroundStyle]}>
+                <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+            </Animated.View>
 
-            {/* Transparent Pressable to close the overlay */}
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => router.back()} />
+            {/* Transparent Pressable to close the overlay with animation */}
+            <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
 
-            {/* Music Overlay (82% Height) */}
             <Animated.View style={[styles.musicOverlay, overlayStyle]}>
                 <BlurView intensity={95} tint="dark" style={styles.overlayGlass}>
                     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>

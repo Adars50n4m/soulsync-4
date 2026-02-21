@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import { useApp } from '../AppContext';
 import { Message } from '../types';
-import { socket } from '../mobile/src/webrtc/socket'; // Adjusted path as we are in screens/
+import { socket } from '../mobile/src/webrtc/socket';
 
 // --- Media Share Menu Component (Refined) ---
-const MediaShareMenu: React.FC<{ 
-  isOpen: boolean; 
+const MediaShareMenu: React.FC<{
+  isOpen: boolean;
   onClose: () => void;
   onGallery: () => void;
   onCamera: () => void;
@@ -14,7 +15,7 @@ const MediaShareMenu: React.FC<{
   onLocation: () => void;
 }> = ({ isOpen, onClose, onGallery, onCamera, onFile, onLocation }) => {
   if (!isOpen) return null;
-  
+
   const menuItems = [
     { icon: 'image', label: 'Gallery', color: 'text-purple-400', onClick: onGallery },
     { icon: 'photo_camera', label: 'Camera', color: 'text-pink-400', onClick: onCamera },
@@ -27,7 +28,7 @@ const MediaShareMenu: React.FC<{
       <div className="fixed inset-0 z-[140] bg-black/40 backdrop-blur-[2px]" onClick={onClose} />
       <div className="absolute bottom-20 left-6 w-64 z-[150] bg-[#1c1c1e]/95 backdrop-blur-xl rounded-2xl p-2 flex flex-col gap-1 shadow-2xl border border-white/10 animate-ios-pop origin-bottom-left">
         {menuItems.map((item, idx) => (
-          <button 
+          <button
             key={idx}
             onClick={(e) => { e.stopPropagation(); item.onClick(); onClose(); }}
             className="flex items-center gap-4 w-full px-4 py-3 hover:bg-white/10 rounded-xl transition-all active:scale-95 group"
@@ -49,7 +50,7 @@ const SingleChatScreen: React.FC = () => {
   const { messages, contacts, addMessage, updateMessageStatus, deleteMessage } = useApp();
   const [inputText, setInputText] = useState('');
   const [showMediaMenu, setShowMediaMenu] = useState(false);
-  
+
   // Refs for hidden inputs
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -58,36 +59,40 @@ const SingleChatScreen: React.FC = () => {
 
   const contact = contacts.find(c => c.id === id);
   const chatMessages = messages[id || ''] || [];
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
+  // Auto-scroll to bottom on initial load and new messages
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages]);
+    if (isInitialLoad) {
+      // Initial load - scroll instantly to bottom
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      setIsInitialLoad(false);
+    } else {
+      // New messages - smooth scroll
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages?.length]);
 
   const handleSendMessage = (text?: string, media?: Message['media']) => {
     if (!id) return;
     const content = text || inputText.trim();
     if (!content && !media) return;
-    
+
     addMessage(id, content, 'me', media);
     if (!media) setInputText('');
-    
-    // Simulate server response/status
-    setTimeout(() => {
-      // In a real app, this would come from socket
-    }, 1000);
+
+    setTimeout(() => {}, 1000);
   };
 
-  // --- 1. Working File/Image Handler ---
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'image' | 'file') => {
     const file = e.target.files?.[0];
     if (file) {
-      // Create a fake URL for immediate display (Data URL)
       const reader = new FileReader();
       reader.onload = (ev) => {
         if (ev.target?.result) {
           handleSendMessage('', {
             type: type,
-            url: ev.target.result as string, // Real image data
+            url: ev.target.result as string,
             name: file.name
           });
         }
@@ -96,14 +101,13 @@ const SingleChatScreen: React.FC = () => {
     }
   };
 
-  // --- 2. Working Location Handler ---
   const handleLocationShare = () => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition((position) => {
         const { latitude, longitude } = position.coords;
         const mapLink = `https://www.google.com/maps?q=${latitude},${longitude}`;
         handleSendMessage(`📍 Shared Location`, {
-            type: 'file', // Treating as file to show preview icon, or custom type
+            type: 'file',
             url: mapLink,
             name: 'Current Location'
         });
@@ -118,51 +122,81 @@ const SingleChatScreen: React.FC = () => {
   if (!contact) return null;
 
   return (
-    <div className="relative min-h-screen flex flex-col bg-black overflow-hidden">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.15 }}
+      className="relative min-h-screen flex flex-col bg-black overflow-hidden"
+    >
       {/* Hidden Inputs for Media */}
-      <input 
-        type="file" 
-        accept="image/*" 
-        ref={fileInputRef} 
-        className="hidden" 
+      <input
+        type="file"
+        accept="image/*"
+        ref={fileInputRef}
+        className="hidden"
         onChange={(e) => handleFileChange(e, 'image')}
       />
-      <input 
-        type="file" 
-        accept="image/*" 
-        capture="environment" // Opens Camera directly on mobile
-        ref={cameraInputRef} 
-        className="hidden" 
+      <input
+        type="file"
+        accept="image/*"
+        capture="environment"
+        ref={cameraInputRef}
+        className="hidden"
         onChange={(e) => handleFileChange(e, 'image')}
       />
-      <input 
-        type="file" 
-        accept="*/*" 
-        ref={docInputRef} 
-        className="hidden" 
+      <input
+        type="file"
+        accept="*/*"
+        ref={docInputRef}
+        className="hidden"
         onChange={(e) => handleFileChange(e, 'file')}
       />
 
-      {/* Header */}
-      <header className="fixed top-0 inset-x-0 z-50 bg-[#1c1c1e]/80 backdrop-blur-md border-b border-white/5 px-4 py-3 flex items-center justify-between pt-[calc(env(safe-area-inset-top)+10px)]">
+      {/* Header - Shared Element Target */}
+      <motion.header
+        layoutId={`chat-item-${id}`}
+        layout
+        className="fixed top-0 inset-x-0 z-50 bg-[#1c1c1e]/80 backdrop-blur-md border-b border-white/5 px-4 py-3 flex items-center justify-between pt-[calc(env(safe-area-inset-top)+10px)]"
+        transition={{
+          layoutId: {
+            type: 'spring',
+            stiffness: 300,
+            damping: 25,
+            mass: 0.5,
+          }
+        }}
+      >
         <div className="flex items-center gap-3">
           <button onClick={() => navigate(-1)} className="text-white/80"><span className="material-symbols-outlined">arrow_back</span></button>
           <div className="flex items-center gap-3">
-             <img src={contact.avatar} className="size-10 rounded-full object-cover" alt="" />
-             <div>
-                <h2 className="text-white font-bold text-sm leading-tight">{contact.name}</h2>
-                {/* Real Status Indicator */}
+            <motion.div
+              layoutId={`avatar-container-${id}`}
+              layout
+              className="flex items-center gap-3"
+              transition={{ duration: 0.3 }}
+            >
+              <img src={contact.avatar} className="size-10 rounded-full object-cover" alt="" />
+              <div>
+                <motion.h2
+                  layoutId={`chat-name-${id}`}
+                  layout
+                  className="text-white font-bold text-sm leading-tight"
+                >
+                  {contact.name}
+                </motion.h2>
                 <p className={`text-[11px] font-medium tracking-wide ${contact.status === 'online' ? 'text-green-400' : 'text-white/40'}`}>
                   {contact.status === 'online' ? 'Online' : contact.lastSeen}
                 </p>
-             </div>
+              </div>
+            </motion.div>
           </div>
         </div>
         <div className="flex gap-4 text-primary">
           <span className="material-symbols-outlined">videocam</span>
           <span className="material-symbols-outlined">call</span>
         </div>
-      </header>
+      </motion.header>
 
       {/* Messages Feed */}
       <main className="flex-1 overflow-y-auto pt-24 pb-24 px-4 space-y-4">
@@ -223,7 +257,7 @@ const SingleChatScreen: React.FC = () => {
           <span className="material-symbols-outlined text-xl">{inputText ? 'send' : 'mic'}</span>
         </button>
       </footer>
-    </div>
+    </motion.div>
   );
 };
 

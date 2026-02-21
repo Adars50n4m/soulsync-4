@@ -1,33 +1,65 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react';
 import {
     View, Text, Image, FlatList, TextInput, Pressable,
-    StyleSheet, StatusBar, KeyboardAvoidingView, Platform,
-    Modal, Animated as RNAnimated, Dimensions, Keyboard, Alert
+    StyleSheet, StatusBar, Platform,
+    Modal, Animated as RNAnimated, Dimensions, Keyboard, KeyboardEvent, Alert, InteractionManager, ScrollView
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library';
+import * as FileSystem from 'expo-file-system/legacy';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
     withSpring,
     withTiming,
+    withDelay,
     runOnJS,
     interpolate,
-    Extrapolation
+    Extrapolation,
+    Easing,
 } from 'react-native-reanimated';
+import { MORPH_EASING, MORPH_IN_DURATION, MORPH_OUT_DURATION, MORPH_OUT_EASING, MORPH_SPRING_CONFIG } from '../../constants/transitions';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+
 import { useApp } from '../../context/AppContext';
 import { MusicPlayerOverlay } from '../../components/MusicPlayerOverlay';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { MediaPreviewModal } from '../../components/MediaPreviewModal';
-import { MediaPlayerModal } from '../../components/MediaPlayerModal';
 import { storageService } from '../../services/StorageService';
-import { Message } from '../../types';
+import { Contact, Message } from '../../types';
+import { ResizeMode, Video } from 'expo-av';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const IS_IOS = Platform.OS === 'ios';
+const IOS_KEYBOARD_SAFE_ADJUST = 22;
+
+type ChatMediaItem = {
+    type: 'image' | 'video' | 'audio' | 'file' | 'status_reply';
+    url: string;
+    caption?: string;
+};
+
+const getMessageMediaItems = (msg: any): ChatMediaItem[] => {
+    if (!msg?.media) return [];
+
+    if (Array.isArray(msg.media)) {
+        return msg.media.filter((m: any) => m?.url);
+    }
+
+    if (Array.isArray(msg.media?.items)) {
+        return msg.media.items.filter((m: any) => m?.url);
+    }
+
+    if (msg.media?.url) {
+        return [msg.media];
+    }
+
+    return [];
+};
 
 // Sanitize song title - remove metadata like "(From ...)" or "[Album Name]"
 const sanitizeSongTitle = (title: string): string => {
@@ -39,8 +71,63 @@ const sanitizeSongTitle = (title: string): string => {
         .trim();
 };
 
+const ProgressiveBlur = ({ position = 'top', height = 180, intensity = 100, steps = 6 }: { position?: 'top' | 'bottom', height?: number, intensity?: number, steps?: number }) => {
+    return (
+        <View style={{
+            position: 'absolute',
+            [position]: 0,
+            left: 0,
+            right: 0,
+            height,
+            zIndex: position === 'top' ? 90 : 50,
+            overflow: 'hidden',
+        }} pointerEvents="none">
+            {/* Base layers for progressive blur */}
+            {Array.from({ length: steps }).map((_, i) => {
+                const ratio = i / steps;
+                
+                // Balanced Cubic-Quartic falloff for smoothness
+                // Power 10 was too sharp, creating "lines"
+                const intensityFactor = Math.pow(1 - ratio, 3.5);
+                
+                // Smoother opacity distribution
+                const opacityFactor = Math.pow(1 - ratio, 1.5);
+
+                const stepHeight = height / steps;
+                
+                return (
+                    <BlurView
+                        key={i}
+                        intensity={intensity * intensityFactor}
+                        tint="dark"
+                        style={{
+                            position: 'absolute',
+                            [position]: i * stepHeight,
+                            left: 0,
+                            right: 0,
+                            height: stepHeight + 4, // More overlap to hide joins
+                            opacity: Math.max(0.1, opacityFactor),
+                        }}
+                    />
+                );
+            })}
+
+            {/* Smoothing Gradient - This acts as a 'diffuser' to hide the banding lines */}
+            <LinearGradient
+                colors={[
+                    position === 'top' ? 'rgba(0,0,0,0.8)' : 'transparent',
+                    position === 'top' ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.4)',
+                    position === 'top' ? 'transparent' : 'rgba(0,0,0,0.8)',
+                ]}
+                style={StyleSheet.absoluteFill}
+                pointerEvents="none"
+            />
+        </View>
+    );
+};
+
 // Message Bubble with Liquid Glass UI
-const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quotedMessage, onDoubleTap, onMediaTap }: any) => {
+const MessageBubble = ({ msg, contactName, onLongPress, onReply, isSelected, onReaction, quotedMessage, onDoubleTap, onMediaTap, isClone }: any) => {
     const { activeTheme } = useApp();
     const translateX = useSharedValue(0);
     const isMe = msg.sender === 'me';
@@ -52,10 +139,22 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
             if (onDoubleTap) runOnJS(onDoubleTap)(msg.id);
         });
 
+    const bubbleRef = useRef<View>(null);
+
+    const measureAndShowMenu = useCallback((id: string) => {
+        bubbleRef.current?.measure((x, y, width, height, pageX, pageY) => {
+            if (onLongPress) {
+                onLongPress(id, { x: pageX, y: pageY, width, height });
+            }
+        });
+    }, [onLongPress]);
+
     const longPressGesture = Gesture.LongPress()
-        .minDuration(500)
+        .minDuration(400) // slightly faster response
+        .runOnJS(true)
         .onStart(() => {
-            runOnJS(onLongPress)(msg.id);
+            if (isClone) return; // Prevent interaction on cloned bubbles
+            measureAndShowMenu(msg.id);
         });
 
     const panGesture = Gesture.Pan()
@@ -83,8 +182,163 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
         ]
     }));
 
+    const mediaItems = getMessageMediaItems(msg);
+    const hasText = !!msg.text?.trim();
+    const hasCaption = !!msg.media?.caption?.trim();
+    const isMediaOnly = mediaItems.length > 0 && !hasText && !hasCaption && !quotedMessage;
+
+    const handleMediaPress = (index: number, openGallery = false) => {
+        if (!onMediaTap) return;
+        onMediaTap({
+            messageId: msg.id,
+            mediaItems,
+            index,
+            openGallery,
+        });
+    };
+
+    const renderMediaContent = () => {
+        if (!mediaItems.length) return null;
+
+        if (mediaItems.length === 1) {
+            const media = mediaItems[0];
+            return (
+                <Pressable
+                    onPress={() => handleMediaPress(0)}
+                    style={[
+                        styles.mediaSurface,
+                        isMe ? styles.mediaSurfaceMe : styles.mediaSurfaceThem,
+                        !hasText && !hasCaption && styles.mediaSingleNoGap
+                    ]}
+                >
+                    <Image source={{ uri: media.url }} style={styles.mediaSingle} />
+                    {media.type === 'video' && (
+                        <View style={styles.mediaTilePlayOverlay}>
+                            <MaterialIcons name="play-circle-filled" size={46} color="rgba(255,255,255,0.92)" />
+                        </View>
+                    )}
+                </Pressable>
+            );
+        }
+
+        const visibleItems = mediaItems.slice(0, 4);
+        const extraCount = mediaItems.length - 4;
+        return (
+            <View
+                style={[
+                    styles.mediaSurface,
+                    styles.mediaGridSurface,
+                    isMe ? styles.mediaSurfaceMe : styles.mediaSurfaceThem,
+                    !hasText && !hasCaption && styles.mediaGridNoGap
+                ]}
+            >
+                <View style={styles.mediaGrid}>
+                    {visibleItems.map((media, index) => {
+                        const showMore = index === 3 && extraCount > 0;
+                        return (
+                            <Pressable
+                                key={`${media.url}-${index}`}
+                                style={styles.mediaGridTile}
+                                onPress={() => handleMediaPress(index, showMore)}
+                            >
+                                <Image source={{ uri: media.url }} style={styles.mediaGridImage} />
+                                {media.type === 'video' && !showMore && (
+                                    <View style={styles.mediaTilePlayOverlay}>
+                                        <MaterialIcons name="play-circle-filled" size={34} color="rgba(255,255,255,0.92)" />
+                                    </View>
+                                )}
+                                {showMore && (
+                                    <View style={styles.mediaMoreOverlay}>
+                                        <Text style={styles.mediaMoreText}>{`+${extraCount}`}</Text>
+                                    </View>
+                                )}
+                            </Pressable>
+                        );
+                    })}
+                </View>
+            </View>
+        );
+    };
+
+    if (isClone) {
+        return (
+            <Animated.View style={bubbleStyle}>
+                <View style={[
+                    styles.bubbleContainer,
+                    isMe ? styles.bubbleContainerMe : styles.bubbleContainerThem,
+                    quotedMessage && styles.bubbleContainerWithQuote,
+                    isMediaOnly && styles.bubbleContainerMediaOnly,
+                    { maxWidth: '100%', width: '100%', height: '100%' }
+                ]}>
+                    {!isMediaOnly && (
+                        <View style={[StyleSheet.absoluteFill, { backgroundColor: isMe ? activeTheme.primary : 'rgba(255, 255, 255, 0.1)' }]} />
+                    )}
+
+                    <View style={[styles.messageContent, isMediaOnly && styles.messageContentMediaOnly]}>
+                        {quotedMessage && (
+                            <View style={[styles.quotedContainer, isMe ? styles.quotedMe : styles.quotedThem]}>
+                                <View style={styles.quoteContent}>
+                                    <Text numberOfLines={1} style={[styles.quoteSender, { color: isMe ? '#fff' : activeTheme.primary }]}>
+                                        {quotedMessage.sender === 'me' ? 'You' : contactName}
+                                    </Text>
+                                    <Text style={[styles.quoteText, { color: isMe ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.5)' }]}>
+                                        {quotedMessage.text}
+                                    </Text>
+                                </View>
+                            </View>
+                        )}
+
+                        {/* Media */}
+                        {renderMediaContent()}
+
+                        {/* Caption */}
+                        {msg.media?.caption && (
+                            <Text style={[styles.captionText, isMe ? { color: 'rgba(255,255,255,0.8)' } : { color: 'rgba(255,255,255,0.6)' }]}>
+                                {msg.media.caption}
+                            </Text>
+                        )}
+
+                        {/* Text */}
+                        {hasText && (
+                            <Text style={[styles.messageText, isMe && styles.messageTextMe]}>
+                                {msg.text}
+                            </Text>
+                        )}
+
+                        {/* Timestamp inside bubble (bottom right) */}
+                        <View style={[styles.messageFooter, isMediaOnly && styles.messageFooterMediaOnly]}>
+                            <Text style={[styles.timestamp, (isMe || isMediaOnly) && { color: 'rgba(255,255,255,0.85)' }]}>{msg.timestamp}</Text>
+                            {isMe && (
+                                <MaterialIcons
+                                    name={msg.status === 'read' ? 'done-all' : 'done'}
+                                    size={12}
+                                    color={msg.status === 'read' ? '#34B7F1' : 'rgba(255,255,255,0.8)'}
+                                />
+                            )}
+                        </View>
+                    </View>
+                </View>
+
+                {/* Reactions */}
+                {msg.reactions && msg.reactions.length > 0 && (
+                    <View style={[styles.reactionsRow, isMe ? styles.reactionsRight : styles.reactionsLeft]}>
+                        {msg.reactions.map((r: string, idx: number) => (
+                            <BlurView key={idx} intensity={40} tint="dark" style={styles.reactionPill}>
+                                <Text style={styles.reactionEmoji}>{r}</Text>
+                            </BlurView>
+                        ))}
+                    </View>
+                )}
+            </Animated.View>
+        );
+    }
+
     return (
-        <View style={[styles.messageWrapper, isMe && styles.messageWrapperMe]}>
+        <View style={[
+            styles.messageWrapper,
+            isMe && styles.messageWrapperMe,
+            msg.reactions && msg.reactions.length > 0 && styles.messageWrapperWithReactions
+        ]}>
             <View style={styles.replyIconContainer}>
                 <Animated.View style={[styles.replyIcon, iconStyle]}>
                     <MaterialIcons name="reply" size={24} color={activeTheme.primary} />
@@ -93,80 +347,55 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
 
             <GestureDetector gesture={composedGestures}>
                 <Animated.View style={bubbleStyle}>
-                    <View style={[
+                    <View ref={bubbleRef} style={[
                         styles.bubbleContainer,
-                        isMe ? styles.bubbleContainerMe : styles.bubbleContainerThem
+                        isMe ? styles.bubbleContainerMe : styles.bubbleContainerThem,
+                        quotedMessage && styles.bubbleContainerWithQuote,
+                        isMediaOnly && styles.bubbleContainerMediaOnly,
                     ]}>
-                        {/* Background - Solid Color */ }
-                        <View style={[StyleSheet.absoluteFill, { backgroundColor: isMe ? activeTheme.primary : 'rgba(255, 255, 255, 0.1)' }]} />
+                        {!isMediaOnly && (
+                            <View style={[StyleSheet.absoluteFill, { backgroundColor: isMe ? activeTheme.primary : 'rgba(255, 255, 255, 0.1)' }]} />
+                        )}
 
-                        <View style={styles.messageContent}>
-                            {/* Quoted Message */}
+                        <View style={[styles.messageContent, isMediaOnly && styles.messageContentMediaOnly]}>
                             {quotedMessage && (
-                                <View style={[styles.quotedContainer, isMe ? styles.quotedMe : styles.quotedThem]}>
-                                    <View style={[styles.quoteBar, { backgroundColor: isMe ? '#fff' : activeTheme.primary }]} />
+                                <Pressable style={[styles.quotedContainer, isMe ? styles.quotedMe : styles.quotedThem]}>
                                     <View style={styles.quoteContent}>
-                                        <Text style={[styles.quoteSender, { color: isMe ? '#fff' : activeTheme.primary }]}>
-                                            {quotedMessage.sender === 'me' ? 'YOU' : 'THEM'}
+                                        <Text numberOfLines={1} style={[styles.quoteSender, { color: isMe ? '#fff' : activeTheme.primary }]}>
+                                            {quotedMessage.sender === 'me' ? 'You' : contactName}
                                         </Text>
-                                        <Text numberOfLines={1} style={[styles.quoteText, { color: isMe ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.5)' }]}>
+                                        <Text style={[styles.quoteText, { color: isMe ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.5)' }]}>
                                             {quotedMessage.text}
                                         </Text>
                                     </View>
-                                </View>
-                            )}
-
-                            {/* Media */}
-                            {msg.media?.url && (
-                                <Pressable onPress={() => onMediaTap && onMediaTap(msg.media)}>
-                                    {msg.media.type === 'image' && (
-                                        <Image source={{ uri: msg.media.url }} style={styles.mediaImage} />
-                                    )}
-                                    {msg.media.type === 'video' && (
-                                        <View>
-                                            <Image source={{ uri: msg.media.url }} style={styles.mediaImage} />
-                                            <View style={styles.playIconOverlay}>
-                                                <MaterialIcons name="play-circle-filled" size={50} color="rgba(255,255,255,0.9)" />
-                                            </View>
-                                        </View>
-                                    )}
-                                    {msg.media.type === 'audio' && (
-                                        <View style={styles.audioWaveform}>
-                                            <MaterialIcons name="graphic-eq" size={20} color={activeTheme.primary} />
-                                            <Text style={styles.audioDuration}>0:45</Text>
-                                            <MaterialIcons name="play-arrow" size={24} color="#fff" />
-                                        </View>
-                                    )}
                                 </Pressable>
                             )}
 
-                            {/* Caption */}
+                            {renderMediaContent()}
+
                             {msg.media?.caption && (
                                 <Text style={[styles.captionText, isMe ? { color: 'rgba(255,255,255,0.8)' } : { color: 'rgba(255,255,255,0.6)' }]}>
                                     {msg.media.caption}
                                 </Text>
                             )}
 
-                            {/* Text */}
-                            <Text style={[styles.messageText, isMe && styles.messageTextMe]}>
-                                {msg.text}
-                            </Text>
+                            {hasText && (
+                                <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{msg.text}</Text>
+                            )}
 
-                            {/* Timestamp inside bubble (bottom right) */}
-                            <View style={styles.messageFooter}>
-                                <Text style={[styles.timestamp, isMe && { color: 'rgba(255,255,255,0.8)' }]}>{msg.timestamp}</Text>
+                            <View style={[styles.messageFooter, isMediaOnly && styles.messageFooterMediaOnly]}>
+                                <Text style={[styles.timestamp, (isMe || isMediaOnly) && { color: 'rgba(255,255,255,0.85)' }]}>{msg.timestamp}</Text>
                                 {isMe && (
                                     <MaterialIcons
                                         name={msg.status === 'read' ? 'done-all' : 'done'}
                                         size={12}
-                                        color={msg.status === 'read' ? '#fff' : 'rgba(255,255,255,0.8)'}
+                                        color={msg.status === 'read' ? '#34B7F1' : 'rgba(255,255,255,0.8)'}
                                     />
                                 )}
                             </View>
                         </View>
                     </View>
 
-                    {/* Reactions */}
                     {msg.reactions && msg.reactions.length > 0 && (
                         <View style={[styles.reactionsRow, isMe ? styles.reactionsRight : styles.reactionsLeft]}>
                             {msg.reactions.map((r: string, idx: number) => (
@@ -182,55 +411,364 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
     );
 };
 
-// Emoji Reaction Modal
-const ReactionModal = ({ visible, onClose, onSelect }: any) => {
-    const emojis = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
+// Sophisticated Context Menu Overlay
+const MessageContextMenu = ({ visible, msg, layout, onClose, onReaction, onAction }: any) => {
+    const emojis = ['❤️', '👍', '👎', '🔥', '🥰', '👏', '😁'];
+    const progress = useSharedValue(0);
+
+    useEffect(() => {
+        if (visible && layout) {
+            progress.value = 0;
+            progress.value = withSpring(1, {
+                damping: 20,
+                stiffness: 250,
+                mass: 1,
+            });
+        }
+    }, [visible, layout, progress]);
+
+    const handleClose = () => {
+        progress.value = withTiming(0, {
+            duration: 150,
+            easing: Easing.out(Easing.quad)
+        }, (finished) => {
+            if (finished && onClose) {
+                runOnJS(onClose)();
+            }
+        });
+    };
+
+    const containerStyle = useAnimatedStyle(() => {
+        return {
+            opacity: progress.value,
+            transform: [
+                { scale: interpolate(progress.value, [0, 1], [0.95, 1]) }
+            ]
+        };
+    });
+
+    const backdropStyle = useAnimatedStyle(() => {
+        return {
+            opacity: progress.value
+        };
+    });
+
+    if (!visible || !msg || !layout) return null;
+
+    const isMe = msg.sender === 'me';
+
+    // Dimensions and safe areas
+    // Dimensions and spacing gaps
+    const EMENU_GAP = 12; // Air gap between emoji bar and top of message
+    const AMENU_GAP = 12; // Air gap between action menu and bottom of message
+    const emojiBarHeight = 54;
+    const actionMenuHeight = 260;
+    
+    const safeTop = 110; // Header buffer
+    const safeBottom = SCREEN_HEIGHT - 40; // Bottom screen buffer
+
+    let topAdjust = 0;
+
+    // Shift whole cluster down if emoji bar is cut off at the top edge
+    if (layout.y - emojiBarHeight - EMENU_GAP < safeTop) {
+        topAdjust = safeTop - (layout.y - emojiBarHeight - EMENU_GAP);
+    }
+    // Shift whole cluster up if action menu is cut off at the bottom edge
+    else if (layout.y + layout.height + AMENU_GAP + actionMenuHeight > safeBottom) {
+        topAdjust = safeBottom - (layout.y + layout.height + AMENU_GAP + actionMenuHeight);
+    }
+
+    const adjustedY = layout.y + topAdjust;
+    const emojiBarY = adjustedY - emojiBarHeight - EMENU_GAP;
+    const actionMenuY = adjustedY + layout.height + AMENU_GAP;
 
     return (
-        <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-            <Pressable style={styles.reactionModalOverlay} onPress={onClose}>
-                <BlurView intensity={80} tint="dark" style={styles.reactionModalContent}>
-                    <View style={styles.emojiBar}>
-                        {emojis.map(emoji => (
-                            <Pressable key={emoji} onPress={() => onSelect(emoji)} style={styles.emojiButton}>
-                                <Text style={styles.emojiText}>{emoji}</Text>
-                            </Pressable>
-                        ))}
+        <Modal visible={visible} transparent animationType="none" onRequestClose={handleClose}>
+            <View style={StyleSheet.absoluteFill}>
+                {/* Backdrop Blur */}
+                <Animated.View style={[StyleSheet.absoluteFill, backdropStyle]}>
+                    <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+                    <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
+                </Animated.View>
+
+                {/* Animated Menu Elements */}
+                <Animated.View style={[StyleSheet.absoluteFill, containerStyle]} pointerEvents="box-none">
+                    
+                    {/* Emoji Reaction Bar */}
+                    <View style={[{
+                        position: 'absolute',
+                        top: emojiBarY,
+                        [isMe ? 'right' : 'left']: isMe ? SCREEN_WIDTH - layout.x - layout.width : layout.x,
+                        width: 270,
+                        height: 54,
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 10 },
+                        shadowOpacity: 0.5,
+                        shadowRadius: 15,
+                        elevation: 10,
+                    }]}>
+                        <BlurView intensity={80} tint="dark" style={[styles.contextEmojiTail, { [isMe ? 'right' : 'left']: 20 }]} />
+                        
+                        <BlurView intensity={80} tint="dark" style={{ flex: 1, borderRadius: 27, overflow: 'hidden', backgroundColor: 'rgba(30,30,30,0.5)' }}>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: 'center', paddingHorizontal: 16, gap: 14 }}>
+                                {emojis.map(e => (
+                                    <Pressable key={e} onPress={() => { onReaction(e); handleClose(); }} style={{ paddingVertical: 10 }}>
+                                        <Text style={{ fontSize: 26 }}>{e}</Text>
+                                    </Pressable>
+                                ))}
+                                <Pressable style={{ backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 16, width: 32, height: 32, alignItems: 'center', justifyContent: 'center', marginLeft: 4 }} onPress={() => { /* Open wide picker later */ }}>
+                                    <MaterialIcons name="add" size={20} color="#fff" />
+                                </Pressable>
+                            </ScrollView>
+                        </BlurView>
                     </View>
-                    <Pressable style={styles.deleteButton} onPress={() => onSelect('delete')}>
-                        <MaterialIcons name="delete" size={20} color="#ef4444" />
-                        <Text style={styles.deleteText}>Delete</Text>
-                    </Pressable>
-                </BlurView>
-            </Pressable>
+
+                    {/* Exact Cloned Message */}
+                    <View style={{
+                        position: 'absolute',
+                        top: adjustedY,
+                        left: layout.x,
+                        width: layout.width,
+                        height: layout.height,
+                    }}>
+                        <MessageBubble msg={msg} isClone />
+                    </View>
+
+                    {/* Action Menu (Reply, Pin, Forward...) */}
+                    <View style={[{
+                        position: 'absolute',
+                        top: actionMenuY,
+                        [isMe ? 'right' : 'left']: isMe ? SCREEN_WIDTH - layout.x - layout.width : layout.x,
+                        width: 200,
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 10 },
+                        shadowOpacity: 0.5,
+                        shadowRadius: 15,
+                        elevation: 10,
+                    }]}>
+                        <BlurView intensity={80} tint="dark" style={{ borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(30,30,30,0.5)' }}>
+                            <Pressable style={styles.contextActionBtn} onPress={() => { onAction('reply'); handleClose(); }}>
+                                <MaterialIcons name="reply" size={20} color="#fff" />
+                                <Text style={styles.contextActionText}>Reply</Text>
+                            </Pressable>
+                            <Pressable style={styles.contextActionBtn} onPress={() => { onAction('pin'); handleClose(); }}>
+                                <MaterialIcons name="push-pin" size={20} color="#fff" />
+                                <Text style={styles.contextActionText}>Pin</Text>
+                            </Pressable>
+                            <Pressable style={styles.contextActionBtn} onPress={() => { /* Select */ handleClose(); }}>
+                                <MaterialIcons name="check-circle-outline" size={20} color="#fff" />
+                                <Text style={styles.contextActionText}>Select</Text>
+                            </Pressable>
+                            <Pressable style={[styles.contextActionBtn, { borderBottomWidth: 0 }]} onPress={() => { onAction('delete'); handleClose(); }}>
+                                <MaterialIcons name="delete-outline" size={20} color="#ff4444" />
+                                <Text style={[styles.contextActionText, { color: '#ff4444' }]}>Delete</Text>
+                            </Pressable>
+                        </BlurView>
+                    </View>
+
+                </Animated.View>
+            </View>
         </Modal>
     );
 };
 
-export default function SingleChatScreen() {
-    const { id } = useLocalSearchParams<{ id: string }>();
+interface SingleChatScreenProps {
+    user?: Contact;
+    onBack?: () => void;
+    onBackStart?: () => void;
+    sourceY?: number;
+}
+
+export default function SingleChatScreen({ user: propsUser, onBack, onBackStart, sourceY: propsSourceY }: SingleChatScreenProps) {
+    const { id: paramsId, sourceY: paramsSourceY } = useLocalSearchParams();
+
+    // Support both direct routing (params) and inline rendering (props)
+    const id = propsUser?.id || (Array.isArray(paramsId) ? paramsId[0] : paramsId);
+    const sourceY = propsSourceY ?? (paramsSourceY ? Number(Array.isArray(paramsSourceY) ? paramsSourceY[0] : paramsSourceY) : undefined);
+    
     const router = useRouter();
     const { contacts, messages, sendChatMessage, startCall, activeCall, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers } = useApp();
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
-    
-    // Typing timeout ref
-    const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const [replyingTo, setReplyingTo] = useState<any>(null);
-    const [selectedMsgId, setSelectedMsgId] = useState<string | null>(null);
-    
-    const contact = contacts.find(c => c.id === id);
-    const chatMessages = messages[id || ''] || [];
-    const isTyping = contact ? typingUsers.includes(contact.id) : false;
-    const [showMusicPlayer, setShowMusicPlayer] = useState(false);
-    const flatListRef = useRef<FlatList>(null);
-    const modalAnim = useRef(new RNAnimated.Value(0)).current;
+    const [isReady, setIsReady] = useState(false);
+
+    // Defer heavy rendering until transition completes
+    useEffect(() => {
+        const task = InteractionManager.runAfterInteractions(() => {
+            setIsReady(true);
+        });
+        
+        // Fallback safety timeout
+        const timeout = setTimeout(() => {
+            setIsReady(true);
+        }, 350);
+
+        return () => {
+             task.cancel();
+             clearTimeout(timeout);
+        };
+    }, []);
+
     const [callOptionsPosition, setCallOptionsPosition] = useState({ x: 0, y: 0 });
     const [isExpanded, setIsExpanded] = useState(false);
+
+    // Morph Animation — iOS-style smooth bezier, no spring jitter
+    const HEADER_TOP = 50;
+    const ITEM_HEIGHT = 72;
+    const ITEM_MARGIN = 16;
+    const ITEM_RADIUS = 36;
+    
+    const morphProgress = useSharedValue(sourceY !== undefined ? 0 : 1);
+    const chatBodyOpacity = useSharedValue(sourceY !== undefined ? 0 : 1);
+    const screenBgOpacity = useSharedValue(1);
+    const keyboardOffset = useSharedValue(0);
+
+    // Header internal positioning — animated padding inside the unified morph container
+    const headerInternalStyle = useAnimatedStyle(() => {
+        const p = morphProgress.value;
+        return {
+            paddingTop: interpolate(p, [0, 1], [0, HEADER_TOP]),
+            paddingHorizontal: interpolate(p, [0, 1], [0, ITEM_MARGIN]),
+            opacity: interpolate(p, [0, 0.3, 1], [0.4, 1, 1]),
+        };
+    });
+
+    const chatBodyAnimStyle = useAnimatedStyle(() => ({
+        opacity: chatBodyOpacity.value,
+    }));
+
+    const inputAreaAnimatedStyle = useAnimatedStyle(() => ({
+        transform: [{ translateY: -keyboardOffset.value }],
+    }));
+
+    // Full-screen black backdrop that fades out during back morph
+    const screenBgStyle = useAnimatedStyle(() => ({
+        position: 'absolute' as const,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: '#000000',
+        opacity: screenBgOpacity.value,
+    }));
+
+    // Unified morph container — single element: pill shape ↔ full screen
+    const fullScreenMorphStyle = useAnimatedStyle(() => {
+        const p = morphProgress.value;
+        const distance = sourceY !== undefined ? sourceY : 0;
+
+        return {
+            position: 'absolute',
+            top: interpolate(p, [0, 1], [distance, 0]),
+            left: interpolate(p, [0, 1], [ITEM_MARGIN, 0]),
+            right: interpolate(p, [0, 1], [ITEM_MARGIN, 0]),
+            height: interpolate(p, [0, 1], [ITEM_HEIGHT, SCREEN_HEIGHT]),
+            borderRadius: interpolate(p, [0, 1], [ITEM_RADIUS, 0]),
+            overflow: 'hidden',
+            backgroundColor: '#000000',
+        };
+    });
+
+    // Animate IN with staggered delay to prevent rendering lag
+    useLayoutEffect(() => {
+        if (sourceY !== undefined) {
+            // 1. Full shape morph starts instantly
+            morphProgress.value = withTiming(1, {
+                duration: MORPH_IN_DURATION,
+                easing: MORPH_EASING
+            });
+
+            // 2. Chat body text/input fades in midway through the morph
+            chatBodyOpacity.value = withDelay(MORPH_IN_DURATION * 0.3, withTiming(1, {
+                duration: MORPH_IN_DURATION * 0.8,
+                easing: Easing.out(Easing.quad)
+            }));
+        }
+    }, [sourceY]);
+
+    useEffect(() => {
+        const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+        const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+        const onShow = (event: KeyboardEvent) => {
+            const rawHeight = event.endCoordinates?.height || 0;
+            const height = IS_IOS
+                ? Math.max(0, rawHeight - IOS_KEYBOARD_SAFE_ADJUST)
+                : rawHeight;
+            const duration = event.duration || 250;
+            keyboardOffset.value = withTiming(height, { duration });
+        };
+
+        const onHide = () => {
+            keyboardOffset.value = withTiming(0, { duration: 200 });
+        };
+
+        const showSub = Keyboard.addListener(showEvent, onShow);
+        const hideSub = Keyboard.addListener(hideEvent, onHide);
+
+        return () => {
+            showSub.remove();
+            hideSub.remove();
+        };
+    }, [keyboardOffset]);
+
+    const navigation = useNavigation();
+
+    // Cleanup when back morph finishes
+    const finishBack = useCallback(() => {
+        if (onBack) {
+            onBack();
+        } else if (navigation.canGoBack()) {
+            navigation.goBack();
+        } else {
+            console.warn('Navigation: Cannot go back, history stack is empty.');
+        }
+    }, [onBack, navigation]);
+
+    // Animate OUT — butter smooth unified morph back to pill
+    const handleBack = useCallback(() => {
+        if (onBackStart) onBackStart();
+
+        // Shape morph: full screen → pill (single driver for everything)
+        morphProgress.value = withTiming(0, {
+            duration: MORPH_OUT_DURATION,
+            easing: MORPH_OUT_EASING,
+        }, (finished) => {
+            if (finished) runOnJS(finishBack)();
+        });
+
+        // Content fades out quickly before the pill gets too small
+        chatBodyOpacity.value = withTiming(0, {
+            duration: MORPH_OUT_DURATION * 0.35,
+            easing: Easing.out(Easing.quad),
+        });
+
+        // Backdrop fades in sync with morph
+        screenBgOpacity.value = withTiming(0, {
+            duration: MORPH_OUT_DURATION,
+            easing: MORPH_OUT_EASING,
+        });
+    }, [onBackStart, finishBack, morphProgress, chatBodyOpacity, screenBgOpacity]);
+
+    // Animation Values
     const plusRotation = useSharedValue(0);
     const optionsHeight = useSharedValue(0);
     const optionsOpacity = useSharedValue(0);
-    
+    const modalAnim = useRef(new RNAnimated.Value(0)).current;
+
+    // Refs
+    const flatListRef = useRef<FlatList>(null);
+    const hasScrolledInitial = useRef(false);
+    const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const [replyingTo, setReplyingTo] = useState<any>(null);
+    const [selectedContextMessage, setSelectedContextMessage] = useState<{ msg: any, layout: any } | null>(null);
+    const [showMusicPlayer, setShowMusicPlayer] = useState(false);
+
+    // Derived State
+    const contact = contacts.find(c => c.id === id);
+    const chatMessages = messages[id || ''] || [];
+    const isTyping = contact ? typingUsers.includes(contact.id) : false;
+
     // Toggle Options Menu
     const toggleOptions = () => {
         if (isExpanded) {
@@ -269,18 +807,28 @@ export default function SingleChatScreen() {
     // Media picker state
     const [showMediaPicker, setShowMediaPicker] = useState(false);
     const [mediaPreview, setMediaPreview] = useState<{ uri: string; type: 'image' | 'video' | 'audio' } | null>(null);
-    const [playerMedia, setPlayerMedia] = useState<{ url: string; type: 'image' | 'video' | 'audio'; caption?: string } | null>(null);
+    const [mediaCollection, setMediaCollection] = useState<{ messageId: string; items: ChatMediaItem[]; startIndex: number } | null>(null);
+    const [mediaViewer, setMediaViewer] = useState<{ messageId: string; items: ChatMediaItem[]; index: number } | null>(null);
+    const [mediaItemReactions, setMediaItemReactions] = useState<Record<string, string[]>>({});
     const [isUploading, setIsUploading] = useState(false);
 
 
 
+    // Instant scroll to latest message when new messages arrive (animated)
+    const prevMsgCount = useRef(chatMessages.length);
     useEffect(() => {
-        if (chatMessages.length > 0) {
+        if (chatMessages.length > prevMsgCount.current) {
             setTimeout(() => {
-                flatListRef.current?.scrollToEnd({ animated: true });
+                flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
             }, 100);
         }
+        prevMsgCount.current = chatMessages.length;
     }, [chatMessages.length]);
+
+    // Handle content size change if needed (but inverted handles most cases)
+    const handleContentSizeChange = useCallback(() => {
+        // Naturally starts at index 0 (bottom) when inverted
+    }, []);
 
     const openCallModal = () => {
         // Measure call button position
@@ -312,27 +860,37 @@ export default function SingleChatScreen() {
     const handleSend = () => {
         if (!inputText.trim() || !id) return;
 
-        // Stop typing immediately when sending
         if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
         sendTyping(false);
 
         const content = inputText.trim();
         setInputText('');
-        setReplyingTo(null);
 
-        // Send message via real-time ChatService
-        sendChatMessage(id, content, undefined);
+        const replyToId = replyingTo ? replyingTo.id : undefined;
+        sendChatMessage(id, content, undefined, replyToId);
+
+        setReplyingTo(null);
     };
 
     const handleReaction = (emoji: string) => {
-        if (selectedMsgId && id) {
-            if (emoji === 'delete') {
-                deleteMessage(id, selectedMsgId);
-            } else {
-                addReaction(id, selectedMsgId, emoji);
+        if (selectedContextMessage && id) {
+            addReaction(id, selectedContextMessage.msg.id, emoji);
+        }
+    };
+
+    const handleAction = (action: string) => {
+        if (selectedContextMessage && id) {
+            if (action === 'delete') {
+                deleteMessage(id, selectedContextMessage.msg.id);
+            } else if (action === 'reply') {
+                setReplyingTo(selectedContextMessage.msg);
+            } else if (action === 'pin') {
+                // Future Implementation
+            } else if (action === 'forward') {
+                // Future Implementation
             }
         }
-        setSelectedMsgId(null);
+        setSelectedContextMessage(null);
     };
 
     const handleDoubleTap = (msgId: string) => {
@@ -341,27 +899,77 @@ export default function SingleChatScreen() {
         }
     };
 
-    const handleMediaTap = (media: any) => {
-        if (!media) return;
-        setPlayerMedia({
-            url: media.url,
-            type: media.type,
-            caption: media.caption,
-        });
+    const handleMediaTap = (payload: any) => {
+        if (!payload?.mediaItems?.length) return;
+        const nextViewer = {
+            messageId: payload.messageId,
+            items: payload.mediaItems,
+            index: payload.index || 0,
+        };
+        if (payload.openGallery) {
+            setMediaCollection({
+                messageId: payload.messageId,
+                items: payload.mediaItems,
+                startIndex: payload.index || 0,
+            });
+            return;
+        }
+        setMediaViewer(nextViewer);
+    };
+
+    const addReactionToMedia = (messageId: string, mediaIndex: number, emoji: string) => {
+        const key = `${messageId}:${mediaIndex}`;
+        setMediaItemReactions(prev => ({
+            ...prev,
+            [key]: [...(prev[key] || []), emoji],
+        }));
+    };
+
+    const handleReactAllMedia = (messageId: string, emoji: string) => {
+        if (!id) return;
+        addReaction(id, messageId, emoji);
+    };
+
+    const handleSaveCurrentMedia = async () => {
+        if (!mediaViewer) return;
+        const current = mediaViewer.items[mediaViewer.index];
+        if (!current?.url) return;
+
+        try {
+            const permission = await MediaLibrary.requestPermissionsAsync();
+            if (permission.status !== 'granted') {
+                Alert.alert('Permission Required', 'Allow media library access to save files.');
+                return;
+            }
+
+            let localUri = current.url;
+            if (!current.url.startsWith('file://')) {
+                const extension = current.type === 'video' ? '.mp4' : '.jpg';
+                const target = `${FileSystem.cacheDirectory}soulsync_${Date.now()}${extension}`;
+                const downloaded = await FileSystem.downloadAsync(current.url, target);
+                localUri = downloaded.uri;
+            }
+
+            await MediaLibrary.saveToLibraryAsync(localUri);
+            Alert.alert('Saved', 'Media saved to your gallery.');
+        } catch (error) {
+            Alert.alert('Save Failed', 'Could not save this media.');
+        }
     };
 
     const renderMessage = useCallback(({ item }: { item: any }) => (
         <MessageBubble
             msg={item}
-            isSelected={selectedMsgId === item.id}
-            onLongPress={(mid: string) => setSelectedMsgId(mid)}
+            contactName={contact?.name || 'Them'}
+            isSelected={selectedContextMessage?.msg.id === item.id}
+            onLongPress={(mid: string, layout: any) => setSelectedContextMessage({ msg: item, layout })}
             onReply={(m: any) => setReplyingTo(m)}
             onReaction={handleReaction}
             onDoubleTap={handleDoubleTap}
             onMediaTap={handleMediaTap}
             quotedMessage={item.replyTo ? chatMessages.find((m: any) => m.id === item.replyTo) : null}
         />
-    ), [selectedMsgId, chatMessages]);
+    ), [selectedContextMessage, chatMessages, contact?.name, handleMediaTap]);
 
     // Media picker handlers
     const handleSelectCamera = async () => {
@@ -441,196 +1049,212 @@ export default function SingleChatScreen() {
     }
 
     return (
-        <KeyboardAvoidingView
-            style={styles.container}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            keyboardVerticalOffset={0}
-        >
+        <View style={styles.container}>
             <StatusBar barStyle="light-content" />
 
-            {/* Header */}
-            <BlurView intensity={100} tint="dark" style={styles.header}>
-                <Pressable onPress={() => router.back()} style={styles.backButton}>
-                    <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
-                </Pressable>
+            {/* Full-screen black backdrop — prevents home screen bleed-through during back morph */}
+            <Animated.View style={screenBgStyle} pointerEvents="none" />
 
-                <Pressable style={styles.avatarWrapper} onPress={() => router.push(`/profile/${contact.id}` as any)}>
-                    <Image source={{ uri: contact.avatar }} style={styles.avatar} />
-                    {contact.status === 'online' && <View style={styles.onlineIndicator} />}
-                </Pressable>
+            {/* Unified Morph Container — pill ↔ full screen as ONE element */}
+            <Animated.View style={fullScreenMorphStyle}>
 
-                <View style={styles.headerInfo}>
-                    <Text style={styles.contactName}>{contact.name}</Text>
-                    {musicState.currentSong ? (
-                        <View style={styles.nowPlayingStatus}>
-                            <MaterialIcons name="library-music" size={10} color={activeTheme.primary} />
-                            <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
-                                {sanitizeSongTitle(musicState.currentSong.name)}
-                            </Text>
-                        </View>
-                    ) : (
-                        <Text style={[styles.statusText, { color: 'rgba(255,255,255,0.5)' }]}>
-                            {contact.status === 'online' ? 'ONLINE' : 'OFFLINE'}
-                        </Text>
-                    )}
-                </View>
+                {/* Chat body — fades in/out within the morph container */}
+                <Animated.View style={[StyleSheet.absoluteFill, chatBodyAnimStyle]}>
 
-                {/* Music Button - Navigates to 3D Music Screen */}
-                <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
-                    <MaterialIcons name="library-music" size={20} color={activeTheme.primary} />
-                </Pressable>
-
-                {/* Call Button */}
-                <View ref={callButtonRef} collapsable={false}>
-                    <Pressable style={styles.headerButton} onPress={openCallModal}>
-                        <MaterialIcons name="call" size={20} color={activeTheme.primary} />
-                    </Pressable>
-                </View>
-            </BlurView>
-
-            {/* Messages */}
-            <FlatList
-                ref={flatListRef}
-                data={chatMessages}
-                keyExtractor={item => item.id}
-                renderItem={renderMessage}
-                style={styles.messagesList}
-                contentContainerStyle={styles.messagesContent}
-                showsVerticalScrollIndicator={false}
-                ListEmptyComponent={
-                    <View style={styles.emptyChat}>
-                        <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.1)" />
-                        <Text style={styles.emptyChatText}>No messages yet</Text>
-                        <Text style={styles.emptyChatHint}>Say hi to {contact.name}!</Text>
-                    </View>
-                }
-            />
-
-            {/* iOS-style Header Scroll Blur Effect */}
-            <LinearGradient
-                colors={['rgba(0, 0, 0, 0.98)', 'rgba(0, 0, 0, 0.85)', 'rgba(0, 0, 0, 0.65)', 'rgba(0, 0, 0, 0.4)', 'rgba(0, 0, 0, 0.15)', 'rgba(0, 0, 0, 0.05)', 'transparent']}
-                locations={[0, 0.15, 0.3, 0.5, 0.7, 0.85, 1]}
-                style={styles.headerScrollBlur}
-                pointerEvents="none"
-            />
-
-            {/* Typing Indicator */}
-            {isTyping && (
-                <View style={styles.typingContainer}>
-                    <Text style={[styles.typingText, { color: activeTheme.primary }]}>typing...</Text>
-                </View>
-            )}
-
-            {/* Reply Preview */}
-            {replyingTo && (
-                <BlurView intensity={60} tint="dark" style={styles.replyPreview}>
-                    <View style={styles.replyContent}>
-                        <View style={styles.quoteBar} />
-                        <View style={styles.replyTextContainer}>
-                            <Text style={styles.replySender}>REPLYING TO</Text>
-                            <Text numberOfLines={1} style={styles.replyText}>{replyingTo.text}</Text>
-                        </View>
-                    </View>
-                    <Pressable onPress={() => setReplyingTo(null)}>
-                        <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
-                    </Pressable>
-                </BlurView>
-            )}
-
-            {/* Input Area */}
-            <View style={styles.inputArea}>
-                <LinearGradient
-                    colors={['transparent', 'rgba(0,0,0,0.2)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.8)', '#000000']}
-                    locations={[0, 0.2, 0.50, 0.60, 0.8]}
-                    style={StyleSheet.absoluteFill}
-                    pointerEvents="none"
-                />
-                {/* Unified Pill Container */}
-                <View style={styles.unifiedPillContainer}>
-                    <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
-                    
-                    <View style={styles.inputWrapper}>
-                        {/* + Button on left inside */}
-                        <Pressable style={styles.attachButton} onPress={toggleOptions}>
-                            <Animated.View style={animatedPlusStyle}>
-                                <MaterialIcons name="add" size={20} color="rgba(255,255,255,0.7)" />
-                            </Animated.View>
-                        </Pressable>
-
-                        <TextInput
-                            style={styles.input}
-                            value={inputText}
-                            onChangeText={(text) => {
-                                setInputText(text);
-                                
-                                // Typing indicator logic
-                                sendTyping(true);
-                                
-                                if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-                                typingTimeoutRef.current = setTimeout(() => {
-                                    sendTyping(false);
-                                }, 2000);
-                            }}
-                            onFocus={handleFocus}
-                            placeholder="Sync fragment..."
-                            placeholderTextColor="rgba(255,255,255,0.3)"
-                            multiline
-                            maxLength={1000}
+                {/* Chat content - Deferred Rendering for Performance */}
+                {isReady && (
+                    <View style={{ flex: 1 }}>
+                        {/* Messages */}
+                        <FlatList
+                            ref={flatListRef}
+                            data={[...chatMessages].reverse()}
+                            inverted
+                            keyExtractor={item => item.id}
+                            renderItem={renderMessage}
+                            style={styles.messagesList}
+                            contentContainerStyle={styles.messagesContent}
+                            showsVerticalScrollIndicator={false}
+                            onContentSizeChange={handleContentSizeChange}
+                            // Performance Optimizations
+                            initialNumToRender={15}
+                            maxToRenderPerBatch={10}
+                            windowSize={5}
+                            removeClippedSubviews={Platform.OS === 'android'}
+                            ListEmptyComponent={
+                                <View style={styles.emptyChat}>
+                                    <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.1)" />
+                                    <Text style={styles.emptyChatText}>No messages yet</Text>
+                                    <Text style={styles.emptyChatHint}>Say hi to {contact.name}!</Text>
+                                </View>
+                            }
                         />
 
-                        {/* Emoji button (optional, can remove if not needed) */}
-                        <Pressable style={styles.emojiInputButton}>
-                            <MaterialIcons name="sentiment-satisfied" size={20} color="rgba(255,255,255,0.5)" />
-                        </Pressable>
+                        {/* iOS-style Progressive Blur Effects */}
+                        <ProgressiveBlur position="top" height={160} intensity={80} />
+                        <ProgressiveBlur position="bottom" height={200} intensity={80} />
 
-                        {/* Mic button on right inside */}
-                        <Pressable
-                            style={styles.sendButton}
-                            onPress={handleSend}
-                        >
-                            <MaterialIcons
-                                name={inputText.trim() ? 'arrow-upward' : 'mic'}
-                                size={18}
-                                color={inputText.trim() ? activeTheme.primary : 'rgba(255,255,255,0.7)'}
-                            />
-                        </Pressable>
+                        {/* Typing Indicator */}
+                        {isTyping && (
+                            <View style={styles.typingContainer}>
+                                <Text style={[styles.typingText, { color: activeTheme.primary }]}>typing...</Text>
+                            </View>
+                        )}
+
+                        {/* Input Area */}
+                        <Animated.View style={[styles.inputArea, inputAreaAnimatedStyle]}>
+                        {/* Reply Preview */}
+                        {replyingTo && (
+                            <BlurView intensity={60} tint="dark" style={styles.replyPreview}>
+                                <View style={styles.replyContent}>
+                                    <View style={styles.quoteBar} />
+                                    <View style={styles.replyTextContainer}>
+                                        <Text style={[styles.replySender, { color: activeTheme.primary }]}>REPLYING TO</Text>
+                                        <Text numberOfLines={1} style={styles.replyText}>{replyingTo.text}</Text>
+                                    </View>
+                                </View>
+                                <Pressable onPress={() => setReplyingTo(null)}>
+                                    <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
+                                </Pressable>
+                            </BlurView>
+                        )}
+                        {/* Unified Pill Container */}
+                        <View style={styles.unifiedPillContainer}>
+                            <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
+                            
+                            <View style={styles.inputWrapper}>
+                                {/* + Button on left inside */}
+                                <Pressable style={styles.attachButton} onPress={toggleOptions}>
+                                    <Animated.View style={animatedPlusStyle}>
+                                        <MaterialIcons name="add" size={20} color="rgba(255,255,255,0.7)" />
+                                    </Animated.View>
+                                </Pressable>
+
+                                <TextInput
+                                    style={styles.input}
+                                    value={inputText}
+                                    onChangeText={(text) => {
+                                        setInputText(text);
+                                        
+                                        // Typing indicator logic
+                                        sendTyping(true);
+                                        
+                                        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+                                        typingTimeoutRef.current = setTimeout(() => {
+                                            sendTyping(false);
+                                        }, 2000) as unknown as NodeJS.Timeout;
+                                    }}
+                                    onFocus={handleFocus}
+                                    placeholder="Sync fragment..."
+                                    placeholderTextColor="rgba(255,255,255,0.3)"
+                                    multiline
+                                    maxLength={1000}
+                                />
+
+                                {/* Emoji button (optional, can remove if not needed) */}
+                                <Pressable style={styles.emojiInputButton}>
+                                    <MaterialIcons name="sentiment-satisfied" size={20} color="rgba(255,255,255,0.5)" />
+                                </Pressable>
+
+                                {/* Mic button on right inside */}
+                                <Pressable
+                                    style={styles.sendButton}
+                                    onPress={handleSend}
+                                >
+                                    <MaterialIcons
+                                        name={inputText.trim() ? 'arrow-upward' : 'mic'}
+                                        size={18}
+                                        color={inputText.trim() ? activeTheme.primary : 'rgba(255,255,255,0.7)'}
+                                    />
+                                </Pressable>
+                            </View>
+
+                            {/* Expandable Options Menu - Now inside the pill */}
+                            <Animated.View style={[styles.optionsMenu, animatedOptionsStyle]}>
+                                 <Pressable style={styles.optionItem} onPress={handleSelectGallery}>
+                                    <View style={[styles.optionIcon, { backgroundColor: '#3b82f6' }]}>
+                                        <MaterialIcons name="image" size={24} color="white" />
+                                    </View>
+                                    <Text style={styles.optionText}>Gallery</Text>
+                                 </Pressable>
+                                 <Pressable style={styles.optionItem} onPress={handleSelectCamera}>
+                                    <View style={[styles.optionIcon, { backgroundColor: '#ef4444' }]}>
+                                        <MaterialIcons name="camera-alt" size={24} color="white" />
+                                    </View>
+                                    <Text style={styles.optionText}>Camera</Text>
+                                 </Pressable>
+                                 <Pressable style={styles.optionItem}>
+                                    <View style={[styles.optionIcon, { backgroundColor: '#a855f7' }]}>
+                                        <MaterialIcons name="location-pin" size={24} color="white" />
+                                    </View>
+                                    <Text style={styles.optionText}>Location</Text>
+                                 </Pressable>
+                                 <Pressable style={styles.optionItem}>
+                                    <View style={[styles.optionIcon, { backgroundColor: '#10b981' }]}>
+                                        <MaterialIcons name="person" size={24} color="white" />
+                                    </View>
+                                    <Text style={styles.optionText}>Contact</Text>
+                                 </Pressable>
+                            </Animated.View>
+                        </View>
+                        </Animated.View>
                     </View>
-                    
-                    {/* Expandable Options Menu - Now inside the pill */}
-                    <Animated.View style={[styles.optionsMenu, animatedOptionsStyle]}>
-                         <Pressable style={styles.optionItem} onPress={handleSelectGallery}>
-                            <View style={[styles.optionIcon, { backgroundColor: '#3b82f6' }]}>
-                                <MaterialIcons name="image" size={24} color="white" />
+                )}
+                </Animated.View>
+
+                {/* Header — floats at top inside the morph container, above chat body */}
+                <Animated.View style={[styles.headerWrapper, headerInternalStyle]}>
+                    <View style={styles.headerPill}>
+                        <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
+                        <View style={styles.header}>
+                            <Pressable onPress={handleBack} style={styles.backButton}>
+                                <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
+                            </Pressable>
+
+                            <Pressable style={styles.avatarWrapper} onPress={() => router.push(`/profile/${contact.id}` as any)}>
+                                <Image source={{ uri: contact.avatar }} style={styles.avatar} />
+                                {contact.status === 'online' && <View style={styles.onlineIndicator} />}
+                            </Pressable>
+
+                            <View style={styles.headerInfo}>
+                                <Text style={styles.contactName}>{contact.name}</Text>
+                                {musicState.currentSong ? (
+                                    <View style={styles.nowPlayingStatus}>
+                                        <MaterialIcons name="audiotrack" size={12} color={activeTheme.primary} />
+                                        <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
+                                            {sanitizeSongTitle(musicState.currentSong.name)}
+                                        </Text>
+                                    </View>
+                                ) : (
+                                    <Text style={[styles.statusText, { color: 'rgba(255,255,255,0.5)' }]}>
+                                        {contact.status === 'online' ? 'ONLINE' : 'OFFLINE'}
+                                    </Text>
+                                )}
                             </View>
-                            <Text style={styles.optionText}>Gallery</Text>
-                         </Pressable>
-                         <Pressable style={styles.optionItem} onPress={handleSelectCamera}>
-                            <View style={[styles.optionIcon, { backgroundColor: '#ef4444' }]}>
-                                <MaterialIcons name="camera-alt" size={24} color="white" />
+
+                            {/* Music Button */}
+                            <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
+                                <MaterialIcons name="audiotrack" size={20} color={activeTheme.primary} />
+                            </Pressable>
+
+                            {/* Call Button */}
+                            <View ref={callButtonRef} collapsable={false}>
+                                <Pressable style={styles.headerButton} onPress={openCallModal}>
+                                    <MaterialIcons name="call" size={20} color={activeTheme.primary} />
+                                </Pressable>
                             </View>
-                            <Text style={styles.optionText}>Camera</Text>
-                         </Pressable>
-                         <Pressable style={styles.optionItem}>
-                            <View style={[styles.optionIcon, { backgroundColor: '#a855f7' }]}>
-                                <MaterialIcons name="location-pin" size={24} color="white" />
-                            </View>
-                            <Text style={styles.optionText}>Location</Text>
-                         </Pressable>
-                         <Pressable style={styles.optionItem}>
-                            <View style={[styles.optionIcon, { backgroundColor: '#10b981' }]}>
-                                <MaterialIcons name="person" size={24} color="white" />
-                            </View>
-                            <Text style={styles.optionText}>Contact</Text>
-                         </Pressable>
-                    </Animated.View>
-                </View>
-            </View>
+                        </View>
+                    </View>
+                </Animated.View>
+            </Animated.View>
 
             {/* Reaction Modal */}
-            <ReactionModal
-                visible={!!selectedMsgId}
-                onClose={() => setSelectedMsgId(null)}
-                onSelect={handleReaction}
+            <MessageContextMenu
+                visible={!!selectedContextMessage}
+                msg={selectedContextMessage?.msg}
+                layout={selectedContextMessage?.layout}
+                onClose={() => setSelectedContextMessage(null)}
+                onReaction={handleReaction}
+                onAction={handleAction}
             />
 
             {/* Call Options Dropdown */}
@@ -685,6 +1309,10 @@ export default function SingleChatScreen() {
                 onSelectCamera={handleSelectCamera}
                 onSelectGallery={handleSelectGallery}
                 onSelectAudio={handleSelectAudio}
+                onSelectNote={() => {
+                    setShowMediaPicker(false);
+                    Alert.alert("SoulSync Notes", "Leave a note from the Home screen!");
+                }}
             />
 
             {/* Media Preview Modal */}
@@ -697,46 +1325,150 @@ export default function SingleChatScreen() {
                 isUploading={isUploading}
             />
 
-            {/* Media Player Modal */}
-            <MediaPlayerModal
-                visible={!!playerMedia}
-                mediaUrl={playerMedia?.url || ''}
-                mediaType={playerMedia?.type || 'image'}
-                caption={playerMedia?.caption}
-                onClose={() => setPlayerMedia(null)}
-            />
+            {/* Media Collection Modal */}
+            <Modal
+                visible={!!mediaCollection}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setMediaCollection(null)}
+            >
+                <View style={styles.mediaCollectionOverlay}>
+                    <View style={styles.mediaCollectionHeader}>
+                        <Text style={styles.mediaCollectionTitle}>Media</Text>
+                        <Pressable onPress={() => setMediaCollection(null)} style={styles.mediaCollectionCloseBtn}>
+                            <MaterialIcons name="close" size={22} color="#fff" />
+                        </Pressable>
+                    </View>
 
-        </KeyboardAvoidingView>
+                    <FlatList
+                        data={mediaCollection?.items || []}
+                        keyExtractor={(item, index) => `${item.url}-${index}`}
+                        numColumns={3}
+                        contentContainerStyle={styles.mediaCollectionGrid}
+                        renderItem={({ item, index }) => (
+                            <Pressable
+                                style={styles.mediaCollectionTile}
+                                onPress={() => {
+                                    if (!mediaCollection) return;
+                                    setMediaCollection(null);
+                                    setMediaViewer({
+                                        messageId: mediaCollection.messageId,
+                                        items: mediaCollection.items,
+                                        index,
+                                    });
+                                }}
+                            >
+                                <Image source={{ uri: item.url }} style={styles.mediaCollectionImage} />
+                                {item.type === 'video' && (
+                                    <View style={styles.mediaCollectionVideoBadge}>
+                                        <MaterialIcons name="play-arrow" size={18} color="#fff" />
+                                    </View>
+                                )}
+                            </Pressable>
+                        )}
+                    />
+
+                    {!!mediaCollection?.messageId && (
+                        <View style={styles.mediaCollectionReactionBar}>
+                            {['❤️', '🔥', '😂'].map(emoji => (
+                                <Pressable
+                                    key={emoji}
+                                    style={styles.mediaCollectionReactionBtn}
+                                    onPress={() => handleReactAllMedia(mediaCollection.messageId, emoji)}
+                                >
+                                    <Text style={styles.mediaCollectionReactionText}>{emoji}</Text>
+                                </Pressable>
+                            ))}
+                        </View>
+                    )}
+                </View>
+            </Modal>
+
+            {/* Single Media Viewer */}
+            <Modal
+                visible={!!mediaViewer}
+                transparent={false}
+                animationType="fade"
+                onRequestClose={() => setMediaViewer(null)}
+            >
+                <View style={styles.mediaViewerContainer}>
+                    <Pressable style={styles.mediaViewerCloseBtn} onPress={() => setMediaViewer(null)}>
+                        <MaterialIcons name="close" size={24} color="#fff" />
+                    </Pressable>
+                    <Pressable style={styles.mediaViewerSaveBtn} onPress={handleSaveCurrentMedia}>
+                        <MaterialIcons name="download" size={22} color="#fff" />
+                    </Pressable>
+
+                    {mediaViewer && mediaViewer.items[mediaViewer.index]?.type === 'video' ? (
+                        <Video
+                            source={{ uri: mediaViewer.items[mediaViewer.index].url }}
+                            style={styles.mediaViewerMedia}
+                            resizeMode={ResizeMode.CONTAIN}
+                            shouldPlay
+                            useNativeControls
+                        />
+                    ) : (
+                        <Image
+                            source={{ uri: mediaViewer?.items[mediaViewer?.index || 0]?.url || '' }}
+                            style={styles.mediaViewerMedia}
+                            resizeMode="contain"
+                        />
+                    )}
+
+                    {mediaViewer && (
+                        <View style={styles.mediaViewerBottom}>
+                            <View style={styles.mediaViewerReactionsRow}>
+                                {['❤️', '🔥', '😂'].map(emoji => (
+                                    <Pressable
+                                        key={emoji}
+                                        style={styles.mediaViewerReactionBtn}
+                                        onPress={() => addReactionToMedia(mediaViewer.messageId, mediaViewer.index, emoji)}
+                                    >
+                                        <Text style={styles.mediaViewerReactionText}>{emoji}</Text>
+                                    </Pressable>
+                                ))}
+                            </View>
+
+                            <Text style={styles.mediaViewerReactionList}>
+                                {(mediaItemReactions[`${mediaViewer.messageId}:${mediaViewer.index}`] || []).join(' ')}
+                            </Text>
+                        </View>
+                    )}
+                </View>
+            </Modal>
+
+        </View>
     );
 }
 
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#000000',
+        backgroundColor: 'transparent',
+    },
+    headerWrapper: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 100,
+    },
+    headerPill: {
+        height: 72,
+        borderRadius: 36,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.08)',
+        backgroundColor: 'rgba(30, 30, 35, 0.4)',
     },
     header: {
-        position: 'absolute',
-        top: 50,
-        left: 20,
-        right: 20,
-        zIndex: 100,
-        backgroundColor: '#151515',
-        borderRadius: 40,
+        backgroundColor: 'transparent', // Transparent content layer
         paddingHorizontal: 16,
         paddingVertical: 10,
         flexDirection: 'row',
         alignItems: 'center',
-        borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.1)',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.5,
-        shadowRadius: 20,
-        elevation: 10,
         gap: 12,
-        height: 70,
-        overflow: 'hidden',
+        height: 72,
     },
     backButton: {
         padding: 4,
@@ -796,14 +1528,17 @@ const styles = StyleSheet.create({
     },
     messagesContent: {
         paddingHorizontal: 16,
-        paddingTop: 130, // Header height (60) + Top (60) + Buffer (10)
-        paddingBottom: 120, // Increased for floating input
+        paddingTop: 170, // Inverted list: this acts as visual bottom padding above input
+        paddingBottom: 130, // Swapped for inverted
         flexGrow: 1,
     },
     messageWrapper: {
         width: '100%',
-        marginBottom: 12,
+        marginBottom: 8,
         alignItems: 'flex-start',
+    },
+    messageWrapperWithReactions: {
+        marginBottom: 22,
     },
     messageWrapperMe: {
         alignItems: 'flex-end',
@@ -822,7 +1557,8 @@ const styles = StyleSheet.create({
         // Shared value handles this
     },
     bubbleContainer: {
-        maxWidth: '75%',
+        maxWidth: '82%',
+        minWidth: 72,
         borderRadius: 24,
         overflow: 'hidden',
         position: 'relative',
@@ -831,6 +1567,19 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.2,
         shadowRadius: 10,
         elevation: 3,
+    },
+    bubbleContainerWithQuote: {
+        minWidth: '70%',
+    },
+    bubbleContainerMediaOnly: {
+        borderRadius: 14,
+        borderTopLeftRadius: 14,
+        borderTopRightRadius: 14,
+        borderBottomLeftRadius: 14,
+        borderBottomRightRadius: 14,
+        shadowOpacity: 0,
+        shadowRadius: 0,
+        elevation: 0,
     },
     bubbleContainerMe: {
         borderBottomRightRadius: 10,
@@ -850,12 +1599,16 @@ const styles = StyleSheet.create({
         pointerEvents: 'none',
     },
     messageContent: {
-        padding: 12,
+        padding: 10,
         paddingHorizontal: 14,
-        paddingBottom: 8,
+        paddingBottom: 12,
         zIndex: 2,
         overflow: 'hidden',
         borderRadius: 24,
+    },
+    messageContentMediaOnly: {
+        padding: 0,
+        position: 'relative',
     },
     quotedContainer: {
         flexDirection: 'row',
@@ -864,16 +1617,17 @@ const styles = StyleSheet.create({
         padding: 10,
         backgroundColor: 'rgba(0,0,0,0.15)',
         borderRadius: 10,
+        alignSelf: 'stretch',
         borderLeftWidth: 3,
-        borderLeftColor: 'rgba(255,255,255,0.3)',
+        borderLeftColor: 'rgba(255,255,255,0.45)',
     },
     quotedMe: {
         backgroundColor: 'rgba(255,255,255,0.15)',
-        borderLeftColor: '#ffffff',
+        borderLeftColor: 'rgba(255,255,255,0.85)',
     },
     quotedThem: {
         backgroundColor: 'rgba(0,0,0,0.15)',
-        borderLeftColor: '#F50057',
+        borderLeftColor: 'rgba(245, 0, 87, 0.9)',
     },
     quoteBar: {
         width: 3,
@@ -881,24 +1635,64 @@ const styles = StyleSheet.create({
     },
     quoteContent: {
         flex: 1,
+        minWidth: 0,
     },
     quoteSender: {
         fontSize: 12,
         fontWeight: '700',
         letterSpacing: 0.5,
         marginBottom: 3,
+        lineHeight: 14,
+        flexShrink: 1,
     },
     quoteText: {
         fontSize: 13,
         lineHeight: 18,
+        flexShrink: 1,
+        flexWrap: 'wrap',
     },
-    mediaImage: {
-        width: 220,
-        height: 220,
+    mediaSingle: {
+        width: Math.min(SCREEN_WIDTH * 0.56, 250),
+        aspectRatio: 1,
+        borderRadius: 0,
+    },
+    mediaSingleNoGap: {
+        marginBottom: 0,
+    },
+    mediaSurface: {
+        borderRadius: 14,
+        overflow: 'hidden',
+        borderWidth: 1,
+    },
+    mediaSurfaceMe: {
+        borderColor: 'rgba(245, 0, 87, 0.58)',
+    },
+    mediaSurfaceThem: {
+        borderColor: 'rgba(255,255,255,0.16)',
+    },
+    mediaGridSurface: {
+        width: Math.min(SCREEN_WIDTH * 0.58, 252),
+    },
+    mediaGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 4,
+    },
+    mediaGridNoGap: {
+        marginBottom: 0,
+    },
+    mediaGridTile: {
+        width: (Math.min(SCREEN_WIDTH * 0.58, 252) - 4) / 2,
+        aspectRatio: 1,
         borderRadius: 12,
-        marginBottom: 8,
+        overflow: 'hidden',
+        backgroundColor: 'rgba(255,255,255,0.08)',
     },
-    playIconOverlay: {
+    mediaGridImage: {
+        width: '100%',
+        height: '100%',
+    },
+    mediaTilePlayOverlay: {
         position: 'absolute',
         top: 0,
         left: 0,
@@ -908,6 +1702,17 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         backgroundColor: 'rgba(0,0,0,0.3)',
         borderRadius: 12,
+    },
+    mediaMoreOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    mediaMoreText: {
+        color: '#fff',
+        fontSize: 28,
+        fontWeight: '700',
     },
     audioWaveform: {
         flexDirection: 'row',
@@ -934,10 +1739,11 @@ const styles = StyleSheet.create({
     messageText: {
         color: 'rgba(229, 229, 229, 1)',
         fontSize: 14,
-        lineHeight: 20,
+        lineHeight: 19,
         fontWeight: '300',
-        letterSpacing: 0.2,
-        marginBottom: 0,
+        letterSpacing: 0,
+        marginBottom: 1,
+        flexShrink: 1,
     },
     messageTextMe: {
         color: '#ffffff',
@@ -948,7 +1754,19 @@ const styles = StyleSheet.create({
         justifyContent: 'flex-end',
         alignItems: 'center',
         gap: 3,
-        marginTop: 4,
+        marginTop: 6,
+        minHeight: 14,
+        alignSelf: 'flex-end',
+    },
+    messageFooterMediaOnly: {
+        position: 'absolute',
+        right: 18,
+        bottom: 17,
+        marginTop: 0,
+        minHeight: 18,
+        paddingHorizontal: 7,
+        borderRadius: 10,
+        backgroundColor: 'rgba(0,0,0,0.35)',
     },
     timestamp: {
         color: 'rgba(255,255,255,0.4)',
@@ -1013,7 +1831,6 @@ const styles = StyleSheet.create({
         letterSpacing: 4,
     },
     replyPreview: {
-        marginHorizontal: 16,
         marginBottom: 8,
         borderRadius: 16,
         padding: 12,
@@ -1033,7 +1850,6 @@ const styles = StyleSheet.create({
     replySender: {
         fontSize: 8,
         fontWeight: '900',
-        color: '#f43f5e', // TODO: Make dynamic via style injection if possible, or leave as default brand color
         letterSpacing: 2,
     },
     replyText: {
@@ -1042,14 +1858,14 @@ const styles = StyleSheet.create({
     },
     inputArea: {
         position: 'absolute',
-        bottom: 0,
         left: 0,
         right: 0,
+        bottom: 0,
         paddingHorizontal: 16,
-        paddingTop: 160, // Significantly extended for "long fade"
-        paddingBottom: Platform.OS === 'ios' ? 32 : 16,
+        paddingTop: 10,
+        paddingBottom: Platform.OS === 'ios' ? 23 : 23,
         backgroundColor: 'transparent',
-        zIndex: 60, // Ensure it floats above messages
+        zIndex: 60,
     },
     unifiedPillContainer: {
         backgroundColor: 'rgba(30, 30, 35, 0.4)',
@@ -1109,46 +1925,78 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         marginTop: 100,
     },
-    // Reaction Modal
-    reactionModalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.6)',
-        justifyContent: 'center',
-        alignItems: 'center',
+    headerScrollBlur: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 140, // Height to cover header and status bar
+        zIndex: 90,
     },
-    reactionModalContent: {
-        width: '80%',
-        backgroundColor: '#1a1a1a',
-        borderRadius: 20,
-        padding: 20,
-        overflow: 'hidden',
+    bottomScrollBlur: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: 180, // Height to cover input area's float zone
+        zIndex: 50,
     },
-    emojiBar: {
+    // Context Menu Styles
+    contextEmojiBar: {
         flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 20,
-    },
-    emojiButton: {
-        padding: 8,
-        borderRadius: 8,
-        backgroundColor: 'rgba(255,255,255,0.05)',
-    },
-    emojiText: {
-        fontSize: 24,
-    },
-    deleteButton: {
-        flexDirection: 'row',
+        backgroundColor: '#2a2a2a',
+        borderRadius: 30,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
         alignItems: 'center',
-        justifyContent: 'center',
-        padding: 12,
-        backgroundColor: 'rgba(239, 68, 68, 0.1)',
-        borderRadius: 12,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.5,
+        shadowRadius: 15,
+        elevation: 10,
         gap: 8,
     },
-    deleteText: {
-        color: '#ef4444',
+    contextEmojiBtn: {
+        paddingHorizontal: 4,
+    },
+    contextEmojiTail: {
+        position: 'absolute',
+        bottom: -5,
+        width: 13,
+        height: 13,
+        backgroundColor: 'rgba(30,30,30,0.5)',
+        overflow: 'hidden',
+        borderLeftWidth: 1,
+        borderTopWidth: 1,
+        borderColor: 'rgba(255,255,255,0.05)',
+        transform: [{ rotate: '45deg' }],
+    },
+    contextActionMenu: {
+        backgroundColor: '#1e1e1e',
+        borderRadius: 18,
+        width: 200,
+        overflow: 'hidden',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.5,
+        shadowRadius: 15,
+        elevation: 10,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.05)',
+    },
+    contextActionBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 14,
+        paddingHorizontal: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: 'rgba(255,255,255,0.03)',
+        gap: 14,
+    },
+    contextActionText: {
+        color: '#fff',
         fontSize: 16,
-        fontWeight: '600',
+        fontWeight: '500',
     },
     // Call Options Modal
     modalOverlay: {
@@ -1191,18 +2039,138 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(255,255,255,0.08)',
         marginHorizontal: 16,
     },
+    mediaCollectionOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.95)',
+        paddingTop: 56,
+    },
+    mediaCollectionHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingBottom: 14,
+    },
+    mediaCollectionTitle: {
+        color: '#fff',
+        fontSize: 18,
+        fontWeight: '700',
+    },
+    mediaCollectionCloseBtn: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.1)',
+    },
+    mediaCollectionGrid: {
+        paddingHorizontal: 10,
+        paddingBottom: 20,
+    },
+    mediaCollectionTile: {
+        width: (SCREEN_WIDTH - 20) / 3,
+        aspectRatio: 1,
+        padding: 2,
+    },
+    mediaCollectionImage: {
+        width: '100%',
+        height: '100%',
+        borderRadius: 6,
+    },
+    mediaCollectionVideoBadge: {
+        position: 'absolute',
+        bottom: 8,
+        right: 8,
+        width: 26,
+        height: 26,
+        borderRadius: 13,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0,0,0,0.55)',
+    },
+    mediaCollectionReactionBar: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        gap: 12,
+        paddingVertical: 12,
+        borderTopWidth: 1,
+        borderTopColor: 'rgba(255,255,255,0.1)',
+    },
+    mediaCollectionReactionBtn: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.08)',
+    },
+    mediaCollectionReactionText: {
+        fontSize: 20,
+    },
+    mediaViewerContainer: {
+        flex: 1,
+        backgroundColor: '#000',
+        justifyContent: 'center',
+    },
+    mediaViewerCloseBtn: {
+        position: 'absolute',
+        top: 50,
+        left: 16,
+        zIndex: 3,
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    mediaViewerSaveBtn: {
+        position: 'absolute',
+        top: 50,
+        right: 16,
+        zIndex: 3,
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    mediaViewerMedia: {
+        width: '100%',
+        height: '100%',
+    },
+    mediaViewerBottom: {
+        position: 'absolute',
+        left: 16,
+        right: 16,
+        bottom: 28,
+    },
+    mediaViewerReactionsRow: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    mediaViewerReactionBtn: {
+        width: 42,
+        height: 42,
+        borderRadius: 21,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.14)',
+    },
+    mediaViewerReactionText: {
+        fontSize: 20,
+    },
+    mediaViewerReactionList: {
+        marginTop: 8,
+        color: 'rgba(255,255,255,0.85)',
+        fontSize: 14,
+    },
     nowPlayingStatus: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 4,
-    },
-    headerScrollBlur: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        height: 280,
-        zIndex: 50,
     },
     optionsMenu: {
         width: '100%',

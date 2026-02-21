@@ -58,8 +58,50 @@ const INITIAL_CONTACTS: Contact[] = [
     name: 'SHRI',
     avatar: 'https://images.unsplash.com/photo-1531427186611-ecfd6d936c79?q=80&w=200&h=200&fit=crop',
     status: 'online',
-    lastMessage: '',
+    lastMessage: 'Check out this song!',
+    unreadCount: 2,
+    stories: [
+      {
+        id: 's1',
+        url: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=800&auto=format&fit=crop',
+        type: 'image',
+        timestamp: '10 min ago',
+        seen: false,
+      },
+      {
+        id: 's2',
+        url: 'https://images.unsplash.com/photo-1493225255756-d9584f8606e9?q=80&w=800&auto=format&fit=crop',
+        type: 'image',
+        timestamp: '1 hour ago',
+        seen: false,
+      }
+    ]
+  },
+  {
+    id: 'adarsh',
+    name: 'Adarsh',
+    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?q=80&w=200&h=200&fit=crop',
+    status: 'offline',
+    lastMessage: 'See you tomorrow',
     unreadCount: 0,
+    stories: []
+  },
+  {
+    id: 'priya',
+    name: 'Priya',
+    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=200&h=200&fit=crop',
+    status: 'online',
+    lastMessage: 'Awesome!',
+    unreadCount: 1,
+     stories: [
+      {
+        id: 's3',
+        url: 'https://images.unsplash.com/photo-1516280440614-6697288d5d38?q=80&w=800&auto=format&fit=crop',
+        type: 'image',
+        timestamp: '2 hours ago',
+        seen: true,
+      }
+    ]
   }
 ];
 

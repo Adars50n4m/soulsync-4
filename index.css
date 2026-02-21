@@ -1,0 +1,62 @@
+/* Shared Element Transition Styles */
+
+/* Pill Morph Transition - Smooth morphing animation */
+.pill-morph-enter {
+  opacity: 0;
+  transform: scale(0.9) translateY(20px);
+}
+
+.pill-morph-enter-active {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+  transition: opacity 0.4s cubic-bezier(0.2, 0.8, 0.2, 1),
+              transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.pill-morph-exit {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+
+.pill-morph-exit-active {
+  opacity: 0;
+  transform: scale(0.95) translateY(-10px);
+  transition: opacity 0.3s cubic-bezier(0.4, 0, 0.6, 1),
+              transform 0.3s cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+/* Avatar shared element transition */
+.avatar-shared {
+  transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Chat item expansion effect */
+.chat-item-expanded {
+  border-radius: 1.6rem;
+  transition: border-radius 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Smooth layout shift prevention */
+.layout-container {
+  contain: layout;
+  will-change: transform, opacity;
+}
+
+/* Framer Motion layout transition helper */
+[data-framer-motion-layout] {
+  will-change: transform, opacity;
+}
+
+/* Additional utility classes for transitions */
+.transition-smooth {
+  transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.transition-bounce {
+  transition: all 0.5s cubic-bezier(0.32, 1.5, 0.5, 1);
+}
+
+/* Prevent scroll during transition */
+.transitioning {
+  overflow: hidden;
+}

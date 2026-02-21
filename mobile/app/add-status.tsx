@@ -3,7 +3,7 @@ import {
     View, Text, Image, TextInput, Pressable, StyleSheet, Dimensions,
     StatusBar, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Modal, ScrollView
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useNavigation } from 'expo-router';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -20,6 +20,7 @@ const { width, height } = Dimensions.get('window');
 
 export default function AddStatusScreen() {
     const router = useRouter();
+    const navigation = useNavigation();
     const { addStatus, activeTheme, currentUser } = useApp();
     const [media, setMedia] = useState<{ uri: string; type: 'image' | 'video' } | null>(null);
     const [caption, setCaption] = useState('');
@@ -59,7 +60,7 @@ export default function AddStatusScreen() {
             });
         } else if (result.canceled && !media) {
             // If canceled and no media selected (initial state), go back
-            router.back();
+            if (navigation.canGoBack()) navigation.goBack();
         }
     };
 
@@ -67,7 +68,7 @@ export default function AddStatusScreen() {
         const permission = await ImagePicker.requestCameraPermissionsAsync();
         if (!permission.granted) {
             Alert.alert('Permission needed', 'Camera permission is required');
-            router.back();
+            if (navigation.canGoBack()) navigation.goBack();
             return;
         }
 
@@ -83,11 +84,11 @@ export default function AddStatusScreen() {
                     type: 'image',
                 });
             } else if (result.canceled && !media) {
-                 router.back();
+                 if (navigation.canGoBack()) navigation.goBack();
             }
         } catch (error) {
             Alert.alert('Camera Error', 'Could not open camera.');
-            if (!media) router.back();
+            if (!media && navigation.canGoBack()) navigation.goBack();
         }
     };
 
@@ -131,7 +132,7 @@ export default function AddStatusScreen() {
 
         setUploading(false);
         Alert.alert('Success', 'Status posted!');
-        router.back();
+        if (navigation.canGoBack()) navigation.goBack();
     };
 
     if (!media) {

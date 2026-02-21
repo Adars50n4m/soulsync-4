@@ -5,6 +5,13 @@ import { Message, Contact, StatusUpdate, CallLog, ActiveCall, Song, MusicState }
 import { musicSyncService, PlaybackState } from '../services/MusicSyncService';
 import { chatService, ChatMessage } from '../services/ChatService';
 import { callService, CallSignal } from '../services/CallService';
+import {
+    notificationService,
+    NOTIF_ACTION_ACCEPT_CALL,
+    NOTIF_ACTION_MARK_READ,
+    NOTIF_ACTION_REJECT_CALL,
+    NOTIF_ACTION_REPLY_MESSAGE
+} from '../services/NotificationService';
 import { webRTCService } from '../services/WebRTCService';
 import { supabase } from '../config/supabase';
 import { offlineService } from '../services/LocalDBService';
@@ -12,7 +19,7 @@ import { offlineService } from '../services/LocalDBService';
 if (!offlineService) {
     console.warn('[AppContext] LocalDBService failed to load. Check native modules.');
 }
-import { AppState, Alert } from 'react-native';
+import { AppState, Alert, Image } from 'react-native';
 import { socket } from '../src/webrtc/socket';
 
 export type ThemeName = 'midnight' | 'liquid-blue' | 'sunset' | 'emerald' | 'cyber' | 'amethyst';
@@ -38,6 +45,9 @@ interface User {
     name: string;
     avatar: string;
     bio: string;
+    birthdate?: string;
+    note?: string; // New field for SoulSync Notes
+    noteTimestamp?: string; // ISO date string
 }
 
 // Fixed Users - Shri and Hari
@@ -47,12 +57,14 @@ const USERS: Record<string, User> = {
         name: 'SHRI',
         avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=400&h=400&fit=crop',
         bio: '笨ｨ Connected through the stars',
+        birthdate: '2000-01-01',
     },
     'hari': {
         id: 'hari',
         name: 'HARI',
         avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=400&h=400&fit=crop',
         bio: '牒 Forever in sync',
+        birthdate: '2000-01-01',
     },
 };
 
@@ -106,9 +118,11 @@ interface AppContextType {
     seekTo: (position: number) => void;
     getPlaybackPosition: () => Promise<number>;
     sendChatMessage: (chatId: string, text: string, media?: Message['media'], replyTo?: string) => void;
-    updateProfile: (updates: { name?: string; bio?: string; avatar?: string }) => void;
+    updateProfile: (updates: { name?: string; bio?: string; avatar?: string; birthdate?: string; note?: string; noteTimestamp?: string }) => void;
     addStatusView: (statusId: string) => Promise<void>;
     sendTyping: (isTyping: boolean) => void;
+    saveNote: (text: string) => Promise<void>;
+    deleteNote: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -138,6 +152,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [sound, setSound] = useState<Audio.Sound | null>(null);
     const soundRef = useRef<Audio.Sound | null>(null);
     const musicStateRef = useRef(musicState);
+    const isSeekingRef = useRef(false);
 
     useEffect(() => { soundRef.current = sound; }, [sound]);
     useEffect(() => { musicStateRef.current = musicState; }, [musicState]);
@@ -246,27 +261,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     useEffect(() => {
         if (currentUser) {
             musicSyncService.initialize(currentUser.id, async (remoteState) => {
-                const currentMusicState = musicStateRef.current;
-                if (remoteState.currentSong?.id !== currentMusicState.currentSong?.id) {
-                    if (remoteState.currentSong) {
-                        await playSong(remoteState.currentSong, false);
-                    }
-                }
-                if (remoteState.isPlaying !== currentMusicState.isPlaying) {
-                    if (remoteState.isPlaying) {
-                        await soundRef.current?.playAsync();
-                    } else {
-                        await soundRef.current?.pauseAsync();
-                    }
-                    setMusicState(prev => ({ ...prev, isPlaying: remoteState.isPlaying }));
-                }
-                if (soundRef.current && remoteState.isPlaying) {
-                    const status = await soundRef.current.getStatusAsync();
-                    if (status.isLoaded) {
-                        const currentPos = status.positionMillis;
-                        if (Math.abs(currentPos - remoteState.position) > 2000) {
-                            await soundRef.current.setPositionAsync(remoteState.position);
+                try {
+                    const currentMusicState = musicStateRef.current;
+                    if (remoteState.currentSong?.id !== currentMusicState.currentSong?.id) {
+                        if (remoteState.currentSong) {
+                            await playSong(remoteState.currentSong, false);
                         }
+                    }
+                    if (remoteState.isPlaying !== currentMusicState.isPlaying) {
+                        if (remoteState.isPlaying) {
+                            await soundRef.current?.playAsync();
+                        } else {
+                            await soundRef.current?.pauseAsync();
+                        }
+                        setMusicState(prev => ({ ...prev, isPlaying: remoteState.isPlaying }));
+                    }
+                    if (soundRef.current && remoteState.isPlaying) {
+                        const status = await soundRef.current.getStatusAsync();
+                        if (status.isLoaded) {
+                            const currentPos = status.positionMillis;
+                            if (Math.abs(currentPos - remoteState.position) > 2000 && !isSeekingRef.current) {
+                                try {
+                                    isSeekingRef.current = true;
+                                    await soundRef.current.setPositionAsync(remoteState.position);
+                                } finally {
+                                    isSeekingRef.current = false;
+                                }
+                            }
+                        }
+                    }
+                } catch (e: any) {
+                    const message = String(e?.message || e || '');
+                    if (!message.toLowerCase().includes('seeking interrupted')) {
+                        console.warn('[MusicSync] Remote update failed:', e);
                     }
                 }
             });
@@ -307,7 +334,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                                 name: other.name,
                                 avatar: other.avatar,
                                 status: 'offline',
-                                bio: other.bio,
+                                about: other.bio || '',
                                 lastMessage: '',
                                 unreadCount: 0,
                             }]);
@@ -332,15 +359,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     ]);
                 }
 
-                const [storedTheme, storedFavorites] = await Promise.all([
+                const [storedTheme, storedFavorites, storedLastSong] = await Promise.all([
                     AsyncStorage.getItem('ss_theme'),
                     AsyncStorage.getItem(userId ? `ss_favorites_${userId}` : 'ss_favorites_none'),
+                    AsyncStorage.getItem(userId ? `ss_last_song_${userId}` : 'ss_last_song_none'),
                 ]);
 
                 if (storedTheme) setThemeState(storedTheme as ThemeName);
                 if (storedFavorites) {
                     try {
                         setMusicState(prev => ({ ...prev, favorites: JSON.parse(storedFavorites) }));
+                    } catch (e) {}
+                }
+
+                if (storedLastSong) {
+                    try {
+                        const song = JSON.parse(storedLastSong);
+                        setMusicState(prev => ({ ...prev, currentSong: song }));
+                        // We don't auto-play, just set as current
                     } catch (e) {}
                 }
                 
@@ -392,6 +428,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                             unreadCount: (c.unreadCount || 0) + 1
                         } : c
                     ));
+
+                    if (AppState.currentState !== 'active') {
+                        notificationService.showIncomingMessage({
+                            chatId: otherUser.id,
+                            senderId: otherUser.id,
+                            senderName: otherUser.name,
+                            text: incomingMessage.media ? 'Attachment' : incomingMessage.text,
+                            messageId: incomingMessage.id
+                        });
+                    }
                 },
                 (messageId: string, status: 'delivered' | 'read') => {
                     if (otherUser) {
@@ -637,7 +683,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 name: other.name,
                 avatar: other.avatar,
                 status: 'offline', // Default to offline, let socket update it
-                bio: other.bio,
+                about: other.bio || '',
                 lastMessage: 'Start a conversation',
                 unreadCount: 0,
             }]);
@@ -668,7 +714,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     ...prev,
                     name: data.name || prev.name,
                     avatar: data.avatar_url || prev.avatar,
-                    bio: data.bio || prev.bio
+                    bio: data.bio || prev.bio,
+                    note: data.note || prev.note,
+                    noteTimestamp: data.note_timestamp || prev.noteTimestamp
                 } : null);
             }
         } catch (e) { }
@@ -682,7 +730,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     id: userId,
                     name: data.name,
                     avatar: data.avatar_url,
-                    bio: data.bio,
+                    about: data.bio,
                     status: 'offline' as 'online' | 'offline', // Default, will be updated by socket
                     unreadCount: 0,
                     lastMessage: ''
@@ -698,7 +746,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     ...c,
                     name: data.name,
                     avatar: data.avatar_url,
-                    bio: data.bio
+                    about: data.bio
                 } : c));
             }
         } catch (e) {}
@@ -719,8 +767,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     text: dbRow.text,
                     timestamp: new Date(dbRow.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                     status: dbRow.status,
-                    media: dbRow.media_url ? { type: 'image', url: dbRow.media_url } : undefined,
-                    // TODO: Handle replyTo from DB if needed
+                    media: dbRow.media_url ? { type: dbRow.media_type || 'image', url: dbRow.media_url, caption: dbRow.media_caption } : undefined,
+                    replyTo: dbRow.reply_to_id?.toString(),
                 }));
 
                 // Save to Local DB
@@ -763,14 +811,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const playSong = async (song: Song, broadcast = true) => {
         try {
             if (!song.url || song.url.trim() === '') return;
+
+            // Ensure audio session is in media playback mode (not call/recording mode).
+            await Audio.setAudioModeAsync({
+                allowsRecordingIOS: false,
+                playsInSilentModeIOS: true,
+                staysActiveInBackground: true,
+                shouldDuckAndroid: true,
+                playThroughEarpieceAndroid: false,
+            });
+
             if (soundRef.current) {
                 try { await soundRef.current.unloadAsync(); } catch (e) {}
             }
             const { sound: newSound, status } = await Audio.Sound.createAsync(
                 { uri: song.url },
-                { shouldPlay: true, volume: 1.0 },
+                { shouldPlay: true, volume: 1.0, progressUpdateIntervalMillis: 500 },
                 (playbackStatus) => {
-                    if (playbackStatus.isLoaded && playbackStatus.didJustFinish) {
+                    if (!playbackStatus.isLoaded) return;
+
+                    // Keep UI in sync with actual player state.
+                    setMusicState(prev => ({ ...prev, isPlaying: playbackStatus.isPlaying }));
+
+                    if (playbackStatus.didJustFinish) {
                         setMusicState(prev => ({ ...prev, isPlaying: false }));
                         if (broadcast) {
                             musicSyncService.broadcastUpdate({
@@ -783,8 +846,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 }
             );
             if (!status.isLoaded) return;
+
+            // Explicit play to avoid edge cases where shouldPlay state is stale.
+            await newSound.setIsMutedAsync(false);
+            await newSound.setVolumeAsync(1.0);
+            await newSound.playAsync();
+
             setSound(newSound);
             setMusicState(prev => ({ ...prev, currentSong: song, isPlaying: true }));
+
+            // Save last played song
+            if (currentUser) {
+                AsyncStorage.setItem(`ss_last_song_${currentUser.id}`, JSON.stringify(song));
+            }
+
             if (broadcast) {
                 musicSyncService.broadcastUpdate({
                     currentSong: song,
@@ -794,12 +869,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 });
             }
         } catch (e) {
+            console.error('[Music] playSong failed:', e);
             setMusicState(prev => ({ ...prev, isPlaying: false }));
         }
     };
 
     const togglePlayMusic = async () => {
-        if (!soundRef.current) return;
+        // Recover player if state says we have a song but sound instance was lost.
+        if (!soundRef.current) {
+            if (musicState.currentSong) {
+                await playSong(musicState.currentSong, false);
+            }
+            return;
+        }
+        // Keep output on normal media route (avoid stale call/recording route).
+        await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: true,
+            shouldDuckAndroid: true,
+            playThroughEarpieceAndroid: false,
+        });
         const newIsPlaying = !musicState.isPlaying;
         let currentPos = 0;
         try {
@@ -807,7 +897,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (status.isLoaded) currentPos = status.positionMillis;
         } catch (e) {}
 
-        if (newIsPlaying) await soundRef.current.playAsync();
+        if (newIsPlaying) {
+            await soundRef.current.setIsMutedAsync(false);
+            await soundRef.current.setVolumeAsync(1.0);
+            await soundRef.current.playAsync();
+        }
         else await soundRef.current.pauseAsync();
 
         setMusicState(prev => ({ ...prev, isPlaying: newIsPlaying }));
@@ -842,23 +936,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const seekTo = async (position: number) => {
-        if (soundRef.current) {
-            await soundRef.current.setPositionAsync(position);
+        if (!soundRef.current || isSeekingRef.current) return;
+        try {
+            isSeekingRef.current = true;
+            const status = await soundRef.current.getStatusAsync();
+            if (!status.isLoaded) return;
+
+            await soundRef.current.setPositionAsync(Math.max(0, position));
+
             if (musicState.currentSong) {
                 musicSyncService.broadcastUpdate({
                     currentSong: musicState.currentSong,
                     isPlaying: musicState.isPlaying,
-                    position: position,
+                    position: Math.max(0, position),
                     updatedBy: currentUser?.id || ''
                 });
             }
+        } catch (e: any) {
+            const message = String(e?.message || e || '');
+            if (!message.toLowerCase().includes('seeking interrupted')) {
+                console.warn('[Music] seekTo failed:', e);
+            }
+        } finally {
+            isSeekingRef.current = false;
         }
     };
 
     const getPlaybackPosition = async (): Promise<number> => {
-        if (soundRef.current) {
-            const status = await soundRef.current.getStatusAsync();
-            if (status.isLoaded) return status.positionMillis;
+        try {
+            if (soundRef.current) {
+                const status = await soundRef.current.getStatusAsync();
+                if (status.isLoaded) return status.positionMillis;
+            }
+        } catch (e) {
+            // Ignore transient player state errors during rapid song switch/seek.
         }
         return 0;
     };
@@ -925,9 +1036,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 [chatId]: chatMessages.map((msg) => {
                     if (msg.id === messageId) {
                         const reactions = msg.reactions || [];
-                        const newReactions = reactions.includes(emoji)
-                            ? reactions.filter((r) => r !== emoji)
-                            : [...reactions, emoji];
+                        const isSame = reactions.includes(emoji);
+                        const newReactions = isSame ? [] : [emoji];
                         return { ...msg, reactions: newReactions };
                     }
                     return msg;
@@ -978,6 +1088,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     useEffect(() => { otherUserRef.current = otherUser; }, [otherUser]);
 
     useEffect(() => {
+        notificationService.initialize(async (actionIdentifier, payload, userText) => {
+            const authUser = currentUserRef.current;
+            if (!authUser) return;
+
+            if (payload.type === 'message') {
+                if (actionIdentifier === NOTIF_ACTION_REPLY_MESSAGE && userText?.trim()) {
+                    sendChatMessage(payload.chatId, userText.trim());
+                }
+                if (actionIdentifier === NOTIF_ACTION_MARK_READ) {
+                    setContacts(prev => prev.map(c =>
+                        c.id === payload.chatId ? { ...c, unreadCount: 0 } : c
+                    ));
+                }
+                return;
+            }
+
+            if (payload.type === 'call') {
+                const caller = contactsRef.current.find(c => c.id === payload.callerId);
+                const signal: CallSignal = {
+                    type: 'call-request',
+                    callId: payload.callId,
+                    callerId: payload.callerId,
+                    calleeId: authUser.id,
+                    callType: payload.callType,
+                    timestamp: new Date().toISOString(),
+                    roomId: payload.callId
+                };
+
+                if (actionIdentifier === NOTIF_ACTION_ACCEPT_CALL) {
+                    setActiveCall({
+                        callId: payload.callId,
+                        contactId: payload.callerId,
+                        type: payload.callType,
+                        isMinimized: false,
+                        isMuted: false,
+                        isVideoOff: false,
+                        isIncoming: true,
+                        isAccepted: true,
+                        isRinging: false,
+                        startTime: Date.now(),
+                        callerName: caller?.name || payload.callerName,
+                        callerAvatar: caller?.avatar
+                    });
+                    await callService.acceptCall(signal);
+                }
+
+                if (actionIdentifier === NOTIF_ACTION_REJECT_CALL) {
+                    await callService.rejectCall(signal);
+                    addCall({
+                        contactId: payload.callerId,
+                        contactName: caller?.name || payload.callerName,
+                        avatar: caller?.avatar || '',
+                        type: 'incoming',
+                        status: 'rejected',
+                        callType: payload.callType,
+                        time: 'Just now'
+                    });
+                }
+
+                await notificationService.dismissCallNotification(payload.callId);
+            }
+        });
+
+        return () => {
+            notificationService.cleanup();
+        };
+    }, [sendChatMessage, addCall]);
+
+    useEffect(() => {
         if (currentUser) {
             callService.initialize(currentUser.id);
             const handleSignal = async (signal: CallSignal) => {
@@ -1007,6 +1186,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                                     callerName: caller?.name || "Unknown User",
                                     callerAvatar: caller?.avatar
                                 });
+                                // PREFETCH AVATAR FOR SMOOTH TRANSITION
+                                if (caller?.avatar) {
+                                    try { (Image as any).prefetch(caller.avatar); } catch (e) {}
+                                }
+                                notificationService.showIncomingCall({
+                                    callId: signal.callId,
+                                    callerId: signal.callerId,
+                                    callerName: caller?.name || "Unknown User",
+                                    callType: signal.callType
+                                });
                                 callService.notifyRinging(signal.callId, signal.callerId, signal.callType);
                             }
                         }
@@ -1022,6 +1211,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                             const { webRTCService } = require('../services/WebRTCService');
                             await webRTCService.onCallAccepted();
                         }
+                        await notificationService.dismissCallNotification(signal.callId);
                         break;
                     case 'call-reject':
                         if (currentActiveCall) {
@@ -1029,6 +1219,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                             webRTCService.endCall();
                             setActiveCall(null);
                         }
+                        await notificationService.dismissCallNotification(signal.callId);
                         break;
                     case 'ice-candidate':
                     case 'offer':
@@ -1040,6 +1231,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         const { webRTCService: wrtc } = require('../services/WebRTCService');
                         wrtc.endCall();
                         setActiveCall(null);
+                        await notificationService.dismissCallNotification(signal.callId);
                         break;
                 }
             };
@@ -1063,6 +1255,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             callerName: contact?.name,
             callerAvatar: contact?.avatar
         });
+        // PREFETCH AVATAR FOR SMOOTH TRANSITION
+        if (contact?.avatar) {
+            try { (Image as any).prefetch(contact.avatar); } catch (e) {}
+        }
     };
 
     const acceptCall = async () => {
@@ -1078,6 +1274,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 roomId: activeCall.callId
             };
             await callService.acceptCall(signal);
+            await notificationService.dismissCallNotification(activeCall.callId);
         }
     };
 
@@ -1093,6 +1290,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 roomId: activeCall.callId
             };
             await callService.rejectCall(signal);
+            await notificationService.dismissCallNotification(activeCall.callId);
             
             // Log rejection
             const contact = contacts.find(c => c.id === activeCall.contactId);
@@ -1139,6 +1337,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const { webRTCService } = require('../services/WebRTCService');
             webRTCService.endCall();
             setActiveCall(null);
+            await notificationService.dismissCallNotification(activeCall.callId);
         }
     };
 
@@ -1242,13 +1441,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } catch (e) { console.warn('Failed to toggle status like (Non-fatal):', e); }
     };
 
-    const updateProfile = async (updates: { name?: string; bio?: string; avatar?: string }) => {
+    const updateProfile = async (updates: { name?: string; bio?: string; avatar?: string; birthdate?: string; note?: string; noteTimestamp?: string }) => {
         if (!currentUser) return;
         const updatedUser = {
             ...currentUser,
             name: updates.name ?? currentUser.name,
             bio: updates.bio ?? currentUser.bio,
             avatar: updates.avatar ?? currentUser.avatar,
+            birthdate: updates.birthdate ?? currentUser.birthdate,
+            note: updates.note !== undefined ? updates.note : currentUser.note,
+            noteTimestamp: updates.noteTimestamp !== undefined ? updates.noteTimestamp : currentUser.noteTimestamp,
         };
         setCurrentUser(updatedUser);
         try {
@@ -1257,11 +1459,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 name: updatedUser.name,
                 avatar_url: updatedUser.avatar,
                 bio: updatedUser.bio,
+                birthdate: updatedUser.birthdate,
+                note: updatedUser.note,
+                note_timestamp: updatedUser.noteTimestamp,
                 updated_at: new Date().toISOString(),
             });
             if (error) throw error;
             await AsyncStorage.setItem(`@profile_${currentUser.id}`, JSON.stringify(updatedUser));
         } catch (e) { console.warn('Failed to sync profile to DB (Non-fatal):', e); }
+    };
+
+    const saveNote = async (text: string) => {
+        await updateProfile({ note: text, noteTimestamp: new Date().toISOString() });
+    };
+
+    const deleteNote = async () => {
+        await updateProfile({ note: '', noteTimestamp: undefined });
     };
 
     useEffect(() => {
@@ -1273,10 +1486,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     if (contact.id === updatedProfile.id) {
                         return { 
                             ...contact, 
-                            name: updatedProfile.name || contact.name, 
-                            avatar: updatedProfile.avatar_url || contact.avatar,
-                            bio: updatedProfile.bio || contact.bio
-                         };
+                            name: updatedProfile.name || contact.name,                             avatar: updatedProfile.avatar_url || contact.avatar,
+                             about: updatedProfile.bio || contact.about,
+                             birthdate: updatedProfile.birthdate || contact.birthdate,
+                             note: updatedProfile.note || '',
+                             noteTimestamp: updatedProfile.note_timestamp || ''
+                          };
                     }
                     return contact;
                 }));
@@ -1292,7 +1507,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             addMessage, updateMessage, updateMessageStatus, deleteMessage, addReaction, addCall, addStatus, deleteStatus, setTheme,
             startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, playSong, togglePlayMusic, toggleFavoriteSong,
             seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView, toggleStatusLike,
-            typingUsers, sendTyping
+            typingUsers, sendTyping,
+            saveNote, deleteNote
         }}>
             {children}
         </AppContext.Provider >
