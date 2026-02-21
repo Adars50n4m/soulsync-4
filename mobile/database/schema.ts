@@ -30,6 +30,9 @@ export const MIGRATE_DB = async (db: any) => {
       timestamp TEXT NOT NULL,
       status TEXT DEFAULT 'sent',
       is_unsent INTEGER DEFAULT 0, -- 1 if waiting to sync
+      retry_count INTEGER DEFAULT 0,
+      last_retry_at TEXT,
+      error_message TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );`,
     `CREATE TABLE IF NOT EXISTS sync_queue (
@@ -41,10 +44,31 @@ export const MIGRATE_DB = async (db: any) => {
     );`
   ];
 
+  // Add new columns to existing messages table if they don't exist
+  const alterQueries = [
+    `ALTER TABLE messages ADD COLUMN retry_count INTEGER DEFAULT 0;`,
+    `ALTER TABLE messages ADD COLUMN last_retry_at TEXT;`,
+    `ALTER TABLE messages ADD COLUMN error_message TEXT;`
+  ];
+
   try {
     for (const query of queries) {
-      await db.execAsync(query);
+      try {
+        await db.execAsync(query);
+      } catch (e) {
+        // Ignore errors from CREATE TABLE IF NOT EXISTS
+      }
     }
+
+    // Try to add new columns (will fail if they already exist, which is fine)
+    for (const alterQuery of alterQueries) {
+      try {
+        await db.execAsync(alterQuery);
+      } catch (e) {
+        // Column already exists, ignore
+      }
+    }
+
     console.log('[SQLite] Database initialized and tables created/verified.');
   } catch (error) {
     console.error('[SQLite] Migration failed:', error);

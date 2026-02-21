@@ -4,13 +4,14 @@ export interface Message {
   sender: 'me' | 'them';
   text: string;
   timestamp: string;
-  status?: 'sent' | 'delivered' | 'read';
+  status?: 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
   reactions?: string[];
   media?: {
     type: 'image' | 'file';
     url: string;
     name?: string;
   };
+  replyTo?: string;
 }
 
 export interface Story {
