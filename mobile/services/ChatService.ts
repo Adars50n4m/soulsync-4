@@ -1,4 +1,6 @@
 import { supabase } from '../config/supabase';
+import { offlineService, type QueuedMessage, type MessageStatus } from './LocalDBService';
+import { AppState, AppStateStatus } from 'react-native';
 
 export interface ChatMessage {
     id: string;
@@ -6,7 +8,7 @@ export interface ChatMessage {
     receiver_id: string;
     text: string;
     timestamp: string;
-    status: 'sent' | 'delivered' | 'read';
+    status: 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
     media?: {
         type: 'image' | 'video' | 'audio' | 'file' | 'status_reply';
         url: string;
@@ -19,6 +21,13 @@ export interface ChatMessage {
 
 type MessageCallback = (message: ChatMessage) => void;
 type StatusCallback = (messageId: string, status: 'delivered' | 'read') => void;
+type NetworkStatusCallback = (isOnline: boolean) => void;
+
+// Configuration for retry logic
+const MAX_RETRY_COUNT = 5;
+const INITIAL_RETRY_DELAY_MS = 1000;
+const MAX_RETRY_DELAY_MS = 60000; // 1 minute
+const PROCESSING_INTERVAL_MS = 2000; // Check queue every 2 seconds
 
 class ChatService {
     private channel: ReturnType<typeof supabase.channel> | null = null;
@@ -26,7 +35,17 @@ class ChatService {
     private partnerId: string | null = null;
     private onNewMessage: MessageCallback | null = null;
     private onStatusUpdate: StatusCallback | null = null;
+    private onNetworkStatusChange: NetworkStatusCallback | null = null;
     private isInitialized: boolean = false;
+    
+    // Queue management
+    private isProcessingQueue: boolean = false;
+    private processQueueTimer: any = null;
+    private retryTimers: Map<string, any> = new Map();
+    
+    // Network status
+    private isOnline: boolean = true;
+    private networkListenerCleanup: (() => void) | null = null;
 
     /**
      * Initialize the chat service for a specific user pair
@@ -35,7 +54,8 @@ class ChatService {
         userId: string,
         partnerId: string,
         onMessage: MessageCallback,
-        onStatus: StatusCallback
+        onStatus: StatusCallback,
+        onNetworkStatus?: NetworkStatusCallback
     ): Promise<void> {
         if (this.isInitialized && this.userId === userId && this.partnerId === partnerId) {
             return;
@@ -45,13 +65,16 @@ class ChatService {
         this.partnerId = partnerId;
         this.onNewMessage = onMessage;
         this.onStatusUpdate = onStatus;
+        this.onNetworkStatusChange = onNetworkStatus ?? null;
+
+        // Setup network listener
+        this.setupNetworkListener();
 
         // Fetch missed messages
         await this.fetchMissedMessages();
 
         // Subscribe to database changes (Realtime)
-        // We simplified this to remove filters that were causing "mismatch" errors on some Postgres setups
-        const channelName = `chat_global_${userId}`; // Use a more stable channel name
+        const channelName = `chat_global_${userId}`;
         this.channel = supabase.channel(channelName);
 
         this.channel
@@ -64,7 +87,7 @@ class ChatService {
                 },
                 (payload) => {
                     const newMessage = this.mapDbMessageToChatMessage(payload.new);
-                    
+
                     // Filter messages sent TO us by the CURRENT partner
                     if (newMessage.receiver_id === this.userId && newMessage.sender_id === this.partnerId) {
                         console.log('[ChatService] Received new message for current chat:', newMessage);
@@ -91,10 +114,244 @@ class ChatService {
             .subscribe((status, err) => {
                 if (status === 'SUBSCRIBED') {
                     this.isInitialized = true;
+                    this.updateNetworkStatus(true);
                     console.log('[ChatService] Subscribed to Realtime messages');
+                    this.startQueueProcessing();
+                } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+                    console.warn('[ChatService] Realtime channel offline:', status);
+                    this.updateNetworkStatus(false);
+                    this.stopQueueProcessing();
                 }
                 if (err) console.warn('[ChatService] Realtime subscription warning:', err);
             });
+    }
+
+    /**
+     * Setup network status listener
+     */
+    private async setupNetworkListener(): Promise<void> {
+        // Initial check
+        await this.checkConnectivity();
+
+        // Listen for app state changes (foregrounding usually triggers network reconnections)
+        const handleAppStateChange = (nextAppState: AppStateStatus) => {
+            if (nextAppState === 'active') {
+                console.log('[ChatService] App foregrounded, checking connectivity...');
+                this.checkConnectivity();
+            }
+        };
+
+        const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+        // Fallback: Periodically check connectivity if needed
+        const intervalId = setInterval(() => {
+            this.checkConnectivity();
+        }, 30000); // Every 30 seconds
+
+        this.networkListenerCleanup = () => {
+            subscription.remove();
+            clearInterval(intervalId);
+        };
+    }
+
+    /**
+     * Check actual connectivity by pinging Supabase
+     */
+    private async checkConnectivity(): Promise<boolean> {
+        try {
+            // A simple lightweight check to see if we can reach the network
+            // Using a timeout to prevent long hangs
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+            // Fetch something lightweight. Even a 404/403 means we are online.
+            // We use the supabase URL since we know it must be reachable.
+            await fetch(supabase.auth.getSession().toString(), { 
+                method: 'HEAD', 
+                signal: controller.signal,
+                mode: 'no-cors'
+            });
+            
+            clearTimeout(timeoutId);
+            this.updateNetworkStatus(true);
+            this.startQueueProcessing();
+            return true;
+        } catch (error) {
+            console.log('[ChatService] Connectivity check failed:', error);
+            this.updateNetworkStatus(false);
+            this.stopQueueProcessing();
+            return false;
+        }
+    }
+
+    /**
+     * Update internal network status and notify listeners
+     */
+    private updateNetworkStatus(online: boolean): void {
+        const wasOnline = this.isOnline;
+        this.isOnline = online;
+        
+        if (wasOnline !== online && this.onNetworkStatusChange) {
+            this.onNetworkStatusChange(online);
+        }
+    }
+
+    /**
+     * Start processing the message queue
+     */
+    private startQueueProcessing(): void {
+        if (this.isProcessingQueue || !this.isOnline) {
+            return;
+        }
+
+        this.isProcessingQueue = true;
+        console.log('[ChatService] Starting queue processing');
+        
+        // Process immediately
+        this.processQueue();
+        
+        // Then set up periodic processing
+        this.processQueueTimer = setInterval(() => {
+            this.processQueue();
+        }, PROCESSING_INTERVAL_MS);
+    }
+
+    /**
+     * Stop processing the message queue
+     */
+    private stopQueueProcessing(): void {
+        if (this.processQueueTimer) {
+            clearInterval(this.processQueueTimer);
+            this.processQueueTimer = null;
+        }
+        this.isProcessingQueue = false;
+        
+        // Clear all retry timers
+        this.retryTimers.forEach((timer) => clearTimeout(timer));
+        this.retryTimers.clear();
+    }
+
+    /**
+     * Process pending messages in the queue
+     */
+    private async processQueue(): Promise<void> {
+        if (!this.isOnline || this.isProcessingQueue === false) {
+            return;
+        }
+
+        try {
+            const pendingMessages = await offlineService.getPendingMessages();
+            
+            if (pendingMessages.length === 0) {
+                return;
+            }
+
+            console.log(`[ChatService] Processing ${pendingMessages.length} pending message(s)`);
+
+            for (const message of pendingMessages) {
+                // Skip if already being retried
+                if (this.retryTimers.has(message.id)) {
+                    continue;
+                }
+
+                // Check if max retries exceeded
+                if (message.retryCount >= MAX_RETRY_COUNT) {
+                    console.warn(`[ChatService] Message ${message.id} exceeded max retries, marking as failed`);
+                    await offlineService.markMessageAsFailed(
+                        message.id,
+                        `Failed after ${MAX_RETRY_COUNT} retry attempts`
+                    );
+                    continue;
+                }
+
+                // Attempt to send
+                await this.sendQueuedMessageToSupabase(message);
+            }
+        } catch (error) {
+            console.error('[ChatService] Error processing queue:', error);
+        }
+    }
+
+    /**
+     * Send a queued message to Supabase
+     */
+    private async sendQueuedMessageToSupabase(message: QueuedMessage): Promise<void> {
+        if (!this.userId) return;
+
+        try {
+            console.log(`[ChatService] Sending queued message ${message.id} to Supabase`);
+
+            const messageData = {
+                sender: this.userId,
+                receiver: message.chatId, // chatId is actually the partner/receiver ID
+                text: message.text,
+                media_type: message.media?.type || null,
+                media_url: message.media?.url || null,
+                media_caption: message.media?.caption || null,
+                reply_to_id: message.replyTo || null,
+                created_at: message.timestamp
+            };
+
+            const { data, error } = await supabase
+                .from('messages')
+                .insert(messageData)
+                .select()
+                .single();
+
+            if (error) {
+                throw error;
+            }
+
+            // Success - update local status
+            console.log(`[ChatService] Message ${message.id} successfully synced to Supabase`);
+            await offlineService.updateMessageStatus(message.id, 'sent');
+            
+            // Notify UI about the status change
+            if (message.sender === 'me') {
+                this.onStatusUpdate?.(message.id, 'delivered');
+            }
+
+            // Clear any retry timer for this message
+            if (this.retryTimers.has(message.id)) {
+                clearTimeout(this.retryTimers.get(message.id)!);
+                this.retryTimers.delete(message.id);
+            }
+
+        } catch (error: any) {
+            console.error(`[ChatService] Failed to send message ${message.id}:`, error);
+            
+            // Increment retry count
+            const newRetryCount = message.retryCount + 1;
+            await offlineService.updateMessageRetry(
+                message.id,
+                newRetryCount,
+                error?.message || 'Network error'
+            );
+
+            if (newRetryCount < MAX_RETRY_COUNT) {
+                // Schedule retry with exponential backoff
+                const delay = Math.min(
+                    INITIAL_RETRY_DELAY_MS * Math.pow(2, newRetryCount),
+                    MAX_RETRY_DELAY_MS
+                );
+                
+                console.log(`[ChatService] Scheduling retry for message ${message.id} in ${delay}ms`);
+                
+                const timer = setTimeout(() => {
+                    this.retryTimers.delete(message.id);
+                    this.processQueue();
+                }, delay);
+                
+                this.retryTimers.set(message.id, timer);
+            } else {
+                // Max retries exceeded
+                await offlineService.markMessageAsFailed(
+                    message.id,
+                    error?.message || 'Failed after maximum retries'
+                );
+                console.error(`[ChatService] Message ${message.id} marked as failed after max retries`);
+            }
+        }
     }
 
     /**
@@ -108,7 +365,7 @@ class ChatService {
             .select('*')
             .or(`and(sender.eq.${this.partnerId},receiver.eq.${this.userId}),and(sender.eq.${this.userId},receiver.eq.${this.partnerId})`)
             .order('created_at', { ascending: true })
-            .limit(50); // Fetch last 50 messages
+            .limit(50);
 
         if (error) {
             console.error('Error fetching history:', error);
@@ -116,51 +373,66 @@ class ChatService {
         }
 
         if (data) {
-            // Notify listener (UI) about these messages 
-            // NOTE: In a real app, we might return these to be set in state, 
-            // but here we can simulate "receiving" them or just letting the UI load from a separate fetch.
-            // For now, let's just let the UI fetch history explicitly if needed, 
-            // or we can just emit them?
-            // Actually AppContext usually fetches history on load.
-            // So this might be redundant if AppContext does it. 
-            // Let's assume AppContext handles initial load, this just handles realtime.
+            // Messages are available, UI can fetch from local DB
         }
     }
 
     /**
-     * Send a message to the chat partner (INSERT into DB)
+     * Send a message - Optimistic UI first, then sync to Supabase
      */
-    async sendMessage(text: string, media?: ChatMessage['media'], replyTo?: string): Promise<ChatMessage | null> {
+    async sendMessage(
+        text: string,
+        media?: ChatMessage['media'],
+        replyTo?: string
+    ): Promise<ChatMessage | null> {
         if (!this.userId || !this.partnerId) return null;
 
-        const tempId = Date.now().toString();
+        const messageId = Date.now().toString() + Math.random().toString(36).substr(2, 9);
         const timestamp = new Date().toISOString();
 
-        const messageData = {
-            sender: this.userId,
-            receiver: this.partnerId,
+        // Create optimistic message object
+        const optimisticMessage: QueuedMessage = {
+            id: messageId,
+            chatId: this.partnerId,
+            sender: 'me',
             text,
-            media_type: media?.type || null,
-            media_url: media?.url || null,
-            media_caption: media?.caption || null,
-            reply_to_id: replyTo || null,
-            created_at: timestamp
+            timestamp,
+            status: 'pending',
+            media: media ? {
+                type: media.type,
+                url: media.url,
+                name: media.name,
+                caption: media.caption
+            } : undefined,
+            replyTo,
+            retryCount: 0
         };
 
+        // Step 1: Save to local DB with 'pending' status (Optimistic UI)
+        await offlineService.savePendingMessage(this.partnerId, optimisticMessage);
 
-        const { data, error } = await supabase
-            .from('messages')
-            .insert(messageData)
-            .select()
-            .single();
+        // Step 2: Notify UI immediately (message will appear with clock icon)
+        const uiMessage: ChatMessage = {
+            id: messageId,
+            sender_id: this.userId,
+            receiver_id: this.partnerId,
+            text,
+            timestamp,
+            status: 'pending',
+            media,
+            reply_to: replyTo
+        };
+        
+        this.onNewMessage?.(uiMessage);
 
-        if (error) {
-            console.error('Failed to send message:', error);
-            return null;
+        // Step 3: If online, attempt to sync immediately
+        if (this.isOnline) {
+            await this.sendQueuedMessageToSupabase(optimisticMessage);
+        } else {
+            console.log('[ChatService] Offline - message queued for later sync');
         }
 
-        const sentMessage = this.mapDbMessageToChatMessage(data);
-        return sentMessage;
+        return uiMessage;
     }
 
     /**
@@ -173,8 +445,51 @@ class ChatService {
                 .update({ status })
                 .eq('id', messageId);
         } catch (e) {
-            console.warn('Failed to update message status (column likely missing):', e);
+            console.warn('Failed to update message status:', e);
         }
+    }
+
+    /**
+     * Retry a specific failed/pending message
+     */
+    async retryMessage(messageId: string): Promise<void> {
+        const message = await offlineService.getMessageById(messageId);
+        
+        if (!message) {
+            console.warn(`[ChatService] Message ${messageId} not found for retry`);
+            return;
+        }
+
+        // Reset retry count for manual retry
+        await offlineService.updateMessageRetry(messageId, 0);
+        
+        // Clear any existing retry timer
+        if (this.retryTimers.has(messageId)) {
+            clearTimeout(this.retryTimers.get(messageId)!);
+            this.retryTimers.delete(messageId);
+        }
+
+        // If online, send immediately
+        if (this.isOnline) {
+            await this.sendQueuedMessageToSupabase(message);
+        } else {
+            console.log('[ChatService] Cannot retry - offline, message will be sent when online');
+        }
+    }
+
+    /**
+     * Get current network status
+     */
+    getNetworkStatus(): boolean {
+        return this.isOnline;
+    }
+
+    /**
+     * Get pending message count for a chat
+     */
+    async getPendingMessageCount(chatId: string): Promise<number> {
+        const pendingMessages = await offlineService.getPendingMessages();
+        return pendingMessages.filter(m => m.chatId === chatId).length;
     }
 
     /**
@@ -187,7 +502,7 @@ class ChatService {
             receiver_id: dbRow.receiver,
             text: dbRow.text,
             timestamp: dbRow.created_at,
-            status: dbRow.status || 'sent',
+            status: (dbRow.status as ChatMessage['status']) || 'sent',
             media: dbRow.media_url ? {
                 type: dbRow.media_type || 'image',
                 url: dbRow.media_url,
@@ -198,18 +513,29 @@ class ChatService {
         };
     }
 
-
     /**
      * Cleanup
      */
     cleanup(): void {
+        // Stop queue processing
+        this.stopQueueProcessing();
+        
+        // Cleanup network listener
+        if (this.networkListenerCleanup) {
+            this.networkListenerCleanup();
+            this.networkListenerCleanup = null;
+        }
+
+        // Cleanup realtime channel
         if (this.channel) {
             this.channel.unsubscribe();
             this.channel = null;
         }
+        
         this.isInitialized = false;
         this.userId = null;
         this.partnerId = null;
+        this.isOnline = true;
     }
 }
 
