@@ -409,27 +409,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 currentUser.id,
                 otherUser.id,
                 (incomingMessage: ChatMessage) => {
+                    const isFromMe = incomingMessage.sender_id === currentUser.id;
                     const newMsg: Message = {
                         id: incomingMessage.id,
-                        sender: 'them',
+                        sender: isFromMe ? 'me' : 'them',
                         text: incomingMessage.text,
                         timestamp: new Date(incomingMessage.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                        status: 'delivered',
+                        status: isFromMe ? 'sent' : 'delivered',
                         media: incomingMessage.media,
                     };
-                    setMessages(prev => ({
-                        ...prev,
-                        [otherUser.id]: [...(prev[otherUser.id] || []), newMsg]
-                    }));
+                    
+                    // Update State using helper
+                    addMessageSafely(otherUser.id, newMsg);
+
                     setContacts(prevContacts => prevContacts.map(c =>
                         c.id === otherUser.id ? {
                             ...c,
                             lastMessage: incomingMessage.media ? '梼 Attachment' : incomingMessage.text,
-                            unreadCount: (c.unreadCount || 0) + 1
+                            unreadCount: !isFromMe ? (c.unreadCount || 0) + 1 : c.unreadCount
                         } : c
                     ));
 
-                    if (AppState.currentState !== 'active') {
+                    if (!isFromMe && AppState.currentState !== 'active') {
                         notificationService.showIncomingMessage({
                             chatId: otherUser.id,
                             senderId: otherUser.id,
@@ -511,10 +512,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         time: new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                     };
                 });
+                
                 setCalls(mappedCalls);
             }
         } catch (e) { console.error('Fetch calls error:', e); }
     };
+
+    // Helper to add messages with deduplication
+    const addMessageSafely = useCallback((partnerId: string, message: Message) => {
+        setMessages(prev => {
+            const chatMessages = prev[partnerId] || [];
+            if (chatMessages.some(m => m.id === message.id)) return prev;
+            return { ...prev, [partnerId]: [...chatMessages, message] };
+        });
+    }, []);
 
     // Real-time Subscriptions
     useEffect(() => {
@@ -593,12 +604,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         await offlineService.saveMessage(partnerId, message);
                     }
 
-                    // Update State
-                    setMessages(prev => {
-                        const chatMessages = prev[partnerId] || [];
-                        if (chatMessages.some(m => m.id === message.id)) return prev; // Dedup
-                        return { ...prev, [partnerId]: [...chatMessages, message] };
-                    });
+                    // Update State using helper
+                    addMessageSafely(partnerId, message);
 
                     // Update Contact Last Message
                     setContacts(prev => prev.map(c => 
@@ -635,36 +642,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     const sendChatMessage = useCallback(async (chatId: string, text: string, media?: Message['media'], replyTo?: string) => {
-        const sentMessage = await chatService.sendMessage(text, media, replyTo);
-        if (sentMessage) {
-            const newMsg: Message = {
-                id: sentMessage.id,
-                sender: 'me',
-                text: sentMessage.text,
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                status: 'sent',
-                media: sentMessage.media ? { type: sentMessage.media.type as any, url: sentMessage.media.url } : undefined,
-                replyTo: sentMessage.reply_to,
-            };
-
-            // Save outgoing message to Local DB
-            if (offlineService) {
-                await offlineService.saveMessage(chatId, newMsg);
-            }
-
-            setMessages(prev => ({
-                ...prev,
-                [chatId]: [...(prev[chatId] || []), newMsg]
-            }));
-            setContacts(prevContacts => prevContacts.map(c =>
-                c.id === chatId ? {
-                    ...c,
-                    lastMessage: media ? '梼 Attachment' : text,
-                    unreadCount: 0
-                } : c
-            ));
-        }
-    }, [messages]);
+        // ChatService.sendMessage now triggers the onNewMessage callback we set up in useEffect,
+        // which handles both local state update (optimistic) and sync.
+        // We just need to call it.
+        await chatService.sendMessage(text, media, replyTo);
+    }, []);
 
     const login = async (username: string, password: string): Promise<boolean> => {
         const normalizedUser = username.toLowerCase();
@@ -776,10 +758,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     await Promise.all(mappedMessages.map(msg => offlineService.saveMessage(partnerId, msg)));
                 }
 
-                setMessages(prev => ({ ...prev, [partnerId]: mappedMessages }));
+                // Dedup mapped messages before setting state
+                const uniqueMessages = Array.from(new Map(mappedMessages.map(m => [m.id, m])).values());
+                setMessages(prev => ({ ...prev, [partnerId]: uniqueMessages }));
 
                 // Update last message in specific contact
-                const lastMsg = mappedMessages[mappedMessages.length - 1];
+                const lastMsg = uniqueMessages[uniqueMessages.length - 1];
                 if (lastMsg) {
                      setContacts(prev => prev.map(c => 
                         c.id === partnerId ? {

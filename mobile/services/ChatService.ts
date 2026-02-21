@@ -42,6 +42,7 @@ class ChatService {
     private isProcessingQueue: boolean = false;
     private processQueueTimer: any = null;
     private retryTimers: Map<string, any> = new Map();
+    private sendingIds: Set<string> = new Set();
     
     // Network status
     private isOnline: boolean = true;
@@ -249,8 +250,8 @@ class ChatService {
             console.log(`[ChatService] Processing ${pendingMessages.length} pending message(s)`);
 
             for (const message of pendingMessages) {
-                // Skip if already being retried
-                if (this.retryTimers.has(message.id)) {
+                // Skip if already being retried or currently sending
+                if (this.retryTimers.has(message.id) || this.sendingIds.has(message.id)) {
                     continue;
                 }
 
@@ -277,7 +278,9 @@ class ChatService {
      */
     private async sendQueuedMessageToSupabase(message: QueuedMessage): Promise<void> {
         if (!this.userId) return;
+        if (this.sendingIds.has(message.id)) return;
 
+        this.sendingIds.add(message.id);
         try {
             console.log(`[ChatService] Sending queued message ${message.id} to Supabase`);
 
@@ -351,6 +354,8 @@ class ChatService {
                 );
                 console.error(`[ChatService] Message ${message.id} marked as failed after max retries`);
             }
+        } finally {
+            this.sendingIds.delete(message.id);
         }
     }
 
