@@ -12,6 +12,7 @@ interface MediaPickerSheetProps {
   onSelectCamera: () => void;
   onSelectGallery: () => void; // Keeps the gallery picker as a fallback or full view if needed
   onSelectAudio: () => void;
+  onSelectNote: () => void;
 }
 
 export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
@@ -20,6 +21,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
   onSelectCamera,
   onSelectGallery,
   onSelectAudio,
+  onSelectNote,
 }) => {
   const slideAnim = useRef(new Animated.Value(0)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
@@ -216,7 +218,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
 
           {/* Quick Options Row */}
           <View style={styles.optionsRow}>
-              <Pressable style={styles.optionButton}>
+              <Pressable style={styles.optionButton} onPress={onSelectNote}>
                   <View style={[styles.optionIcon, { backgroundColor: '#1e1e24' }]}>
                       <Text style={{color: '#fff', fontWeight: 'bold', fontSize: 16}}>Aa</Text>
                   </View>

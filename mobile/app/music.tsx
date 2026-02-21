@@ -4,7 +4,7 @@ import {
     FlatList, Dimensions, ActivityIndicator, ImageBackground,
     KeyboardAvoidingView, Platform, Keyboard, ScrollView
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -46,6 +46,7 @@ export default function MusicScreen() {
     const [songs, setSongs] = useState<Song[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [progress, setProgress] = useState(0);
+    const [playbackMs, setPlaybackMs] = useState(0);
     const lastClickTime = useRef<{ [key: string]: number }>({});
     const [keyboardVisible, setKeyboardVisible] = useState(false);
     const isMountedRef = useRef(true);
@@ -55,6 +56,15 @@ export default function MusicScreen() {
     // Animations
     const slideY = useSharedValue(height);
 
+    const navigation = useNavigation();
+    const closeScreen = () => {
+        if (navigation.canGoBack()) {
+            navigation.goBack();
+            return;
+        }
+        router.back();
+    };
+
     const handleClose = () => {
         slideY.value = withSpring(height, {
             damping: 20,
@@ -62,7 +72,7 @@ export default function MusicScreen() {
             mass: 0.8
         }, (finished) => {
             if (finished) {
-                runOnJS(router.back)();
+                runOnJS(closeScreen)();
             }
         });
     };
@@ -113,10 +123,17 @@ export default function MusicScreen() {
                 // Convert duration to ms for calculation
                 const progressPercent = (pos / (duration * 1000)) * 100;
                 setProgress(progressPercent);
+                setPlaybackMs(pos);
             }, 1000);
         }
         return () => clearInterval(interval);
     }, [musicState.isPlaying, musicState.currentSong]);
+
+    useEffect(() => {
+        // Reset when switching songs
+        setPlaybackMs(0);
+        setProgress(0);
+    }, [musicState.currentSong?.id]);
 
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
@@ -334,8 +351,17 @@ export default function MusicScreen() {
         const barWidth = width - 48; // Screen width - padding (24 * 2)
         const percent = Math.max(0, Math.min(1, locationX / barWidth));
         const duration = musicState.currentSong?.duration || 240;
-        seekTo(percent * duration * 1000);
+        const targetMs = percent * duration * 1000;
+        seekTo(targetMs);
         setProgress(percent * 100);
+        setPlaybackMs(targetMs);
+    };
+
+    const formatClock = (seconds: number) => {
+        const safe = Math.max(0, Math.floor(seconds));
+        const mins = Math.floor(safe / 60);
+        const secs = safe % 60;
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
     const renderOverlayHeader = () => (
@@ -376,8 +402,12 @@ export default function MusicScreen() {
                             </View>
                         </Pressable>
                         <View style={styles.timeLabels}>
-                            <Text style={styles.timeText}>0:00</Text>
-                            <Text style={styles.timeText}>{musicState.currentSong ? "Live" : "No Media"}</Text>
+                            <Text style={styles.timeText}>{formatClock(playbackMs / 1000)}</Text>
+                            <Text style={styles.timeText}>
+                                {musicState.currentSong
+                                    ? formatClock(musicState.currentSong.duration || 0)
+                                    : "No Media"}
+                            </Text>
                         </View>
                     </View>
                 </View>

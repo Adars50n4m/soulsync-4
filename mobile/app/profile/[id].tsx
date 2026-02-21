@@ -3,7 +3,7 @@ import {
     View, Text, Image, Pressable, StyleSheet, StatusBar,
     ScrollView, Animated, Dimensions, Alert, Modal, Share, FlatList
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
@@ -51,6 +51,7 @@ const MediaGalleryItem = ({ item, activeCategory, morphProgress }: any) => {
 export default function ProfileScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
+    const navigation = useNavigation();
     const { currentUser, otherUser, messages, activeTheme } = useApp();
 
     // Determine which user's profile to show
@@ -159,7 +160,12 @@ export default function ProfileScreen() {
             <View style={styles.container}>
                 <StatusBar barStyle="light-content" translucent />
                 <View style={styles.header}>
-                    <Pressable onPress={() => router.back()} style={styles.backButton}>
+                    <Pressable 
+                        onPress={() => {
+                            if (navigation.canGoBack()) navigation.goBack();
+                        }} 
+                        style={styles.backButton}
+                    >
                         <Ionicons name="chevron-back" size={28} color="#ffffff" />
                     </Pressable>
                 </View>
@@ -188,7 +194,12 @@ export default function ProfileScreen() {
 
             {/* Header - Transparent & Minimal */}
             <View style={styles.header}>
-                <Pressable onPress={() => router.back()} style={styles.backButton}>
+                <Pressable 
+                    onPress={() => {
+                        if (navigation.canGoBack()) navigation.goBack();
+                    }} 
+                    style={styles.backButton}
+                >
                     <Ionicons name="chevron-back" size={28} color="#ffffff" />
                 </Pressable>
                 <Text style={styles.headerTitle}>PROFILE</Text>

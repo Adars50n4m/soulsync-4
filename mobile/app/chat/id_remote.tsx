@@ -4,7 +4,7 @@ import {
     StyleSheet, StatusBar, KeyboardAvoidingView, Platform,
     Modal, Animated as RNAnimated, Dimensions
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -196,6 +196,7 @@ const ReactionModal = ({ visible, onClose, onSelect }: any) => {
 export default function SingleChatScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
+    const navigation = useNavigation();
     const { contacts, messages, sendChatMessage, startCall, activeCall, addReaction, deleteMessage, musicState } = useApp();
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
@@ -303,7 +304,12 @@ export default function SingleChatScreen() {
 
             {/* Header */}
             <BlurView intensity={100} tint="dark" style={styles.header}>
-                <Pressable onPress={() => router.back()} style={styles.backButton}>
+                <Pressable 
+                    onPress={() => {
+                        if (navigation.canGoBack()) navigation.goBack();
+                    }} 
+                    style={styles.backButton}
+                >
                     <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
                 </Pressable>
 

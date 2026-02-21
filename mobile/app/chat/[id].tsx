@@ -1,14 +1,16 @@
 import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react';
 import {
     View, Text, Image, FlatList, TextInput, Pressable,
-    StyleSheet, StatusBar, KeyboardAvoidingView, Platform,
-    Modal, Animated as RNAnimated, Dimensions, Keyboard, Alert, InteractionManager, ScrollView
+    StyleSheet, StatusBar, Platform,
+    Modal, Animated as RNAnimated, Dimensions, Keyboard, KeyboardEvent, Alert, InteractionManager, ScrollView
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library';
+import * as FileSystem from 'expo-file-system/legacy';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
@@ -27,11 +29,37 @@ import { useApp } from '../../context/AppContext';
 import { MusicPlayerOverlay } from '../../components/MusicPlayerOverlay';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { MediaPreviewModal } from '../../components/MediaPreviewModal';
-import { MediaPlayerModal } from '../../components/MediaPlayerModal';
 import { storageService } from '../../services/StorageService';
 import { Contact, Message } from '../../types';
+import { ResizeMode, Video } from 'expo-av';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const IS_IOS = Platform.OS === 'ios';
+const IOS_KEYBOARD_SAFE_ADJUST = 22;
+
+type ChatMediaItem = {
+    type: 'image' | 'video' | 'audio' | 'file' | 'status_reply';
+    url: string;
+    caption?: string;
+};
+
+const getMessageMediaItems = (msg: any): ChatMediaItem[] => {
+    if (!msg?.media) return [];
+
+    if (Array.isArray(msg.media)) {
+        return msg.media.filter((m: any) => m?.url);
+    }
+
+    if (Array.isArray(msg.media?.items)) {
+        return msg.media.items.filter((m: any) => m?.url);
+    }
+
+    if (msg.media?.url) {
+        return [msg.media];
+    }
+
+    return [];
+};
 
 // Sanitize song title - remove metadata like "(From ...)" or "[Album Name]"
 const sanitizeSongTitle = (title: string): string => {
@@ -99,7 +127,7 @@ const ProgressiveBlur = ({ position = 'top', height = 180, intensity = 100, step
 };
 
 // Message Bubble with Liquid Glass UI
-const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quotedMessage, onDoubleTap, onMediaTap, isClone }: any) => {
+const MessageBubble = ({ msg, contactName, onLongPress, onReply, isSelected, onReaction, quotedMessage, onDoubleTap, onMediaTap, isClone }: any) => {
     const { activeTheme } = useApp();
     const translateX = useSharedValue(0);
     const isMe = msg.sender === 'me';
@@ -154,25 +182,106 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
         ]
     }));
 
+    const mediaItems = getMessageMediaItems(msg);
+    const hasText = !!msg.text?.trim();
+    const hasCaption = !!msg.media?.caption?.trim();
+    const isMediaOnly = mediaItems.length > 0 && !hasText && !hasCaption && !quotedMessage;
+
+    const handleMediaPress = (index: number, openGallery = false) => {
+        if (!onMediaTap) return;
+        onMediaTap({
+            messageId: msg.id,
+            mediaItems,
+            index,
+            openGallery,
+        });
+    };
+
+    const renderMediaContent = () => {
+        if (!mediaItems.length) return null;
+
+        if (mediaItems.length === 1) {
+            const media = mediaItems[0];
+            return (
+                <Pressable
+                    onPress={() => handleMediaPress(0)}
+                    style={[
+                        styles.mediaSurface,
+                        isMe ? styles.mediaSurfaceMe : styles.mediaSurfaceThem,
+                        !hasText && !hasCaption && styles.mediaSingleNoGap
+                    ]}
+                >
+                    <Image source={{ uri: media.url }} style={styles.mediaSingle} />
+                    {media.type === 'video' && (
+                        <View style={styles.mediaTilePlayOverlay}>
+                            <MaterialIcons name="play-circle-filled" size={46} color="rgba(255,255,255,0.92)" />
+                        </View>
+                    )}
+                </Pressable>
+            );
+        }
+
+        const visibleItems = mediaItems.slice(0, 4);
+        const extraCount = mediaItems.length - 4;
+        return (
+            <View
+                style={[
+                    styles.mediaSurface,
+                    styles.mediaGridSurface,
+                    isMe ? styles.mediaSurfaceMe : styles.mediaSurfaceThem,
+                    !hasText && !hasCaption && styles.mediaGridNoGap
+                ]}
+            >
+                <View style={styles.mediaGrid}>
+                    {visibleItems.map((media, index) => {
+                        const showMore = index === 3 && extraCount > 0;
+                        return (
+                            <Pressable
+                                key={`${media.url}-${index}`}
+                                style={styles.mediaGridTile}
+                                onPress={() => handleMediaPress(index, showMore)}
+                            >
+                                <Image source={{ uri: media.url }} style={styles.mediaGridImage} />
+                                {media.type === 'video' && !showMore && (
+                                    <View style={styles.mediaTilePlayOverlay}>
+                                        <MaterialIcons name="play-circle-filled" size={34} color="rgba(255,255,255,0.92)" />
+                                    </View>
+                                )}
+                                {showMore && (
+                                    <View style={styles.mediaMoreOverlay}>
+                                        <Text style={styles.mediaMoreText}>{`+${extraCount}`}</Text>
+                                    </View>
+                                )}
+                            </Pressable>
+                        );
+                    })}
+                </View>
+            </View>
+        );
+    };
+
     if (isClone) {
         return (
             <Animated.View style={bubbleStyle}>
                 <View style={[
                     styles.bubbleContainer,
                     isMe ? styles.bubbleContainerMe : styles.bubbleContainerThem,
+                    quotedMessage && styles.bubbleContainerWithQuote,
+                    isMediaOnly && styles.bubbleContainerMediaOnly,
                     { maxWidth: '100%', width: '100%', height: '100%' }
                 ]}>
-                    <View style={[StyleSheet.absoluteFill, { backgroundColor: isMe ? activeTheme.primary : 'rgba(255, 255, 255, 0.1)' }]} />
+                    {!isMediaOnly && (
+                        <View style={[StyleSheet.absoluteFill, { backgroundColor: isMe ? activeTheme.primary : 'rgba(255, 255, 255, 0.1)' }]} />
+                    )}
 
-                    <View style={styles.messageContent}>
+                    <View style={[styles.messageContent, isMediaOnly && styles.messageContentMediaOnly]}>
                         {quotedMessage && (
                             <View style={[styles.quotedContainer, isMe ? styles.quotedMe : styles.quotedThem]}>
-                                <View style={[styles.quoteBar, { backgroundColor: isMe ? '#fff' : activeTheme.primary }]} />
                                 <View style={styles.quoteContent}>
-                                    <Text style={[styles.quoteSender, { color: isMe ? '#fff' : activeTheme.primary }]}>
-                                        {quotedMessage.sender === 'me' ? 'YOU' : 'THEM'}
+                                    <Text numberOfLines={1} style={[styles.quoteSender, { color: isMe ? '#fff' : activeTheme.primary }]}>
+                                        {quotedMessage.sender === 'me' ? 'You' : contactName}
                                     </Text>
-                                    <Text numberOfLines={1} style={[styles.quoteText, { color: isMe ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.5)' }]}>
+                                    <Text style={[styles.quoteText, { color: isMe ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.5)' }]}>
                                         {quotedMessage.text}
                                     </Text>
                                 </View>
@@ -180,28 +289,7 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
                         )}
 
                         {/* Media */}
-                        {msg.media?.url && (
-                            <Pressable onPress={() => onMediaTap && onMediaTap(msg.media)}>
-                                {msg.media.type === 'image' && (
-                                    <Image source={{ uri: msg.media.url }} style={styles.mediaImage} />
-                                )}
-                                {msg.media.type === 'video' && (
-                                    <View>
-                                        <Image source={{ uri: msg.media.url }} style={styles.mediaImage} />
-                                        <View style={styles.playIconOverlay}>
-                                            <MaterialIcons name="play-circle-filled" size={50} color="rgba(255,255,255,0.9)" />
-                                        </View>
-                                    </View>
-                                )}
-                                {msg.media.type === 'audio' && (
-                                    <View style={styles.audioWaveform}>
-                                        <MaterialIcons name="graphic-eq" size={20} color={activeTheme.primary} />
-                                        <Text style={styles.audioDuration}>0:45</Text>
-                                        <MaterialIcons name="play-arrow" size={24} color="#fff" />
-                                    </View>
-                                )}
-                            </Pressable>
-                        )}
+                        {renderMediaContent()}
 
                         {/* Caption */}
                         {msg.media?.caption && (
@@ -211,18 +299,20 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
                         )}
 
                         {/* Text */}
-                        <Text style={[styles.messageText, isMe && styles.messageTextMe]}>
-                            {msg.text}
-                        </Text>
+                        {hasText && (
+                            <Text style={[styles.messageText, isMe && styles.messageTextMe]}>
+                                {msg.text}
+                            </Text>
+                        )}
 
                         {/* Timestamp inside bubble (bottom right) */}
-                        <View style={styles.messageFooter}>
-                            <Text style={[styles.timestamp, isMe && { color: 'rgba(255,255,255,0.8)' }]}>{msg.timestamp}</Text>
+                        <View style={[styles.messageFooter, isMediaOnly && styles.messageFooterMediaOnly]}>
+                            <Text style={[styles.timestamp, (isMe || isMediaOnly) && { color: 'rgba(255,255,255,0.85)' }]}>{msg.timestamp}</Text>
                             {isMe && (
                                 <MaterialIcons
                                     name={msg.status === 'read' ? 'done-all' : 'done'}
                                     size={12}
-                                    color={msg.status === 'read' ? '#fff' : 'rgba(255,255,255,0.8)'}
+                                    color={msg.status === 'read' ? '#34B7F1' : 'rgba(255,255,255,0.8)'}
                                 />
                             )}
                         </View>
@@ -244,7 +334,11 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
     }
 
     return (
-        <View style={[styles.messageWrapper, isMe && styles.messageWrapperMe]}>
+        <View style={[
+            styles.messageWrapper,
+            isMe && styles.messageWrapperMe,
+            msg.reactions && msg.reactions.length > 0 && styles.messageWrapperWithReactions
+        ]}>
             <View style={styles.replyIconContainer}>
                 <Animated.View style={[styles.replyIcon, iconStyle]}>
                     <MaterialIcons name="reply" size={24} color={activeTheme.primary} />
@@ -255,45 +349,29 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
                 <Animated.View style={bubbleStyle}>
                     <View ref={bubbleRef} style={[
                         styles.bubbleContainer,
-                        isMe ? styles.bubbleContainerMe : styles.bubbleContainerThem
+                        isMe ? styles.bubbleContainerMe : styles.bubbleContainerThem,
+                        quotedMessage && styles.bubbleContainerWithQuote,
+                        isMediaOnly && styles.bubbleContainerMediaOnly,
                     ]}>
-                        <View style={[StyleSheet.absoluteFill, { backgroundColor: isMe ? activeTheme.primary : 'rgba(255, 255, 255, 0.1)' }]} />
+                        {!isMediaOnly && (
+                            <View style={[StyleSheet.absoluteFill, { backgroundColor: isMe ? activeTheme.primary : 'rgba(255, 255, 255, 0.1)' }]} />
+                        )}
 
-                        <View style={styles.messageContent}>
+                        <View style={[styles.messageContent, isMediaOnly && styles.messageContentMediaOnly]}>
                             {quotedMessage && (
-                                <View style={[styles.quotedContainer, isMe ? styles.quotedMe : styles.quotedThem]}>
-                                    <View style={[styles.quoteBar, { backgroundColor: isMe ? '#fff' : activeTheme.primary }]} />
+                                <Pressable style={[styles.quotedContainer, isMe ? styles.quotedMe : styles.quotedThem]}>
                                     <View style={styles.quoteContent}>
-                                        <Text style={[styles.quoteSender, { color: isMe ? '#fff' : activeTheme.primary }]}>
-                                            {quotedMessage.sender === 'me' ? 'YOU' : 'THEM'}
+                                        <Text numberOfLines={1} style={[styles.quoteSender, { color: isMe ? '#fff' : activeTheme.primary }]}>
+                                            {quotedMessage.sender === 'me' ? 'You' : contactName}
                                         </Text>
-                                        <Text numberOfLines={1} style={[styles.quoteText, { color: isMe ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.5)' }]}>
+                                        <Text style={[styles.quoteText, { color: isMe ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.5)' }]}>
                                             {quotedMessage.text}
                                         </Text>
                                     </View>
-                                </View>
-                            )}
-
-                            {msg.media?.url && (
-                                <Pressable onPress={() => onMediaTap && onMediaTap(msg.media)}>
-                                    {msg.media.type === 'image' && <Image source={{ uri: msg.media.url }} style={styles.mediaImage} />}
-                                    {msg.media.type === 'video' && (
-                                        <View>
-                                            <Image source={{ uri: msg.media.url }} style={styles.mediaImage} />
-                                            <View style={styles.playIconOverlay}>
-                                                <MaterialIcons name="play-circle-filled" size={50} color="rgba(255,255,255,0.9)" />
-                                            </View>
-                                        </View>
-                                    )}
-                                    {msg.media.type === 'audio' && (
-                                        <View style={styles.audioWaveform}>
-                                            <MaterialIcons name="graphic-eq" size={20} color={activeTheme.primary} />
-                                            <Text style={styles.audioDuration}>0:45</Text>
-                                            <MaterialIcons name="play-arrow" size={24} color="#fff" />
-                                        </View>
-                                    )}
                                 </Pressable>
                             )}
+
+                            {renderMediaContent()}
 
                             {msg.media?.caption && (
                                 <Text style={[styles.captionText, isMe ? { color: 'rgba(255,255,255,0.8)' } : { color: 'rgba(255,255,255,0.6)' }]}>
@@ -301,15 +379,17 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
                                 </Text>
                             )}
 
-                            <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{msg.text}</Text>
+                            {hasText && (
+                                <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{msg.text}</Text>
+                            )}
 
-                            <View style={styles.messageFooter}>
-                                <Text style={[styles.timestamp, isMe && { color: 'rgba(255,255,255,0.8)' }]}>{msg.timestamp}</Text>
+                            <View style={[styles.messageFooter, isMediaOnly && styles.messageFooterMediaOnly]}>
+                                <Text style={[styles.timestamp, (isMe || isMediaOnly) && { color: 'rgba(255,255,255,0.85)' }]}>{msg.timestamp}</Text>
                                 {isMe && (
                                     <MaterialIcons
                                         name={msg.status === 'read' ? 'done-all' : 'done'}
                                         size={12}
-                                        color={msg.status === 'read' ? '#fff' : 'rgba(255,255,255,0.8)'}
+                                        color={msg.status === 'read' ? '#34B7F1' : 'rgba(255,255,255,0.8)'}
                                     />
                                 )}
                             </View>
@@ -427,7 +507,7 @@ const MessageContextMenu = ({ visible, msg, layout, onClose, onReaction, onActio
                         shadowRadius: 15,
                         elevation: 10,
                     }]}>
-                        <View style={[styles.contextEmojiTail, { [isMe ? 'right' : 'left']: 20, backgroundColor: 'rgba(40,40,40,0.9)' }]} />
+                        <BlurView intensity={80} tint="dark" style={[styles.contextEmojiTail, { [isMe ? 'right' : 'left']: 20 }]} />
                         
                         <BlurView intensity={80} tint="dark" style={{ flex: 1, borderRadius: 27, overflow: 'hidden', backgroundColor: 'rgba(30,30,30,0.5)' }}>
                             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: 'center', paddingHorizontal: 16, gap: 14 }}>
@@ -475,17 +555,13 @@ const MessageContextMenu = ({ visible, msg, layout, onClose, onReaction, onActio
                                 <MaterialIcons name="push-pin" size={20} color="#fff" />
                                 <Text style={styles.contextActionText}>Pin</Text>
                             </Pressable>
-                            <Pressable style={styles.contextActionBtn} onPress={() => { onAction('forward'); handleClose(); }}>
-                                <MaterialIcons name="forward" size={20} color="#fff" />
-                                <Text style={styles.contextActionText}>Forward</Text>
-                            </Pressable>
-                            <Pressable style={styles.contextActionBtn} onPress={() => { onAction('delete'); handleClose(); }}>
-                                <MaterialIcons name="delete-outline" size={20} color="#ff4444" />
-                                <Text style={[styles.contextActionText, { color: '#ff4444' }]}>Delete</Text>
-                            </Pressable>
-                            <Pressable style={[styles.contextActionBtn, { borderBottomWidth: 0 }]} onPress={() => { /* Select */ handleClose(); }}>
+                            <Pressable style={styles.contextActionBtn} onPress={() => { /* Select */ handleClose(); }}>
                                 <MaterialIcons name="check-circle-outline" size={20} color="#fff" />
                                 <Text style={styles.contextActionText}>Select</Text>
+                            </Pressable>
+                            <Pressable style={[styles.contextActionBtn, { borderBottomWidth: 0 }]} onPress={() => { onAction('delete'); handleClose(); }}>
+                                <MaterialIcons name="delete-outline" size={20} color="#ff4444" />
+                                <Text style={[styles.contextActionText, { color: '#ff4444' }]}>Delete</Text>
                             </Pressable>
                         </BlurView>
                     </View>
@@ -545,6 +621,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const morphProgress = useSharedValue(sourceY !== undefined ? 0 : 1);
     const chatBodyOpacity = useSharedValue(sourceY !== undefined ? 0 : 1);
     const screenBgOpacity = useSharedValue(1);
+    const keyboardOffset = useSharedValue(0);
 
     // Header internal positioning — animated padding inside the unified morph container
     const headerInternalStyle = useAnimatedStyle(() => {
@@ -558,6 +635,10 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
     const chatBodyAnimStyle = useAnimatedStyle(() => ({
         opacity: chatBodyOpacity.value,
+    }));
+
+    const inputAreaAnimatedStyle = useAnimatedStyle(() => ({
+        transform: [{ translateY: -keyboardOffset.value }],
     }));
 
     // Full-screen black backdrop that fades out during back morph
@@ -605,11 +686,44 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         }
     }, [sourceY]);
 
+    useEffect(() => {
+        const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+        const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+        const onShow = (event: KeyboardEvent) => {
+            const rawHeight = event.endCoordinates?.height || 0;
+            const height = IS_IOS
+                ? Math.max(0, rawHeight - IOS_KEYBOARD_SAFE_ADJUST)
+                : rawHeight;
+            const duration = event.duration || 250;
+            keyboardOffset.value = withTiming(height, { duration });
+        };
+
+        const onHide = () => {
+            keyboardOffset.value = withTiming(0, { duration: 200 });
+        };
+
+        const showSub = Keyboard.addListener(showEvent, onShow);
+        const hideSub = Keyboard.addListener(hideEvent, onHide);
+
+        return () => {
+            showSub.remove();
+            hideSub.remove();
+        };
+    }, [keyboardOffset]);
+
+    const navigation = useNavigation();
+
     // Cleanup when back morph finishes
     const finishBack = useCallback(() => {
-        if (onBack) onBack();
-        else router.back();
-    }, [onBack, router]);
+        if (onBack) {
+            onBack();
+        } else if (navigation.canGoBack()) {
+            navigation.goBack();
+        } else {
+            console.warn('Navigation: Cannot go back, history stack is empty.');
+        }
+    }, [onBack, navigation]);
 
     // Animate OUT — butter smooth unified morph back to pill
     const handleBack = useCallback(() => {
@@ -693,7 +807,9 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     // Media picker state
     const [showMediaPicker, setShowMediaPicker] = useState(false);
     const [mediaPreview, setMediaPreview] = useState<{ uri: string; type: 'image' | 'video' | 'audio' } | null>(null);
-    const [playerMedia, setPlayerMedia] = useState<{ url: string; type: 'image' | 'video' | 'audio'; caption?: string } | null>(null);
+    const [mediaCollection, setMediaCollection] = useState<{ messageId: string; items: ChatMediaItem[]; startIndex: number } | null>(null);
+    const [mediaViewer, setMediaViewer] = useState<{ messageId: string; items: ChatMediaItem[]; index: number } | null>(null);
+    const [mediaItemReactions, setMediaItemReactions] = useState<Record<string, string[]>>({});
     const [isUploading, setIsUploading] = useState(false);
 
 
@@ -783,18 +899,68 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         }
     };
 
-    const handleMediaTap = (media: any) => {
-        if (!media) return;
-        setPlayerMedia({
-            url: media.url,
-            type: media.type,
-            caption: media.caption,
-        });
+    const handleMediaTap = (payload: any) => {
+        if (!payload?.mediaItems?.length) return;
+        const nextViewer = {
+            messageId: payload.messageId,
+            items: payload.mediaItems,
+            index: payload.index || 0,
+        };
+        if (payload.openGallery) {
+            setMediaCollection({
+                messageId: payload.messageId,
+                items: payload.mediaItems,
+                startIndex: payload.index || 0,
+            });
+            return;
+        }
+        setMediaViewer(nextViewer);
+    };
+
+    const addReactionToMedia = (messageId: string, mediaIndex: number, emoji: string) => {
+        const key = `${messageId}:${mediaIndex}`;
+        setMediaItemReactions(prev => ({
+            ...prev,
+            [key]: [...(prev[key] || []), emoji],
+        }));
+    };
+
+    const handleReactAllMedia = (messageId: string, emoji: string) => {
+        if (!id) return;
+        addReaction(id, messageId, emoji);
+    };
+
+    const handleSaveCurrentMedia = async () => {
+        if (!mediaViewer) return;
+        const current = mediaViewer.items[mediaViewer.index];
+        if (!current?.url) return;
+
+        try {
+            const permission = await MediaLibrary.requestPermissionsAsync();
+            if (permission.status !== 'granted') {
+                Alert.alert('Permission Required', 'Allow media library access to save files.');
+                return;
+            }
+
+            let localUri = current.url;
+            if (!current.url.startsWith('file://')) {
+                const extension = current.type === 'video' ? '.mp4' : '.jpg';
+                const target = `${FileSystem.cacheDirectory}soulsync_${Date.now()}${extension}`;
+                const downloaded = await FileSystem.downloadAsync(current.url, target);
+                localUri = downloaded.uri;
+            }
+
+            await MediaLibrary.saveToLibraryAsync(localUri);
+            Alert.alert('Saved', 'Media saved to your gallery.');
+        } catch (error) {
+            Alert.alert('Save Failed', 'Could not save this media.');
+        }
     };
 
     const renderMessage = useCallback(({ item }: { item: any }) => (
         <MessageBubble
             msg={item}
+            contactName={contact?.name || 'Them'}
             isSelected={selectedContextMessage?.msg.id === item.id}
             onLongPress={(mid: string, layout: any) => setSelectedContextMessage({ msg: item, layout })}
             onReply={(m: any) => setReplyingTo(m)}
@@ -803,7 +969,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             onMediaTap={handleMediaTap}
             quotedMessage={item.replyTo ? chatMessages.find((m: any) => m.id === item.replyTo) : null}
         />
-    ), [selectedContextMessage, chatMessages]);
+    ), [selectedContextMessage, chatMessages, contact?.name, handleMediaTap]);
 
     // Media picker handlers
     const handleSelectCamera = async () => {
@@ -883,11 +1049,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     }
 
     return (
-        <KeyboardAvoidingView
-            style={styles.container}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            keyboardVerticalOffset={0}
-        >
+        <View style={styles.container}>
             <StatusBar barStyle="light-content" />
 
             {/* Full-screen black backdrop — prevents home screen bleed-through during back morph */}
@@ -938,13 +1100,15 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             </View>
                         )}
 
+                        {/* Input Area */}
+                        <Animated.View style={[styles.inputArea, inputAreaAnimatedStyle]}>
                         {/* Reply Preview */}
                         {replyingTo && (
                             <BlurView intensity={60} tint="dark" style={styles.replyPreview}>
                                 <View style={styles.replyContent}>
                                     <View style={styles.quoteBar} />
                                     <View style={styles.replyTextContainer}>
-                                        <Text style={styles.replySender}>REPLYING TO</Text>
+                                        <Text style={[styles.replySender, { color: activeTheme.primary }]}>REPLYING TO</Text>
                                         <Text numberOfLines={1} style={styles.replyText}>{replyingTo.text}</Text>
                                     </View>
                                 </View>
@@ -953,9 +1117,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                 </Pressable>
                             </BlurView>
                         )}
-
-                        {/* Input Area */}
-                        <View style={styles.inputArea}>
                         {/* Unified Pill Container */}
                         <View style={styles.unifiedPillContainer}>
                             <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
@@ -1035,7 +1196,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                  </Pressable>
                             </Animated.View>
                         </View>
-                        </View>
+                        </Animated.View>
                     </View>
                 )}
                 </Animated.View>
@@ -1148,6 +1309,10 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 onSelectCamera={handleSelectCamera}
                 onSelectGallery={handleSelectGallery}
                 onSelectAudio={handleSelectAudio}
+                onSelectNote={() => {
+                    setShowMediaPicker(false);
+                    Alert.alert("SoulSync Notes", "Leave a note from the Home screen!");
+                }}
             />
 
             {/* Media Preview Modal */}
@@ -1160,16 +1325,119 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 isUploading={isUploading}
             />
 
-            {/* Media Player Modal */}
-            <MediaPlayerModal
-                visible={!!playerMedia}
-                mediaUrl={playerMedia?.url || ''}
-                mediaType={playerMedia?.type || 'image'}
-                caption={playerMedia?.caption}
-                onClose={() => setPlayerMedia(null)}
-            />
+            {/* Media Collection Modal */}
+            <Modal
+                visible={!!mediaCollection}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setMediaCollection(null)}
+            >
+                <View style={styles.mediaCollectionOverlay}>
+                    <View style={styles.mediaCollectionHeader}>
+                        <Text style={styles.mediaCollectionTitle}>Media</Text>
+                        <Pressable onPress={() => setMediaCollection(null)} style={styles.mediaCollectionCloseBtn}>
+                            <MaterialIcons name="close" size={22} color="#fff" />
+                        </Pressable>
+                    </View>
 
-        </KeyboardAvoidingView>
+                    <FlatList
+                        data={mediaCollection?.items || []}
+                        keyExtractor={(item, index) => `${item.url}-${index}`}
+                        numColumns={3}
+                        contentContainerStyle={styles.mediaCollectionGrid}
+                        renderItem={({ item, index }) => (
+                            <Pressable
+                                style={styles.mediaCollectionTile}
+                                onPress={() => {
+                                    if (!mediaCollection) return;
+                                    setMediaCollection(null);
+                                    setMediaViewer({
+                                        messageId: mediaCollection.messageId,
+                                        items: mediaCollection.items,
+                                        index,
+                                    });
+                                }}
+                            >
+                                <Image source={{ uri: item.url }} style={styles.mediaCollectionImage} />
+                                {item.type === 'video' && (
+                                    <View style={styles.mediaCollectionVideoBadge}>
+                                        <MaterialIcons name="play-arrow" size={18} color="#fff" />
+                                    </View>
+                                )}
+                            </Pressable>
+                        )}
+                    />
+
+                    {!!mediaCollection?.messageId && (
+                        <View style={styles.mediaCollectionReactionBar}>
+                            {['❤️', '🔥', '😂'].map(emoji => (
+                                <Pressable
+                                    key={emoji}
+                                    style={styles.mediaCollectionReactionBtn}
+                                    onPress={() => handleReactAllMedia(mediaCollection.messageId, emoji)}
+                                >
+                                    <Text style={styles.mediaCollectionReactionText}>{emoji}</Text>
+                                </Pressable>
+                            ))}
+                        </View>
+                    )}
+                </View>
+            </Modal>
+
+            {/* Single Media Viewer */}
+            <Modal
+                visible={!!mediaViewer}
+                transparent={false}
+                animationType="fade"
+                onRequestClose={() => setMediaViewer(null)}
+            >
+                <View style={styles.mediaViewerContainer}>
+                    <Pressable style={styles.mediaViewerCloseBtn} onPress={() => setMediaViewer(null)}>
+                        <MaterialIcons name="close" size={24} color="#fff" />
+                    </Pressable>
+                    <Pressable style={styles.mediaViewerSaveBtn} onPress={handleSaveCurrentMedia}>
+                        <MaterialIcons name="download" size={22} color="#fff" />
+                    </Pressable>
+
+                    {mediaViewer && mediaViewer.items[mediaViewer.index]?.type === 'video' ? (
+                        <Video
+                            source={{ uri: mediaViewer.items[mediaViewer.index].url }}
+                            style={styles.mediaViewerMedia}
+                            resizeMode={ResizeMode.CONTAIN}
+                            shouldPlay
+                            useNativeControls
+                        />
+                    ) : (
+                        <Image
+                            source={{ uri: mediaViewer?.items[mediaViewer?.index || 0]?.url || '' }}
+                            style={styles.mediaViewerMedia}
+                            resizeMode="contain"
+                        />
+                    )}
+
+                    {mediaViewer && (
+                        <View style={styles.mediaViewerBottom}>
+                            <View style={styles.mediaViewerReactionsRow}>
+                                {['❤️', '🔥', '😂'].map(emoji => (
+                                    <Pressable
+                                        key={emoji}
+                                        style={styles.mediaViewerReactionBtn}
+                                        onPress={() => addReactionToMedia(mediaViewer.messageId, mediaViewer.index, emoji)}
+                                    >
+                                        <Text style={styles.mediaViewerReactionText}>{emoji}</Text>
+                                    </Pressable>
+                                ))}
+                            </View>
+
+                            <Text style={styles.mediaViewerReactionList}>
+                                {(mediaItemReactions[`${mediaViewer.messageId}:${mediaViewer.index}`] || []).join(' ')}
+                            </Text>
+                        </View>
+                    )}
+                </View>
+            </Modal>
+
+        </View>
     );
 }
 
@@ -1260,14 +1528,17 @@ const styles = StyleSheet.create({
     },
     messagesContent: {
         paddingHorizontal: 16,
-        paddingTop: 120, // Swapped for inverted
+        paddingTop: 170, // Inverted list: this acts as visual bottom padding above input
         paddingBottom: 130, // Swapped for inverted
         flexGrow: 1,
     },
     messageWrapper: {
         width: '100%',
-        marginBottom: 12,
+        marginBottom: 8,
         alignItems: 'flex-start',
+    },
+    messageWrapperWithReactions: {
+        marginBottom: 22,
     },
     messageWrapperMe: {
         alignItems: 'flex-end',
@@ -1286,7 +1557,8 @@ const styles = StyleSheet.create({
         // Shared value handles this
     },
     bubbleContainer: {
-        maxWidth: '75%',
+        maxWidth: '82%',
+        minWidth: 72,
         borderRadius: 24,
         overflow: 'hidden',
         position: 'relative',
@@ -1295,6 +1567,19 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.2,
         shadowRadius: 10,
         elevation: 3,
+    },
+    bubbleContainerWithQuote: {
+        minWidth: '70%',
+    },
+    bubbleContainerMediaOnly: {
+        borderRadius: 14,
+        borderTopLeftRadius: 14,
+        borderTopRightRadius: 14,
+        borderBottomLeftRadius: 14,
+        borderBottomRightRadius: 14,
+        shadowOpacity: 0,
+        shadowRadius: 0,
+        elevation: 0,
     },
     bubbleContainerMe: {
         borderBottomRightRadius: 10,
@@ -1314,12 +1599,16 @@ const styles = StyleSheet.create({
         pointerEvents: 'none',
     },
     messageContent: {
-        padding: 12,
+        padding: 10,
         paddingHorizontal: 14,
-        paddingBottom: 8,
+        paddingBottom: 12,
         zIndex: 2,
         overflow: 'hidden',
         borderRadius: 24,
+    },
+    messageContentMediaOnly: {
+        padding: 0,
+        position: 'relative',
     },
     quotedContainer: {
         flexDirection: 'row',
@@ -1328,16 +1617,17 @@ const styles = StyleSheet.create({
         padding: 10,
         backgroundColor: 'rgba(0,0,0,0.15)',
         borderRadius: 10,
+        alignSelf: 'stretch',
         borderLeftWidth: 3,
-        borderLeftColor: 'rgba(255,255,255,0.3)',
+        borderLeftColor: 'rgba(255,255,255,0.45)',
     },
     quotedMe: {
         backgroundColor: 'rgba(255,255,255,0.15)',
-        borderLeftColor: '#ffffff',
+        borderLeftColor: 'rgba(255,255,255,0.85)',
     },
     quotedThem: {
         backgroundColor: 'rgba(0,0,0,0.15)',
-        borderLeftColor: '#F50057',
+        borderLeftColor: 'rgba(245, 0, 87, 0.9)',
     },
     quoteBar: {
         width: 3,
@@ -1345,24 +1635,64 @@ const styles = StyleSheet.create({
     },
     quoteContent: {
         flex: 1,
+        minWidth: 0,
     },
     quoteSender: {
         fontSize: 12,
         fontWeight: '700',
         letterSpacing: 0.5,
         marginBottom: 3,
+        lineHeight: 14,
+        flexShrink: 1,
     },
     quoteText: {
         fontSize: 13,
         lineHeight: 18,
+        flexShrink: 1,
+        flexWrap: 'wrap',
     },
-    mediaImage: {
-        width: 220,
-        height: 220,
+    mediaSingle: {
+        width: Math.min(SCREEN_WIDTH * 0.56, 250),
+        aspectRatio: 1,
+        borderRadius: 0,
+    },
+    mediaSingleNoGap: {
+        marginBottom: 0,
+    },
+    mediaSurface: {
+        borderRadius: 14,
+        overflow: 'hidden',
+        borderWidth: 1,
+    },
+    mediaSurfaceMe: {
+        borderColor: 'rgba(245, 0, 87, 0.58)',
+    },
+    mediaSurfaceThem: {
+        borderColor: 'rgba(255,255,255,0.16)',
+    },
+    mediaGridSurface: {
+        width: Math.min(SCREEN_WIDTH * 0.58, 252),
+    },
+    mediaGrid: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 4,
+    },
+    mediaGridNoGap: {
+        marginBottom: 0,
+    },
+    mediaGridTile: {
+        width: (Math.min(SCREEN_WIDTH * 0.58, 252) - 4) / 2,
+        aspectRatio: 1,
         borderRadius: 12,
-        marginBottom: 8,
+        overflow: 'hidden',
+        backgroundColor: 'rgba(255,255,255,0.08)',
     },
-    playIconOverlay: {
+    mediaGridImage: {
+        width: '100%',
+        height: '100%',
+    },
+    mediaTilePlayOverlay: {
         position: 'absolute',
         top: 0,
         left: 0,
@@ -1372,6 +1702,17 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         backgroundColor: 'rgba(0,0,0,0.3)',
         borderRadius: 12,
+    },
+    mediaMoreOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    mediaMoreText: {
+        color: '#fff',
+        fontSize: 28,
+        fontWeight: '700',
     },
     audioWaveform: {
         flexDirection: 'row',
@@ -1398,10 +1739,11 @@ const styles = StyleSheet.create({
     messageText: {
         color: 'rgba(229, 229, 229, 1)',
         fontSize: 14,
-        lineHeight: 20,
+        lineHeight: 19,
         fontWeight: '300',
-        letterSpacing: 0.2,
-        marginBottom: 0,
+        letterSpacing: 0,
+        marginBottom: 1,
+        flexShrink: 1,
     },
     messageTextMe: {
         color: '#ffffff',
@@ -1412,7 +1754,19 @@ const styles = StyleSheet.create({
         justifyContent: 'flex-end',
         alignItems: 'center',
         gap: 3,
-        marginTop: 4,
+        marginTop: 6,
+        minHeight: 14,
+        alignSelf: 'flex-end',
+    },
+    messageFooterMediaOnly: {
+        position: 'absolute',
+        right: 18,
+        bottom: 17,
+        marginTop: 0,
+        minHeight: 18,
+        paddingHorizontal: 7,
+        borderRadius: 10,
+        backgroundColor: 'rgba(0,0,0,0.35)',
     },
     timestamp: {
         color: 'rgba(255,255,255,0.4)',
@@ -1477,7 +1831,6 @@ const styles = StyleSheet.create({
         letterSpacing: 4,
     },
     replyPreview: {
-        marginHorizontal: 16,
         marginBottom: 8,
         borderRadius: 16,
         padding: 12,
@@ -1497,7 +1850,6 @@ const styles = StyleSheet.create({
     replySender: {
         fontSize: 8,
         fontWeight: '900',
-        color: '#f43f5e', // TODO: Make dynamic via style injection if possible, or leave as default brand color
         letterSpacing: 2,
     },
     replyText: {
@@ -1506,14 +1858,14 @@ const styles = StyleSheet.create({
     },
     inputArea: {
         position: 'absolute',
-        bottom: 0,
         left: 0,
         right: 0,
+        bottom: 0,
         paddingHorizontal: 16,
-        paddingTop: 160, // Significantly extended for "long fade"
-        paddingBottom: Platform.OS === 'ios' ? 32 : 16,
+        paddingTop: 10,
+        paddingBottom: Platform.OS === 'ios' ? 23 : 23,
         backgroundColor: 'transparent',
-        zIndex: 60, // Ensure it floats above messages
+        zIndex: 60,
     },
     unifiedPillContainer: {
         backgroundColor: 'rgba(30, 30, 35, 0.4)',
@@ -1609,10 +1961,14 @@ const styles = StyleSheet.create({
     },
     contextEmojiTail: {
         position: 'absolute',
-        bottom: -6,
-        width: 14,
-        height: 14,
-        backgroundColor: '#2a2a2a',
+        bottom: -5,
+        width: 13,
+        height: 13,
+        backgroundColor: 'rgba(30,30,30,0.5)',
+        overflow: 'hidden',
+        borderLeftWidth: 1,
+        borderTopWidth: 1,
+        borderColor: 'rgba(255,255,255,0.05)',
         transform: [{ rotate: '45deg' }],
     },
     contextActionMenu: {
@@ -1682,6 +2038,134 @@ const styles = StyleSheet.create({
         height: 1,
         backgroundColor: 'rgba(255,255,255,0.08)',
         marginHorizontal: 16,
+    },
+    mediaCollectionOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.95)',
+        paddingTop: 56,
+    },
+    mediaCollectionHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingBottom: 14,
+    },
+    mediaCollectionTitle: {
+        color: '#fff',
+        fontSize: 18,
+        fontWeight: '700',
+    },
+    mediaCollectionCloseBtn: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.1)',
+    },
+    mediaCollectionGrid: {
+        paddingHorizontal: 10,
+        paddingBottom: 20,
+    },
+    mediaCollectionTile: {
+        width: (SCREEN_WIDTH - 20) / 3,
+        aspectRatio: 1,
+        padding: 2,
+    },
+    mediaCollectionImage: {
+        width: '100%',
+        height: '100%',
+        borderRadius: 6,
+    },
+    mediaCollectionVideoBadge: {
+        position: 'absolute',
+        bottom: 8,
+        right: 8,
+        width: 26,
+        height: 26,
+        borderRadius: 13,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0,0,0,0.55)',
+    },
+    mediaCollectionReactionBar: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        gap: 12,
+        paddingVertical: 12,
+        borderTopWidth: 1,
+        borderTopColor: 'rgba(255,255,255,0.1)',
+    },
+    mediaCollectionReactionBtn: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.08)',
+    },
+    mediaCollectionReactionText: {
+        fontSize: 20,
+    },
+    mediaViewerContainer: {
+        flex: 1,
+        backgroundColor: '#000',
+        justifyContent: 'center',
+    },
+    mediaViewerCloseBtn: {
+        position: 'absolute',
+        top: 50,
+        left: 16,
+        zIndex: 3,
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    mediaViewerSaveBtn: {
+        position: 'absolute',
+        top: 50,
+        right: 16,
+        zIndex: 3,
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    mediaViewerMedia: {
+        width: '100%',
+        height: '100%',
+    },
+    mediaViewerBottom: {
+        position: 'absolute',
+        left: 16,
+        right: 16,
+        bottom: 28,
+    },
+    mediaViewerReactionsRow: {
+        flexDirection: 'row',
+        gap: 10,
+    },
+    mediaViewerReactionBtn: {
+        width: 42,
+        height: 42,
+        borderRadius: 21,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.14)',
+    },
+    mediaViewerReactionText: {
+        fontSize: 20,
+    },
+    mediaViewerReactionList: {
+        marginTop: 8,
+        color: 'rgba(255,255,255,0.85)',
+        fontSize: 14,
     },
     nowPlayingStatus: {
         flexDirection: 'row',

@@ -2,7 +2,7 @@ import React, { useRef } from 'react';
 import {
     View, Text, Image, StyleSheet, StatusBar, ScrollView, Animated, Dimensions
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
@@ -14,6 +14,7 @@ const HEADER_HEIGHT = 300;
 
 export default function ProfileScreen() {
     const router = useRouter();
+    const navigation = useNavigation();
     const { currentUser, logout, activeTheme } = useApp();
     const scrollY = useRef(new Animated.Value(0)).current;
 
@@ -108,7 +109,12 @@ export default function ProfileScreen() {
 
             {/* Header Content */}
             <View style={styles.topBar}>
-                <Pressable onPress={() => router.back()} style={styles.backButton}>
+                <Pressable 
+                    onPress={() => {
+                        if (navigation.canGoBack()) navigation.goBack();
+                    }} 
+                    style={styles.backButton}
+                >
                     <Ionicons name="chevron-back" size={28} color="#ffffff" />
                 </Pressable>
                 <Animated.Text style={[styles.headerTitle, { opacity: nameOpacity }]}>

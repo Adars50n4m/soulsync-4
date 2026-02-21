@@ -1,12 +1,13 @@
 import React from 'react';
 import { View, Text, Pressable, StyleSheet, StatusBar, ScrollView } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useNavigation } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useApp, THEMES, ThemeName } from '../context/AppContext';
 
 export default function ThemeScreen() {
     const router = useRouter();
+    const navigation = useNavigation();
     const { theme, setTheme, activeTheme } = useApp();
 
     const handleSelectTheme = (themeName: ThemeName) => {
@@ -19,7 +20,12 @@ export default function ThemeScreen() {
 
             {/* Header */}
             <View style={styles.header}>
-                <Pressable onPress={() => router.back()} style={styles.backButton}>
+                <Pressable 
+                    onPress={() => {
+                        if (navigation.canGoBack()) navigation.goBack();
+                    }} 
+                    style={styles.backButton}
+                >
                     <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
                 </Pressable>
                 <Text style={styles.headerTitle}>THEME</Text>
@@ -104,7 +110,9 @@ export default function ThemeScreen() {
                 {/* Apply Button */}
                 <Pressable
                     style={[styles.applyButton, { backgroundColor: activeTheme.primary }]}
-                    onPress={() => router.back()}
+                    onPress={() => {
+                        if (navigation.canGoBack()) navigation.goBack();
+                    }}
                 >
                     <Text style={styles.applyButtonText}>APPLY THEME</Text>
                 </Pressable>

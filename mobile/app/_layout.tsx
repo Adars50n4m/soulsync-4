@@ -31,8 +31,11 @@ function RootContent() {
 
   return (
     <View style={{ flex: 1 }}>
-      <Stack screenOptions={{ headerShown: false }} initialRouteName="(tabs)">
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack screenOptions={{ headerShown: false, gestureEnabled: false }} initialRouteName="(tabs)">
+        <Stack.Screen name="(tabs)" options={{ 
+          headerShown: false,
+          gestureEnabled: false // Prevents root-level GO_BACK crash on swipe
+        }} />
         <Stack.Screen name="call" options={{
           presentation: 'fullScreenModal',
           animation: 'fade',

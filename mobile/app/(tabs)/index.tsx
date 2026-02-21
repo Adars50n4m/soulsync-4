@@ -13,13 +13,49 @@ import Animated, {
   FadeOut
 } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library';
+import * as FileSystem from 'expo-file-system';
+import { storageService } from '../../services/StorageService';
 
 import { useApp } from '../../context/AppContext';
 import { SoulSyncLogo } from '../../components/SoulSyncLogo';
 import { StatusViewerModal } from '../../components/StatusViewerModal';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { Contact, Story } from '../../types';
+import { NoteBubble } from '../../components/NoteBubble';
+import { NoteCreatorModal } from '../../components/NoteCreatorModal';
 import SingleChatScreen from '../chat/[id]';
+
+const DEFAULT_AVATAR = 'https://via.placeholder.com/150';
+
+const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promise<string> => {
+  let resolvedUri = asset.uri;
+
+  if (resolvedUri.startsWith('ph://') && asset.assetId) {
+    try {
+      const info = await MediaLibrary.getAssetInfoAsync(asset.assetId);
+      resolvedUri = info.localUri || info.uri || resolvedUri;
+    } catch {
+      // Fall back to original URI if asset info fails.
+    }
+  }
+
+  // Persist picked media into app cache so viewer/home preview can read reliably.
+  if (resolvedUri.startsWith('file://')) {
+    const ext = asset.fileName?.split('.').pop() || (asset.type === 'video' ? 'mp4' : 'jpg');
+    const cacheDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+    if (!cacheDir) return resolvedUri;
+    const target = `${cacheDir}status-${Date.now()}.${ext}`;
+    try {
+      await FileSystem.copyAsync({ from: resolvedUri, to: target });
+      resolvedUri = target;
+    } catch {
+      // Keep original file URI if copy fails.
+    }
+  }
+
+  return resolvedUri;
+};
 
 const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }: { 
   item: Contact, 
@@ -67,7 +103,7 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }
 
         <View style={styles.pillContent}>
           <View style={styles.avatarContainer}>
-            <Image source={{ uri: item.avatar }} style={styles.avatar} />
+            <Image source={{ uri: item.avatar || DEFAULT_AVATAR }} style={styles.avatar} />
             {item.status === 'online' && <View style={styles.onlineIndicator} />}
           </View>
 
@@ -89,7 +125,19 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }
 });
 
 export default function HomeScreen() {
-  const { contacts, messages, activeTheme, typingUsers, currentUser, statuses, addStatus } = useApp();
+  const {
+    contacts,
+    messages,
+    activeTheme,
+    typingUsers,
+    currentUser,
+    statuses,
+    addStatus,
+    deleteStatus,
+    toggleStatusLike,
+    sendChatMessage,
+    addStatusView,
+  } = useApp();
   const navigation = useNavigation();
   const [selectedUser, setSelectedUser] = useState<Contact | null>(null);
   const [sourceY, setSourceY] = useState<number | undefined>(undefined);
@@ -113,37 +161,115 @@ export default function HomeScreen() {
   const [selectedStatusContact, setSelectedStatusContact] = useState<Contact | null>(null);
   const [isViewerVisible, setIsViewerVisible] = useState(false);
   const [isMediaPickerVisible, setIsMediaPickerVisible] = useState(false);
+  const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
 
   const contactStoriesMap = useMemo(() => {
     const map = new Map<string, Story[]>();
     statuses.forEach(s => {
-      const story: Story = { id: s.id, url: s.mediaUrl, type: s.mediaType, timestamp: s.timestamp, seen: false, caption: s.caption };
+      const story: Story = {
+        id: s.id,
+        url: s.mediaUrl,
+        type: s.mediaType,
+        timestamp: s.timestamp,
+        seen: false,
+        caption: s.caption,
+        userId: s.userId,
+        likes: s.likes,
+        views: s.views,
+      };
       if (!map.has(s.userId)) map.set(s.userId, []);
       map.get(s.userId)?.push(story);
     });
     return map;
   }, [statuses]);
 
+  const myStories = useMemo(
+    () => currentUser ? (contactStoriesMap.get(currentUser.id) || []) : [],
+    [contactStoriesMap, currentUser]
+  );
+
+  const visibleContacts = useMemo(() => {
+    const legacyIds = new Set(['shri', 'hari']);
+    const hasRealContacts = contacts.some(c => !legacyIds.has(c.id));
+
+    if (!hasRealContacts) return contacts;
+
+    return contacts.filter(contact => {
+      if (!legacyIds.has(contact.id)) return true;
+
+      const hasMessages = (messages[contact.id]?.length || 0) > 0;
+      const hasStatus = statuses.some(s => s.userId === contact.id);
+      const hasMeaningfulLastMessage =
+        !!contact.lastMessage && contact.lastMessage !== 'Start a conversation';
+
+      // Hide legacy placeholder contacts when real contacts exist and placeholder has no activity.
+      return hasMessages || hasStatus || hasMeaningfulLastMessage;
+    });
+  }, [contacts, messages, statuses]);
+
   const contactsWithStories = useMemo(() => {
-     return contacts.filter(c => contactStoriesMap.has(c.id)).map(c => ({
+     return visibleContacts.filter(c => contactStoriesMap.has(c.id)).map(c => ({
          ...c,
          stories: contactStoriesMap.get(c.id)
      }));
-  }, [contacts, contactStoriesMap]);
+  }, [visibleContacts, contactStoriesMap]);
+
+  const isNoteValid = (timestamp?: string) => {
+    if (!timestamp) return false;
+    const noteDate = new Date(timestamp);
+    const now = new Date();
+    const diff = now.getTime() - noteDate.getTime();
+    return diff < 24 * 60 * 60 * 1000; // 24 hours
+  };
 
   const handleStatusPress = (contact: Contact) => {
     setSelectedStatusContact(contact);
     setIsViewerVisible(true);
   };
 
-  const createStatus = (result: ImagePicker.ImagePickerResult) => {
+  const handleMyStatusPress = () => {
+    if (!currentUser) return;
+
+    if (myStories.length > 0) {
+      setSelectedStatusContact({
+        id: currentUser.id,
+        name: currentUser.name,
+        avatar: currentUser.avatar || DEFAULT_AVATAR,
+        status: 'online',
+        stories: myStories,
+      });
+      setIsViewerVisible(true);
+      return;
+    }
+
+    if (currentUser.note) {
+      setIsNoteModalVisible(true);
+    } else {
+      setIsMediaPickerVisible(true);
+    }
+  };
+
+  const createStatus = async (result: ImagePicker.ImagePickerResult) => {
       if (!result.canceled && result.assets?.[0] && currentUser) {
           const asset = result.assets[0];
+          const safeMediaUri = await resolveStatusAssetUri(asset);
+          let mediaUrl = safeMediaUri;
+
+          // Persist status media to cloud URL so it renders reliably in viewer and home preview.
+          if (safeMediaUri.startsWith('file://')) {
+            try {
+              const uploadedUrl = await storageService.uploadImage(safeMediaUri, 'status-media', currentUser.id);
+              if (uploadedUrl) mediaUrl = uploadedUrl;
+            } catch (error: any) {
+              console.warn('Status upload failed, keeping local URI fallback:', error?.message || error);
+            }
+          }
+
           const expiresAt = new Date();
           expiresAt.setHours(expiresAt.getHours() + 24);
           addStatus({
               userId: currentUser.id,
-              mediaUrl: asset.uri,
+              mediaUrl,
               mediaType: asset.type === 'video' ? 'video' : 'image',
               timestamp: new Date().toISOString(),
               expiresAt: expiresAt.toISOString(),
@@ -157,14 +283,14 @@ export default function HomeScreen() {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
       if (!permission.granted) return Alert.alert('Permission needed', 'Camera permission required.');
       const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
-      createStatus(result);
+      await createStatus(result);
   };
 
   const handleSelectGallery = async () => {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) return Alert.alert('Permission needed', 'Gallery permission required.');
       const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.8 });
-      createStatus(result);
+      await createStatus(result);
   };
 
   const handleUserSelect = useCallback((contact: Contact, y: number) => {
@@ -200,7 +326,7 @@ export default function HomeScreen() {
       <StatusBar barStyle="light-content" />
       
       <FlatList
-        data={contacts}
+        data={visibleContacts}
         keyExtractor={item => item.id}
         renderItem={renderItem}
         ListHeaderComponent={() => (
@@ -213,28 +339,55 @@ export default function HomeScreen() {
               contentContainerStyle={styles.statusContent}
               renderItem={({ item }) => {
                 if (item.id === 'my-status') {
+                  const myStoryPreviewUrl = myStories[0]?.url;
                   return (
-                    <Pressable style={styles.statusCard} onPress={() => setIsMediaPickerVisible(true)}>
+                    <Pressable style={styles.statusCard} onPress={handleMyStatusPress}>
                       <View style={styles.myStatusBackground}>
+                        {!!myStoryPreviewUrl && (
+                          <Image source={{ uri: myStoryPreviewUrl }} style={styles.myStatusPreviewBg} />
+                        )}
                         <View style={styles.myStatusAvatarContainer}>
                           <Image source={{ uri: currentUser?.avatar || 'https://via.placeholder.com/150' }} style={styles.myStatusAvatar} />
-                          <View style={styles.myStatusAddBadge}><MaterialIcons name="add" size={16} color="#fff" /></View>
+                          {myStories.length === 0 && (
+                            <View style={styles.myStatusAddBadge}><MaterialIcons name="add" size={16} color="#fff" /></View>
+                          )}
                         </View>
-                        <Text style={styles.startStoryText}>Start a story</Text>
+                        <Text style={styles.startStoryText}>
+                          {myStories.length > 0
+                            ? 'My story'
+                            : currentUser?.note && isNoteValid(currentUser.noteTimestamp)
+                              ? 'Your Note'
+                              : 'Start a story'}
+                        </Text>
                       </View>
+                      {currentUser?.note && isNoteValid(currentUser.noteTimestamp) && (
+                        <View style={styles.notePositioner}>
+                           <NoteBubble text={currentUser.note} isMe />
+                        </View>
+                      )}
                     </Pressable>
                   );
                 }
                 const contact = item as Contact;
                 const hasUnseen = contact.stories?.some(s => !s.seen);
+                const storyUrl = contact.stories?.[0]?.url;
                 return (
                   <Pressable style={styles.statusCard} onPress={() => handleStatusPress(contact)}>
-                    <Image source={{ uri: contact.stories?.[0]?.url }} style={styles.statusMediaBackground} />
+                    {storyUrl ? (
+                        <Image source={{ uri: storyUrl }} style={styles.statusMediaBackground} />
+                    ) : (
+                        <View style={[styles.statusMediaBackground, styles.statusPlaceholder]} />
+                    )}
                     <View style={styles.statusOverlay}>
                       <View style={[styles.contactAvatarBadge, { borderColor: hasUnseen ? '#3b82f6' : 'rgba(255,255,255,0.2)' }]}>
-                        <Image source={{ uri: contact.avatar }} style={styles.smallStatusAvatar} />
+                        <Image source={{ uri: contact.avatar || DEFAULT_AVATAR }} style={styles.smallStatusAvatar} />
                       </View>
                     </View>
+                    {contact.note && isNoteValid(contact.noteTimestamp) && (
+                        <View style={styles.notePositioner}>
+                            <NoteBubble text={contact.note} />
+                        </View>
+                    )}
                   </Pressable>
                 );
               }}
@@ -250,6 +403,32 @@ export default function HomeScreen() {
         stories={selectedStatusContact?.stories || []}
         contactName={selectedStatusContact?.name || ''}
         contactAvatar={selectedStatusContact?.avatar || ''}
+        statusOwnerId={selectedStatusContact?.id}
+        currentUserId={currentUser?.id}
+        onStorySeen={(storyId) => {
+          if (!currentUser || selectedStatusContact?.id === currentUser.id) return;
+          addStatusView(storyId);
+        }}
+        onReact={(storyId) => {
+          toggleStatusLike(storyId);
+        }}
+        onDeleteStory={(storyId) => {
+          deleteStatus(storyId);
+          const remaining = (selectedStatusContact?.stories || []).filter(s => s.id !== storyId);
+          if (remaining.length === 0) {
+            setIsViewerVisible(false);
+          } else {
+            setSelectedStatusContact(prev => prev ? { ...prev, stories: remaining } : prev);
+          }
+        }}
+        onReply={(story, text) => {
+          if (!selectedStatusContact?.id || !currentUser || selectedStatusContact.id === currentUser.id) return;
+          sendChatMessage(selectedStatusContact.id, text, {
+            type: 'status_reply',
+            url: story.url,
+            caption: story.caption,
+          });
+        }}
         onClose={() => setIsViewerVisible(false)}
         onComplete={() => setIsViewerVisible(false)}
       />
@@ -260,6 +439,15 @@ export default function HomeScreen() {
         onSelectCamera={handleSelectCamera}
         onSelectGallery={handleSelectGallery}
         onSelectAudio={() => Alert.alert("Audio Status", "Coming soon!")}
+        onSelectNote={() => {
+            setIsMediaPickerVisible(false);
+            setIsNoteModalVisible(true);
+        }}
+      />
+
+      <NoteCreatorModal
+        visible={isNoteModalVisible}
+        onClose={() => setIsNoteModalVisible(false)}
       />
 
       {selectedUser && (
@@ -284,20 +472,30 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   fullScreenContent: { flex: 1, backgroundColor: 'transparent' },
-  statusRail: { marginTop: 60, marginBottom: 24 },
-  statusContent: { paddingHorizontal: 20, gap: 12 },
-  statusCard: { width: 110, height: 140, borderRadius: 28, overflow: 'hidden', backgroundColor: '#1a1a1a' },
-  myStatusBackground: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#262626', padding: 12 },
+  statusRail: { marginTop: 60, marginBottom: 0, overflow: 'visible' },
+  statusContent: { paddingHorizontal: 20, paddingVertical: 12, paddingTop: 8, gap: 12, overflow: 'visible' },
+  statusCard: { width: 110, height: 140, borderRadius: 28, backgroundColor: '#1a1a1a', zIndex: 10 },
+  myStatusBackground: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#262626', padding: 12, borderRadius: 28, overflow: 'hidden' },
+  myStatusPreviewBg: { ...StyleSheet.absoluteFillObject, opacity: 0.42 },
   myStatusAvatarContainer: { position: 'relative', marginBottom: 12 },
   myStatusAvatar: { width: 56, height: 56, borderRadius: 28, borderWidth: 2, borderColor: '#3b82f6' },
   myStatusAddBadge: { position: 'absolute', bottom: -2, right: -2, width: 22, height: 22, borderRadius: 11, backgroundColor: '#1a1a1a', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#262626' },
   startStoryText: { color: 'rgba(255,255,255,0.8)', fontSize: 12, fontWeight: '600', textAlign: 'center' },
-  statusMediaBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: '#1a1a1a' },
+  statusMediaBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: '#1a1a1a', borderRadius: 28 },
+  statusPlaceholder: { backgroundColor: 'rgba(255,255,255,0.08)' },
   statusOverlay: { ...StyleSheet.absoluteFillObject, padding: 10 },
   contactAvatarBadge: { width: 36, height: 36, borderRadius: 18, borderWidth: 2, padding: 2, backgroundColor: 'rgba(0,0,0,0.5)' },
   smallStatusAvatar: { width: '100%', height: '100%', borderRadius: 15 },
   listContent: { paddingBottom: 100, paddingHorizontal: 4 },
   chatItem: { marginBottom: 8, marginHorizontal: 16, borderRadius: 36, height: 72 },
+  notePositioner: {
+      position: 'absolute',
+      top: -20, // Float above the card
+      left: 0,
+      right: 0,
+      alignItems: 'center',
+      zIndex: 100,
+  },
   chatPillContainer: { flex: 1, borderRadius: 36, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.1)', overflow: 'hidden' },
   pillBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: '#151515', opacity: 0.95 },
   pillBlur: { ...StyleSheet.absoluteFillObject },
