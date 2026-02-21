@@ -1528,8 +1528,8 @@ const styles = StyleSheet.create({
     },
     messagesContent: {
         paddingHorizontal: 16,
-        paddingTop: 170, // Inverted list: this acts as visual bottom padding above input
-        paddingBottom: 130, // Swapped for inverted
+        paddingTop: 100, // Reduced from 170 to fix excessive bottom space (inverted list)
+        paddingBottom: 110, // Reduced from 130
         flexGrow: 1,
     },
     messageWrapper: {
@@ -1938,7 +1938,7 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         right: 0,
-        height: 180, // Height to cover input area's float zone
+        height: 140, // Height to cover input area's float zone (reduced from 180)
         zIndex: 50,
     },
     // Context Menu Styles
