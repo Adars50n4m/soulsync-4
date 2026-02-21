@@ -13,6 +13,8 @@ import {
     NOTIF_ACTION_REPLY_MESSAGE
 } from '../services/NotificationService';
 import { webRTCService } from '../services/WebRTCService';
+import { nativeCallBridge } from '../services/NativeCallBridge';
+import { nativeCallService } from '../services/NativeCallService';
 import { supabase } from '../config/supabase';
 import { offlineService } from '../services/LocalDBService';
 
@@ -1143,6 +1145,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     useEffect(() => {
         if (currentUser) {
             callService.initialize(currentUser.id);
+
+            // ── Initialize Native Call Bridge (CallKit / ConnectionService) ──
+            nativeCallBridge.initialize(currentUser.id, {
+                onCallAnswered: (callId, payload) => {
+                    console.log('[AppContext] Native call answered:', callId);
+                    const caller = contactsRef.current.find((c: Contact) => c.id === payload.callerId);
+                    setActiveCall({
+                        callId: payload.callId,
+                        contactId: payload.callerId,
+                        type: payload.callType,
+                        isMinimized: false,
+                        isMuted: false,
+                        isVideoOff: false,
+                        isIncoming: true,
+                        isAccepted: true,
+                        isRinging: false,
+                        startTime: Date.now(),
+                        callerName: caller?.name || payload.callerName || 'Unknown',
+                        callerAvatar: caller?.avatar,
+                    });
+                },
+                onCallDeclined: (callId) => {
+                    console.log('[AppContext] Native call declined:', callId);
+                    setActiveCall(null);
+                },
+                onCallConnected: (callId) => {
+                    console.log('[AppContext] Native call connected:', callId);
+                    nativeCallService.reportCallConnected(callId);
+                },
+                onCallEnded: (callId) => {
+                    console.log('[AppContext] Native call ended:', callId);
+                    setActiveCall(null);
+                },
+                onMuteToggled: (muted) => {
+                    setActiveCall(prev => prev ? { ...prev, isMuted: muted } : null);
+                },
+            }).catch(err => console.warn('[AppContext] NativeCallBridge init failed (non-fatal):', err));
+
             const handleSignal = async (signal: CallSignal) => {
                 const currentActiveCall = activeCallRef.current;
                 const currentContacts = contactsRef.current;
@@ -1174,6 +1214,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                                 if (caller?.avatar) {
                                     try { (Image as any).prefetch(caller.avatar); } catch (e) {}
                                 }
+
+                                // Show native CallKit/ConnectionService UI (for lock screen / killed state)
+                                if (nativeCallService.isAvailable()) {
+                                    nativeCallService.displayIncomingCall({
+                                        callId: signal.callId,
+                                        callerId: signal.callerId,
+                                        callerName: caller?.name || "Unknown User",
+                                        callType: signal.callType,
+                                        roomId: signal.roomId || signal.callId,
+                                    });
+                                }
+
+                                // Also show the in-app notification (for foreground state)
                                 notificationService.showIncomingCall({
                                     callId: signal.callId,
                                     callerId: signal.callerId,
@@ -1194,6 +1247,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                             setActiveCall(prev => prev ? { ...prev, isAccepted: true, isRinging: false, startTime: Date.now() } : null);
                             const { webRTCService } = require('../services/WebRTCService');
                             await webRTCService.onCallAccepted();
+                            // Report connected to native UI
+                            nativeCallBridge.reportCallConnected(signal.callId);
                         }
                         await notificationService.dismissCallNotification(signal.callId);
                         break;
@@ -1202,6 +1257,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                             const { webRTCService } = require('../services/WebRTCService');
                             webRTCService.endCall();
                             setActiveCall(null);
+                            // End native call UI
+                            nativeCallBridge.reportCallEnded(signal.callId);
                         }
                         await notificationService.dismissCallNotification(signal.callId);
                         break;
@@ -1215,12 +1272,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         const { webRTCService: wrtc } = require('../services/WebRTCService');
                         wrtc.endCall();
                         setActiveCall(null);
+                        // End native call UI
+                        nativeCallBridge.reportCallEnded(signal.callId);
                         await notificationService.dismissCallNotification(signal.callId);
                         break;
                 }
             };
             callService.addListener(handleSignal);
-            return () => { callService.removeListener(handleSignal); };
+            return () => {
+                callService.removeListener(handleSignal);
+                nativeCallBridge.cleanup();
+            };
         }
     }, [currentUser]);
 
@@ -1242,6 +1304,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // PREFETCH AVATAR FOR SMOOTH TRANSITION
         if (contact?.avatar) {
             try { (Image as any).prefetch(contact.avatar); } catch (e) {}
+        }
+
+        // Report outgoing call to native system (CallKit/ConnectionService)
+        if (callId) {
+            nativeCallBridge.reportOutgoingCall(callId, contact?.name || 'Unknown', type);
+        }
+
+        // Send push notification to wake the callee's device
+        // (for when their app is killed or phone is locked)
+        if (callId && currentUser) {
+            nativeCallBridge.sendCallPush(
+                contactId,
+                callId,
+                currentUser.name || 'SoulSync User',
+                type
+            ).catch(err => console.warn('[AppContext] Push send failed (non-fatal):', err));
         }
     };
 
@@ -1321,6 +1399,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const { webRTCService } = require('../services/WebRTCService');
             webRTCService.endCall();
             setActiveCall(null);
+            // End native call UI
+            nativeCallBridge.reportCallEnded(activeCall.callId);
             await notificationService.dismissCallNotification(activeCall.callId);
         }
     };
