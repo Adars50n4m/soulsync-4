@@ -20,7 +20,7 @@ export interface ChatMessage {
 }
 
 type MessageCallback = (message: ChatMessage) => void;
-type StatusCallback = (messageId: string, status: 'delivered' | 'read') => void;
+type StatusCallback = (messageId: string, status: ChatMessage['status'], newId?: string) => void;
 type NetworkStatusCallback = (isOnline: boolean) => void;
 
 // Configuration for retry logic
@@ -305,13 +305,19 @@ class ChatService {
                 throw error;
             }
 
-            // Success - update local status
-            console.log(`[ChatService] Message ${message.id} successfully synced to Supabase`);
-            await offlineService.updateMessageStatus(message.id, 'sent');
+            // Success - update local status and ID
+            const serverId = data.id.toString();
+            console.log(`[ChatService] Message ${message.id} successfully synced to Supabase. New ID: ${serverId}`);
             
-            // Notify UI about the status change
+            // Reconcile ID in Local DB first
+            if (message.id !== serverId) {
+                await offlineService.updateMessageId(message.id, serverId);
+            }
+            await offlineService.updateMessageStatus(serverId, 'sent');
+            
+            // Notify UI about the status change and ID reconciliation
             if (message.sender === 'me') {
-                this.onStatusUpdate?.(message.id, 'delivered');
+                this.onStatusUpdate?.(message.id, 'sent', serverId);
             }
 
             // Clear any retry timer for this message

@@ -440,14 +440,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         });
                     }
                 },
-                (messageId: string, status: 'delivered' | 'read') => {
+                (messageId: string, status: ChatMessage['status'], newId?: string) => {
                     if (otherUser) {
                         setMessages(prev => {
                             const chatMessages = prev[otherUser.id] || [];
                             return {
                                 ...prev,
                                 [otherUser.id]: chatMessages.map(msg =>
-                                    msg.id === messageId ? { ...msg, status } : msg
+                                    msg.id === messageId ? { ...msg, status, id: newId || msg.id } : msg
                                 )
                             };
                         });
