@@ -141,6 +141,18 @@ export const offlineService = {
   },
 
   /**
+   * Reconcile local optimistic ID with server-generated ID
+   */
+  async updateMessageId(oldId: string, newId: string): Promise<void> {
+    const db = await getDB();
+    if (!db) return;
+    await db.runAsync(
+      `UPDATE messages SET id = ? WHERE id = ?;`,
+      [newId, oldId]
+    );
+  },
+
+  /**
    * Update retry count and last retry timestamp for a message
    */
   async updateMessageRetry(

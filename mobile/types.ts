@@ -4,7 +4,7 @@ export interface Message {
     sender: 'me' | 'them';
     text: string;
     timestamp: string;
-    status?: 'sent' | 'delivered' | 'read';
+    status?: 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
     reactions?: string[];
     replyTo?: string;
     media?: {
