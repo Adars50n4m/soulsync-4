@@ -163,17 +163,13 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
         const p = animationProgress.value;
         if (!sourceLayout) return {};
 
-        // Morph from source bubble to Proportional Immersive card (v7)
-        // Dynamic Gap-based strategy: Sit perfectly between header and input
-        const TOP_RESERVE = 150; 
-        const BOTTOM_RESERVE = Platform.OS === 'ios' ? 460 : 400; // High Pill + Height + Margin
-        const availableHeight = SCREEN_HEIGHT - TOP_RESERVE - BOTTOM_RESERVE;
-        
-        const targetWidth = SCREEN_WIDTH - 24; // Breathe-able width
-        const targetHeight = Math.max(availableHeight, 200); // Take the whole gap
+        // Morph from source bubble to MASSIVE Ultra-Immersive card (v3)
+        // Fixed Large Bounding Box strategy: card is always large, image contains inside.
+        const targetWidth = SCREEN_WIDTH - 16;
+        const targetHeight = SCREEN_HEIGHT * 0.82;
         
         const targetX = (SCREEN_WIDTH - targetWidth) / 2;
-        const targetY = TOP_RESERVE + (availableHeight - targetHeight) / 2;
+        const targetY = (SCREEN_HEIGHT - targetHeight) / 2;
 
         return {
             position: 'absolute',
@@ -181,10 +177,10 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
             top: interpolate(p, [0, 1], [sourceLayout.y, targetY]) + translateY.value,
             width: interpolate(p, [0, 1], [sourceLayout.width, targetWidth]),
             height: interpolate(p, [0, 1], [sourceLayout.height, targetHeight]),
-            borderRadius: interpolate(p, [0, 1], [16, 36]), 
+            borderRadius: interpolate(p, [0, 1], [16, 36]), // Ultra-smooth corners
             transform: [{ scale: scale.value }],
             overflow: 'hidden',
-            backgroundColor: 'rgba(255,255,255,0.05)', // Subtle card boundary
+            backgroundColor: 'rgba(255,255,255,0.03)', // Define the card boundaries subtly
         };
     });
 
@@ -379,17 +375,6 @@ const styles = StyleSheet.create({
         color: 'rgba(255,255,255,0.6)',
         fontSize: 11,
     },
-    scanIconContainer: {
-        position: 'absolute',
-        bottom: 16,
-        right: 16,
-        width: 36,
-        height: 36,
-        borderRadius: 10,
-        backgroundColor: 'rgba(0,0,0,0.3)',
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
     iconButton: {
         width: 44,
         height: 44,
@@ -403,11 +388,11 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         right: 0,
-        paddingBottom: Platform.OS === 'ios' ? 380 : 330, // Ultra-Extreme Reach (v7)
+        paddingBottom: Platform.OS === 'ios' ? 240 : 200, // Re-applied Sky-High position
         backgroundColor: 'transparent',
     },
     inputContainer: {
-        paddingHorizontal: 16,
+        paddingHorizontal: 15,
     },
     inputPill: {
         flexDirection: 'row',
@@ -418,15 +403,6 @@ const styles = StyleSheet.create({
         paddingVertical: 6,
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.05)',
-    },
-    cameraBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: '#A855F7', // Purple logic
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 10,
     },
     inputBlur: {
         flexDirection: 'row',
