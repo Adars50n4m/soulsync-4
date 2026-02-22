@@ -215,12 +215,12 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                         <Video
                             source={{ uri: media.url }}
                             style={styles.fullMedia}
-                            resizeMode={ResizeMode.CONTAIN}
+                            resizeMode={ResizeMode.COVER}
                             shouldPlay
                             isLooping
                         />
                     ) : (
-                        <Image source={{ uri: media.url }} style={styles.fullMedia} resizeMode="contain" />
+                        <Image source={{ uri: media.url }} style={styles.fullMedia} resizeMode="cover" />
                     )}
                     
                     {/* Scan Icon in corner */}
@@ -417,7 +417,7 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         right: 0,
-        paddingBottom: Platform.OS === 'ios' ? 110 : 90, // Ultra-high positioning (v3)
+        paddingBottom: Platform.OS === 'ios' ? 160 : 130, // Ultra-extreme positioning (v4)
         backgroundColor: 'transparent',
     },
     inputContainer: {
