@@ -1430,6 +1430,16 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 visible={!!mediaViewer}
                 media={mediaViewer ? mediaViewer.items[mediaViewer.index] as any : null}
                 sourceLayout={selectedMediaLayout}
+                userInfo={(() => {
+                    if (!mediaViewer) return undefined;
+                    const msg = chatMessages.find((m: any) => m.id === mediaViewer.messageId);
+                    if (!msg) return { name: 'You', timestamp: 'Just now' };
+                    return {
+                        name: msg.sender === 'me' ? 'You' : (contact?.name || 'Contact'),
+                        avatar: msg.sender === 'me' ? currentUser?.avatar : contact?.avatar,
+                        timestamp: msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'
+                    };
+                })()}
                 onClose={() => {
                     setMediaViewer(null);
                     setSelectedMediaLayout(null);
@@ -1456,6 +1466,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                         addReaction(id, mediaViewer.messageId, emoji);
                     }
                 }}
+                onEdit={() => Alert.alert('Edit', 'Media editing will be available soon.')}
+                onShare={() => Alert.alert('Share', 'External sharing will be available soon.')}
             />
 
         </View>
