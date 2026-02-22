@@ -51,6 +51,13 @@ interface EnhancedMediaViewerProps {
     onReply?: () => void;
     onForward?: () => void;
     onReaction?: (emoji: string) => void;
+    onEdit?: () => void;
+    onShare?: () => void;
+    userInfo?: {
+        name: string;
+        avatar?: string;
+        timestamp?: string;
+    };
 }
 
 export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
@@ -63,6 +70,9 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
     onReply,
     onForward,
     onReaction,
+    onEdit,
+    onShare,
+    userInfo,
 }) => {
     const [isFullyOpen, setIsFullyOpen] = useState(false);
     const [comment, setComment] = useState('');
@@ -216,14 +226,45 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                     ) : (
                         <Image source={{ uri: media.url }} style={styles.fullMedia} resizeMode="contain" />
                     )}
+                    
+                    {/* Scan Icon in corner */}
+                    <View style={styles.scanIconContainer}>
+                        <MaterialIcons name="center-focus-weak" size={24} color="white" />
+                    </View>
                 </Animated.View>
             </GestureDetector>
 
-            {/* Top Bar - Close Button */}
+            {/* Top Bar - Header & Actions */}
             <Animated.View style={[styles.topBar, animatedOverlayStyle]}>
-                <Pressable onPress={handleClose} style={styles.iconButton}>
-                    <MaterialIcons name="close" size={26} color="white" />
-                </Pressable>
+                <View style={styles.topBarLeft}>
+                    <Pressable onPress={handleClose} style={styles.topIcon}>
+                        <MaterialIcons name="close" size={28} color="white" />
+                    </Pressable>
+                    
+                    <View style={styles.userHeader}>
+                        {userInfo?.avatar ? (
+                            <Image source={{ uri: userInfo.avatar }} style={styles.headerAvatar} />
+                        ) : (
+                            <View style={[styles.headerAvatar, { backgroundColor: '#333' }]} />
+                        )}
+                        <View style={styles.userInfoText}>
+                            <Text style={styles.userNameText}>{userInfo?.name || 'You'}</Text>
+                            <Text style={styles.timestampText}>{userInfo?.timestamp || 'Just now'}</Text>
+                        </View>
+                    </View>
+                </View>
+
+                <View style={styles.topBarRight}>
+                    <Pressable onPress={onEdit} style={styles.topIcon}>
+                        <MaterialIcons name="colorize" size={24} color="white" />
+                    </Pressable>
+                    <Pressable onPress={onDownload} style={styles.topIcon}>
+                        <MaterialIcons name="file-download" size={26} color="white" />
+                    </Pressable>
+                    <Pressable onPress={onShare} style={styles.topIcon}>
+                        <MaterialIcons name="near-me" size={26} color="white" />
+                    </Pressable>
+                </View>
             </Animated.View>
 
             {/* Bottom Keyboard Area */}
@@ -232,22 +273,27 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                 style={styles.bottomArea}
             >
                 <Animated.View style={[styles.inputContainer, animatedOverlayStyle]}>
-                    <BlurView intensity={40} tint="dark" style={styles.inputBlur}>
+                    <View style={styles.inputPill}>
+                        <Pressable style={styles.cameraBtn}>
+                            <MaterialIcons name="photo-camera" size={22} color="white" />
+                        </Pressable>
                         <TextInput
                             style={styles.input}
-                            placeholder="Add a comment..."
+                            placeholder="Reply..."
                             placeholderTextColor="rgba(255,255,255,0.4)"
                             value={comment}
                             onChangeText={setComment}
                             multiline
                         />
-                        <Pressable 
-                            style={[styles.sendButton, !comment.trim() && { opacity: 0.5 }]}
-                            onPress={() => onSendComment?.(comment)}
-                        >
-                            <MaterialIcons name="send" size={20} color="white" />
-                        </Pressable>
-                    </BlurView>
+                        {comment.trim() ? (
+                            <Pressable 
+                                style={styles.sendIconBtn}
+                                onPress={() => onSendComment?.(comment)}
+                            >
+                                <MaterialIcons name="send" size={20} color="white" />
+                            </Pressable>
+                        ) : null}
+                    </View>
                 </Animated.View>
             </KeyboardAvoidingView>
 
@@ -305,12 +351,64 @@ const styles = StyleSheet.create({
     },
     topBar: {
         position: 'absolute',
-        top: 50,
+        top: 60,
         left: 0,
         right: 0,
-        paddingHorizontal: 20,
+        paddingHorizontal: 16,
         flexDirection: 'row',
-        justifyContent: 'flex-start',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        zIndex: 10,
+    },
+    topBarLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    topBarRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 16,
+    },
+    topIcon: {
+        width: 40,
+        height: 40,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    userHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+    headerAvatar: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        backgroundColor: '#444',
+    },
+    userInfoText: {
+        justifyContent: 'center',
+    },
+    userNameText: {
+        color: 'white',
+        fontSize: 14,
+        fontWeight: '700',
+    },
+    timestampText: {
+        color: 'rgba(255,255,255,0.6)',
+        fontSize: 11,
+    },
+    scanIconContainer: {
+        position: 'absolute',
+        bottom: 16,
+        right: 16,
+        width: 36,
+        height: 36,
+        borderRadius: 10,
+        backgroundColor: 'rgba(0,0,0,0.3)',
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     iconButton: {
         width: 44,
@@ -325,10 +423,30 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         right: 0,
-        paddingBottom: Platform.OS === 'ios' ? 40 : 20,
+        paddingBottom: Platform.OS === 'ios' ? 40 : 25,
+        backgroundColor: 'transparent',
     },
     inputContainer: {
-        paddingHorizontal: 20,
+        paddingHorizontal: 16,
+    },
+    inputPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#1c1c1e',
+        borderRadius: 30,
+        paddingHorizontal: 4,
+        paddingVertical: 6,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.05)',
+    },
+    cameraBtn: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#A855F7', // Purple logic
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 10,
     },
     inputBlur: {
         flexDirection: 'row',
@@ -346,7 +464,10 @@ const styles = StyleSheet.create({
         color: 'white',
         fontSize: 15,
         maxHeight: 100,
-        paddingTop: Platform.OS === 'ios' ? 0 : 4,
+        paddingVertical: 8,
+    },
+    sendIconBtn: {
+        paddingHorizontal: 12,
     },
     sendButton: {
         width: 36,
