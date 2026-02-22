@@ -223,10 +223,6 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                         <Image source={{ uri: media.url }} style={styles.fullMedia} resizeMode="cover" />
                     )}
                     
-                    {/* Scan Icon in corner */}
-                    <View style={styles.scanIconContainer}>
-                        <MaterialIcons name="center-focus-weak" size={24} color="white" />
-                    </View>
                 </Animated.View>
             </GestureDetector>
 
@@ -250,17 +246,6 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                     </View>
                 </View>
 
-                <View style={styles.topBarRight}>
-                    <Pressable onPress={onEdit} style={styles.topIcon}>
-                        <MaterialIcons name="colorize" size={24} color="white" />
-                    </Pressable>
-                    <Pressable onPress={onDownload} style={styles.topIcon}>
-                        <MaterialIcons name="file-download" size={26} color="white" />
-                    </Pressable>
-                    <Pressable onPress={onShare} style={styles.topIcon}>
-                        <MaterialIcons name="near-me" size={26} color="white" />
-                    </Pressable>
-                </View>
             </Animated.View>
 
             {/* Bottom Keyboard Area */}
@@ -417,7 +402,7 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         right: 0,
-        paddingBottom: Platform.OS === 'ios' ? 160 : 130, // Ultra-extreme positioning (v4)
+        paddingBottom: Platform.OS === 'ios' ? 220 : 180, // Ultra-Extreme High (v5)
         backgroundColor: 'transparent',
     },
     inputContainer: {
