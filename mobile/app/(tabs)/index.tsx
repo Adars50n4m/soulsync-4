@@ -8,9 +8,12 @@ import Animated, {
   useSharedValue, 
   useAnimatedStyle, 
   withSpring, 
+  withTiming,
   LinearTransition,
   FadeIn,
-  FadeOut
+  FadeOut,
+  FadeInDown,
+  ZoomIn,
 } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
@@ -57,36 +60,47 @@ const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promi
   return resolvedUri;
 };
 
-const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }: { 
-  item: Contact, 
-  lastMsg: any, 
-  onSelect: (contact: Contact, y: number) => void,
-  isTyping: boolean,
-  isHidden?: boolean
-}) => {
+// ─── Stable style objects (extracted to avoid inline object creation in render) ──
+const typingStyle = { color: '#22c55e', fontWeight: '700' as const };
+const hiddenStyle = { opacity: 0 };
+const chevronColor = 'rgba(255,255,255,0.3)';
+
+interface ChatListItemProps {
+  item: Contact;
+  lastMsg: { text?: string; timestamp?: string };
+  onSelect: (contact: Contact, y: number) => void;
+  isTyping: boolean;
+  isHidden?: boolean;
+}
+
+const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }: ChatListItemProps) => {
   const scaleAnim = useSharedValue(1);
+  const opacityAnim = useSharedValue(1);
   const itemRef = useRef<View>(null);
 
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scaleAnim.value }]
+    transform: [{ scale: scaleAnim.value }],
+    opacity: opacityAnim.value,
   }));
 
-  const handlePressIn = () => {
+  const handlePressIn = useCallback(() => {
     if (isHidden) return;
-    scaleAnim.value = withSpring(0.96);
-  };
+    scaleAnim.value = withSpring(0.96, { damping: 15, stiffness: 300 });
+    opacityAnim.value = withTiming(0.85, { duration: 100 });
+  }, [isHidden]);
 
-  const handlePressOut = () => {
+  const handlePressOut = useCallback(() => {
     if (isHidden) return;
-    scaleAnim.value = withSpring(1);
-  };
+    scaleAnim.value = withSpring(1, { damping: 15, stiffness: 300 });
+    opacityAnim.value = withTiming(1, { duration: 150 });
+  }, [isHidden]);
 
-  const handlePress = () => {
+  const handlePress = useCallback(() => {
     if (isHidden) return;
     itemRef.current?.measure((x, y, width, height, pageX, pageY) => {
       onSelect(item, pageY);
     });
-  };
+  }, [isHidden, item, onSelect]);
 
   return (
     <Pressable
@@ -94,7 +108,7 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }
       onPress={handlePress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
-      style={[styles.chatItem, isHidden && { opacity: 0 }]}
+      style={isHidden ? [styles.chatItem, hiddenStyle] : styles.chatItem}
       disabled={isHidden}
     >
       <Animated.View style={[styles.chatPillContainer, animatedStyle]}>
@@ -109,18 +123,31 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }
 
           <View style={styles.chatContent}>
             <Text style={styles.contactName}>{item.name}</Text>
-            <Text numberOfLines={1} style={[styles.lastMessage, isTyping && { color: '#22c55e', fontWeight: '700' }]}>
+            <Text numberOfLines={1} style={isTyping ? [styles.lastMessage, typingStyle] : styles.lastMessage}>
               {isTyping ? 'Typing...' : (lastMsg.text || 'Start a conversation')}
             </Text>
           </View>
 
           <View style={styles.rightSide}>
             {lastMsg.timestamp && <Text style={styles.timestamp}>{lastMsg.timestamp}</Text>}
-            <MaterialIcons name="chevron-right" size={20} color="rgba(255,255,255,0.3)" />
+            <MaterialIcons name="chevron-right" size={20} color={chevronColor} />
           </View>
         </View>
       </Animated.View>
     </Pressable>
+  );
+}, (prevProps, nextProps) => {
+  // Custom comparison: only re-render when meaningful data changes
+  return (
+    prevProps.item.id === nextProps.item.id &&
+    prevProps.item.name === nextProps.item.name &&
+    prevProps.item.avatar === nextProps.item.avatar &&
+    prevProps.item.status === nextProps.item.status &&
+    prevProps.lastMsg.text === nextProps.lastMsg.text &&
+    prevProps.lastMsg.timestamp === nextProps.lastMsg.timestamp &&
+    prevProps.isTyping === nextProps.isTyping &&
+    prevProps.isHidden === nextProps.isHidden &&
+    prevProps.onSelect === nextProps.onSelect
   );
 });
 
@@ -299,22 +326,37 @@ export default function HomeScreen() {
     setHiddenUserId(contact.id);
   }, []);
 
-  const renderItem = ({ item }: { item: Contact }) => {
-    const chatMessages = messages[item.id] || [];
-    const lastMsg = chatMessages[chatMessages.length - 1] || { text: item.lastMessage, timestamp: '' };
+  // Pre-compute last messages map to avoid recalculating in renderItem
+  const lastMessagesMap = useMemo(() => {
+    const map: Record<string, { text?: string; timestamp?: string }> = {};
+    for (const contact of visibleContacts) {
+      const chatMsgs = messages[contact.id] || [];
+      const lastMsg = chatMsgs[chatMsgs.length - 1];
+      map[contact.id] = lastMsg
+        ? { text: lastMsg.text, timestamp: lastMsg.timestamp }
+        : { text: contact.lastMessage, timestamp: '' };
+    }
+    return map;
+  }, [visibleContacts, messages]);
+
+  const renderItem = useCallback(({ item }: { item: Contact }) => {
+    const lastMsg = lastMessagesMap[item.id] || { text: item.lastMessage, timestamp: '' };
     const isTyping = typingUsers.includes(item.id);
     return (
-      <View>
-        <ChatListItem 
-            item={item} 
-            lastMsg={lastMsg} 
-            onSelect={handleUserSelect} 
-            isTyping={isTyping} 
-            isHidden={hiddenUserId === item.id}
-        />
-      </View>
+      <ChatListItem 
+          item={item} 
+          lastMsg={lastMsg} 
+          onSelect={handleUserSelect} 
+          isTyping={isTyping} 
+          isHidden={hiddenUserId === item.id}
+      />
     );
-  };
+  }, [lastMessagesMap, typingUsers, handleUserSelect, hiddenUserId]);
+
+  // Stable keyExtractor for FlashList
+  const keyExtractor = useCallback((item: Contact) => item.id, []);
+
+  // Render header component
 
 
   return (
@@ -327,8 +369,13 @@ export default function HomeScreen() {
       
       <FlatList
         data={visibleContacts}
-        keyExtractor={item => item.id}
+        keyExtractor={keyExtractor}
         renderItem={renderItem}
+        // Performance optimizations
+        initialNumToRender={20}
+        maxToRenderPerBatch={10}
+        windowSize={5}
+        removeClippedSubviews={true}
         ListHeaderComponent={() => (
           <View style={styles.statusRail}>
             <FlatList

@@ -1,4 +1,6 @@
 
+export type MediaStatus = 'not_downloaded' | 'downloading' | 'downloaded' | 'download_failed';
+
 export interface Message {
     id: string;
     sender: 'me' | 'them';
@@ -13,6 +15,12 @@ export interface Message {
         name?: string;
         caption?: string;
     };
+    // Offline media support
+    localFileUri?: string;
+    mediaStatus?: MediaStatus;
+    thumbnailUri?: string;
+    fileSize?: number;
+    mimeType?: string;
 }
 
 export interface Story {

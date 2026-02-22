@@ -2,6 +2,7 @@ import { getDB } from '../database';
 import { Message, Contact } from '../types';
 
 export type MessageStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
+export type MediaStatus = 'not_downloaded' | 'downloading' | 'downloaded' | 'download_failed';
 
 export interface QueuedMessage {
   id: string;
@@ -20,6 +21,20 @@ export interface QueuedMessage {
   retryCount: number;
   lastRetryAt?: string;
   errorMessage?: string;
+  // Offline media support
+  localFileUri?: string;
+  mediaStatus?: MediaStatus;
+  thumbnailUri?: string;
+  fileSize?: number;
+  mimeType?: string;
+}
+
+export interface MediaDownloadRecord {
+  messageId: string;
+  remoteUrl: string;
+  localUri: string;
+  fileSize?: number;
+  downloadedAt: string;
 }
 
 export const offlineService = {
@@ -28,8 +43,8 @@ export const offlineService = {
     const db = await getDB();
     if (!db) return;
     await db.runAsync(
-      `INSERT OR REPLACE INTO messages (id, chat_id, sender, text, media_type, media_url, media_caption, reply_to_id, timestamp, status, is_unsent)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      `INSERT OR REPLACE INTO messages (id, chat_id, sender, text, media_type, media_url, media_caption, reply_to_id, timestamp, status, is_unsent, local_file_uri, media_status, thumbnail_uri, file_size, mime_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
         msg.id,
         chatId,
@@ -41,7 +56,12 @@ export const offlineService = {
         msg.replyTo ?? null,
         msg.timestamp,
         msg.status ?? 'sent',
-        isUnsent ? 1 : 0
+        isUnsent ? 1 : 0,
+        msg.localFileUri ?? null,
+        msg.mediaStatus ?? 'not_downloaded',
+        msg.thumbnailUri ?? null,
+        msg.fileSize ?? null,
+        msg.mimeType ?? null
       ]
     );
   },
@@ -266,5 +286,169 @@ export const offlineService = {
     const db = await getDB();
     if (!db) return;
     await db.runAsync(`DELETE FROM sync_queue WHERE id = ?;`, [id]);
+  },
+
+  // --- Offline Media Support ---
+  
+  /**
+   * Update media status for a message (not_downloaded, downloading, downloaded, download_failed)
+   */
+  async updateMediaStatus(messageId: string, mediaStatus: MediaStatus): Promise<void> {
+    const db = await getDB();
+    if (!db) return;
+    await db.runAsync(
+      `UPDATE messages SET media_status = ? WHERE id = ?;`,
+      [mediaStatus, messageId]
+    );
+  },
+
+  /**
+   * Update local file URI after successful download
+   */
+  async updateLocalFileUri(messageId: string, localFileUri: string, fileSize?: number): Promise<void> {
+    const db = await getDB();
+    if (!db) return;
+    await db.runAsync(
+      `UPDATE messages SET local_file_uri = ?, media_status = 'downloaded', file_size = ? WHERE id = ?;`,
+      [localFileUri, fileSize ?? null, messageId]
+    );
+    
+    // Also record in media_downloads table for tracking
+    const msg = await this.getMessageById(messageId);
+    if (msg?.media?.url) {
+      await db.runAsync(
+        `INSERT OR REPLACE INTO media_downloads (message_id, remote_url, local_uri, file_size)
+         VALUES (?, ?, ?, ?);`,
+        [messageId, msg.media.url, localFileUri, fileSize ?? null]
+      );
+    }
+  },
+
+  /**
+   * Save thumbnail URI for a message (for preview before download)
+   */
+  async updateThumbnailUri(messageId: string, thumbnailUri: string): Promise<void> {
+    const db = await getDB();
+    if (!db) return;
+    await db.runAsync(
+      `UPDATE messages SET thumbnail_uri = ? WHERE id = ?;`,
+      [thumbnailUri, messageId]
+    );
+  },
+
+  /**
+   * Get all messages with media that need to be downloaded
+   */
+  async getPendingMediaMessages(): Promise<QueuedMessage[]> {
+    const db = await getDB();
+    if (!db) return [];
+    const rows = await db.getAllAsync(
+      `SELECT * FROM messages WHERE media_url IS NOT NULL AND media_status = 'not_downloaded';`
+    );
+    return rows.map((row: any) => ({
+      id: row.id,
+      chatId: row.chat_id,
+      sender: row.sender as 'me' | 'them',
+      text: row.text,
+      timestamp: row.timestamp,
+      status: row.status as MessageStatus,
+      media: row.media_url ? {
+        type: row.media_type,
+        url: row.media_url,
+        caption: row.media_caption
+      } : undefined,
+      replyTo: row.reply_to_id,
+      retryCount: row.retry_count ?? 0,
+      lastRetryAt: row.last_retry_at,
+      errorMessage: row.error_message,
+      localFileUri: row.local_file_uri,
+      mediaStatus: row.media_status as MediaStatus,
+      thumbnailUri: row.thumbnail_uri,
+      fileSize: row.file_size,
+      mimeType: row.mime_type
+    }));
+  },
+
+  /**
+   * Get all downloaded media records
+   */
+  async getDownloadedMedia(): Promise<MediaDownloadRecord[]> {
+    const db = await getDB();
+    if (!db) return [];
+    const rows = await db.getAllAsync(`SELECT * FROM media_downloads;`);
+    return rows.map((row: any) => ({
+      messageId: row.message_id,
+      remoteUrl: row.remote_url,
+      localUri: row.local_uri,
+      fileSize: row.file_size,
+      downloadedAt: row.downloaded_at
+    }));
+  },
+
+  /**
+   * Delete local media file and update status
+   */
+  async deleteLocalMedia(messageId: string): Promise<void> {
+    const db = await getDB();
+    if (!db) return;
+    
+    // Get the local URI first
+    const row = await db.getFirstAsync(
+      `SELECT local_file_uri FROM messages WHERE id = ?;`,
+      [messageId]
+    );
+    
+    if (row?.local_file_uri) {
+      // Delete from media_downloads table
+      await db.runAsync(`DELETE FROM media_downloads WHERE message_id = ?;`, [messageId]);
+      // Update message status
+      await db.runAsync(
+        `UPDATE messages SET local_file_uri = NULL, media_status = 'not_downloaded' WHERE id = ?;`,
+        [messageId]
+      );
+    }
+  },
+
+  /**
+   * Get storage stats for media management
+   */
+  async getMediaStorageStats(): Promise<{ totalFiles: number; totalSize: number }> {
+    const db = await getDB();
+    if (!db) return { totalFiles: 0, totalSize: 0 };
+    
+    const row = await db.getFirstAsync(
+      `SELECT COUNT(*) as count, COALESCE(SUM(file_size), 0) as total_size 
+       FROM messages WHERE local_file_uri IS NOT NULL;`
+    );
+    
+    return {
+      totalFiles: row?.count ?? 0,
+      totalSize: row?.total_size ?? 0
+    };
+  },
+
+  /**
+   * Save message with optimistic local URI (for sender)
+   */
+  async saveMessageWithLocalUri(chatId: string, msg: Message, localFileUri: string): Promise<void> {
+    const db = await getDB();
+    if (!db) return;
+    await db.runAsync(
+      `INSERT OR REPLACE INTO messages (id, chat_id, sender, text, media_type, media_url, media_caption, reply_to_id, timestamp, status, is_unsent, local_file_uri, media_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'downloaded');`,
+      [
+        msg.id,
+        chatId,
+        msg.sender,
+        msg.text,
+        msg.media?.type ?? null,
+        msg.media?.url ?? null,
+        msg.media?.caption ?? null,
+        msg.replyTo ?? null,
+        msg.timestamp,
+        'pending',
+        localFileUri
+      ]
+    );
   }
 };

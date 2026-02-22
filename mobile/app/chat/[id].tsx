@@ -30,6 +30,7 @@ import { MusicPlayerOverlay } from '../../components/MusicPlayerOverlay';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { MediaPreviewModal } from '../../components/MediaPreviewModal';
 import { storageService } from '../../services/StorageService';
+import { EnhancedMediaViewer } from '../../components/EnhancedMediaViewer';
 import { Contact, Message } from '../../types';
 import { ResizeMode, Video } from 'expo-av';
 
@@ -126,9 +127,20 @@ const ProgressiveBlur = ({ position = 'top', height = 180, intensity = 100, step
     );
 };
 
-// Message Bubble with Liquid Glass UI
-const MessageBubble = ({ msg, contactName, onLongPress, onReply, isSelected, onReaction, quotedMessage, onDoubleTap, onMediaTap, isClone }: any) => {
-    const { activeTheme } = useApp();
+// Message Bubble with Liquid Glass UI - wrapped with React.memo for performance
+const MessageBubble = React.memo(({ 
+  msg, 
+  contactName, 
+  onLongPress, 
+  onReply, 
+  isSelected, 
+  onReaction, 
+  quotedMessage, 
+  onDoubleTap, 
+  onMediaTap, 
+  isClone 
+}: any) => {
+  const { activeTheme } = useApp();
     const translateX = useSharedValue(0);
     const isMe = msg.sender === 'me';
 
@@ -148,6 +160,22 @@ const MessageBubble = ({ msg, contactName, onLongPress, onReply, isSelected, onR
             }
         });
     }, [onLongPress]);
+
+    const mediaItems = getMessageMediaItems(msg);
+
+    const measureAndShowMedia = useCallback((index: number, openGallery: boolean) => {
+        bubbleRef.current?.measure((x, y, width, height, pageX, pageY) => {
+            if (onMediaTap) {
+                onMediaTap({
+                    messageId: msg.id,
+                    mediaItems,
+                    index,
+                    openGallery,
+                    layout: { x: pageX, y: pageY, width, height }
+                });
+            }
+        });
+    }, [onMediaTap, msg.id, mediaItems]);
 
     const longPressGesture = Gesture.LongPress()
         .minDuration(400) // slightly faster response
@@ -182,19 +210,14 @@ const MessageBubble = ({ msg, contactName, onLongPress, onReply, isSelected, onR
         ]
     }));
 
-    const mediaItems = getMessageMediaItems(msg);
+    // const mediaItems = getMessageMediaItems(msg); // Removed duplicate/later declaration
     const hasText = !!msg.text?.trim();
     const hasCaption = !!msg.media?.caption?.trim();
     const isMediaOnly = mediaItems.length > 0 && !hasText && !hasCaption && !quotedMessage;
 
     const handleMediaPress = (index: number, openGallery = false) => {
         if (!onMediaTap) return;
-        onMediaTap({
-            messageId: msg.id,
-            mediaItems,
-            index,
-            openGallery,
-        });
+        measureAndShowMedia(index, openGallery);
     };
 
     const renderMediaContent = () => {
@@ -409,7 +432,16 @@ const MessageBubble = ({ msg, contactName, onLongPress, onReply, isSelected, onR
             </GestureDetector>
         </View>
     );
-};
+}, (prevProps: any, nextProps: any) => {
+  // Custom comparison: only re-render if these specific props change
+  if (prevProps.msg?.id !== nextProps.msg?.id) return false;
+  if (prevProps.msg?.text !== nextProps.msg?.text) return false;
+  if (prevProps.msg?.status !== nextProps.msg?.status) return false;
+  if (prevProps.isSelected !== nextProps.isSelected) return false;
+  if (prevProps.isClone !== nextProps.isClone) return false;
+  if (prevProps.quotedMessage?.id !== nextProps.quotedMessage?.id) return false;
+  return true; // Props are equal - don't re-render
+});
 
 // Sophisticated Context Menu Overlay
 const MessageContextMenu = ({ visible, msg, layout, onClose, onReaction, onAction }: any) => {
@@ -809,6 +841,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const [mediaPreview, setMediaPreview] = useState<{ uri: string; type: 'image' | 'video' | 'audio' } | null>(null);
     const [mediaCollection, setMediaCollection] = useState<{ messageId: string; items: ChatMediaItem[]; startIndex: number } | null>(null);
     const [mediaViewer, setMediaViewer] = useState<{ messageId: string; items: ChatMediaItem[]; index: number } | null>(null);
+    const [selectedMediaLayout, setSelectedMediaLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
     const [mediaItemReactions, setMediaItemReactions] = useState<Record<string, string[]>>({});
     const [isUploading, setIsUploading] = useState(false);
 
@@ -906,6 +939,9 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             items: payload.mediaItems,
             index: payload.index || 0,
         };
+        if (payload.layout) {
+            setSelectedMediaLayout(payload.layout);
+        }
         if (payload.openGallery) {
             setMediaCollection({
                 messageId: payload.messageId,
@@ -970,6 +1006,9 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             quotedMessage={item.replyTo ? chatMessages.find((m: any) => m.id === item.replyTo) : null}
         />
     ), [selectedContextMessage, chatMessages, contact?.name, handleMediaTap]);
+
+    // Stable keyExtractor for FlatList - prevents inline function recreation
+    const keyExtractor = useCallback((item: any) => item.id, []);
 
     // Media picker handlers
     const handleSelectCamera = async () => {
@@ -1064,12 +1103,12 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 {/* Chat content - Deferred Rendering for Performance */}
                 {isReady && (
                     <View style={{ flex: 1 }}>
-                        {/* Messages */}
+                        {/* Messages - optimized with React.memo */}
                         <FlatList
                             ref={flatListRef}
                             data={[...chatMessages].reverse()}
                             inverted
-                            keyExtractor={item => item.id}
+                            keyExtractor={keyExtractor}
                             renderItem={renderMessage}
                             style={styles.messagesList}
                             contentContainerStyle={styles.messagesContent}
@@ -1415,27 +1454,25 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                         />
                     )}
 
-                    {mediaViewer && (
-                        <View style={styles.mediaViewerBottom}>
-                            <View style={styles.mediaViewerReactionsRow}>
-                                {['❤️', '🔥', '😂'].map(emoji => (
-                                    <Pressable
-                                        key={emoji}
-                                        style={styles.mediaViewerReactionBtn}
-                                        onPress={() => addReactionToMedia(mediaViewer.messageId, mediaViewer.index, emoji)}
-                                    >
-                                        <Text style={styles.mediaViewerReactionText}>{emoji}</Text>
-                                    </Pressable>
-                                ))}
-                            </View>
-
-                            <Text style={styles.mediaViewerReactionList}>
-                                {(mediaItemReactions[`${mediaViewer.messageId}:${mediaViewer.index}`] || []).join(' ')}
-                            </Text>
-                        </View>
-                    )}
                 </View>
             </Modal>
+
+            {/* Premium Media Viewer (Seamless Morph & Blur) */}
+            <EnhancedMediaViewer
+                visible={!!mediaViewer}
+                media={mediaViewer ? mediaViewer.items[mediaViewer.index] as any : null}
+                sourceLayout={selectedMediaLayout}
+                onClose={() => {
+                    setMediaViewer(null);
+                    setSelectedMediaLayout(null);
+                }}
+                onSendComment={(comment) => {
+                    if (id && comment.trim()) {
+                        sendChatMessage(id, comment);
+                    }
+                }}
+                onDownload={handleSaveCurrentMedia}
+            />
 
         </View>
     );
