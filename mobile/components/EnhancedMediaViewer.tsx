@@ -164,13 +164,13 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
         if (!sourceLayout) return {};
 
         // Morph from source bubble to refined card layout
-        const HORIZONTAL_MARGIN = 24;
+        const HORIZONTAL_MARGIN = 12; // Reduced for wider immersion
         const targetWidth = SCREEN_WIDTH - (HORIZONTAL_MARGIN * 2);
         const aspectRatio = sourceLayout.height / sourceLayout.width;
         const targetHeight = targetWidth * aspectRatio;
         
-        // Ensure it doesn't get too tall
-        const maxHeight = SCREEN_HEIGHT * 0.7;
+        // Ensure it doesn't get too tall but much larger than before
+        const maxHeight = SCREEN_HEIGHT * 0.82;
         const finalHeight = Math.min(targetHeight, maxHeight);
         const finalWidth = finalHeight / aspectRatio;
         
@@ -209,7 +209,8 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
     return (
         <View style={StyleSheet.absoluteFill} pointerEvents="auto">
             <Animated.View style={[StyleSheet.absoluteFill, animatedContainerStyle]}>
-                <BlurView intensity={65} tint="dark" style={StyleSheet.absoluteFill} />
+                <BlurView intensity={75} tint="dark" style={StyleSheet.absoluteFill} />
+                <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.45)' }]} />
                 <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
             </Animated.View>
 

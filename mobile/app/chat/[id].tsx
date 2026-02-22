@@ -1434,10 +1434,26 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                     if (!mediaViewer) return undefined;
                     const msg = chatMessages.find((m: any) => m.id === mediaViewer.messageId);
                     if (!msg) return { name: 'You', timestamp: 'Just now' };
+                    
+                    const isMe = msg.sender === 'me';
+                    
+                    // Robust timestamp parsing
+                    let formattedTime = 'Just now';
+                    if (msg.timestamp) {
+                        try {
+                            const date = new Date(msg.timestamp);
+                            if (!isNaN(date.getTime())) {
+                                formattedTime = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                            }
+                        } catch (e) {
+                            console.error('Error parsing date:', e);
+                        }
+                    }
+
                     return {
-                        name: msg.sender === 'me' ? 'You' : (contact?.name || 'Contact'),
-                        avatar: msg.sender === 'me' ? currentUser?.avatar : contact?.avatar,
-                        timestamp: msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'
+                        name: isMe ? 'You' : (contact?.name || 'Contact'),
+                        avatar: isMe ? currentUser?.avatar : contact?.avatar,
+                        timestamp: formattedTime
                     };
                 })()}
                 onClose={() => {
