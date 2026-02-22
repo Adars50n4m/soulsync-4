@@ -1423,39 +1423,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 </View>
             </Modal>
 
-            {/* Single Media Viewer */}
-            <Modal
-                visible={!!mediaViewer}
-                transparent={false}
-                animationType="fade"
-                onRequestClose={() => setMediaViewer(null)}
-            >
-                <View style={styles.mediaViewerContainer}>
-                    <Pressable style={styles.mediaViewerCloseBtn} onPress={() => setMediaViewer(null)}>
-                        <MaterialIcons name="close" size={24} color="#fff" />
-                    </Pressable>
-                    <Pressable style={styles.mediaViewerSaveBtn} onPress={handleSaveCurrentMedia}>
-                        <MaterialIcons name="download" size={22} color="#fff" />
-                    </Pressable>
-
-                    {mediaViewer && mediaViewer.items[mediaViewer.index]?.type === 'video' ? (
-                        <Video
-                            source={{ uri: mediaViewer.items[mediaViewer.index].url }}
-                            style={styles.mediaViewerMedia}
-                            resizeMode={ResizeMode.CONTAIN}
-                            shouldPlay
-                            useNativeControls
-                        />
-                    ) : (
-                        <Image
-                            source={{ uri: mediaViewer?.items[mediaViewer?.index || 0]?.url || '' }}
-                            style={styles.mediaViewerMedia}
-                            resizeMode="contain"
-                        />
-                    )}
-
-                </View>
-            </Modal>
+            {/* Single Media Viewer (Old Removed) */}
 
             {/* Premium Media Viewer (Seamless Morph & Blur) */}
             <EnhancedMediaViewer
