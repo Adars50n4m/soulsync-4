@@ -163,14 +163,14 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
         const p = animationProgress.value;
         if (!sourceLayout) return {};
 
-        // Morph from source bubble to refined card layout
-        const HORIZONTAL_MARGIN = 12; // Reduced for wider immersion
+        // Morph from source bubble to massive immersive card
+        const HORIZONTAL_MARGIN = 10; // Extra wide
         const targetWidth = SCREEN_WIDTH - (HORIZONTAL_MARGIN * 2);
         const aspectRatio = sourceLayout.height / sourceLayout.width;
         const targetHeight = targetWidth * aspectRatio;
         
-        // Ensure it doesn't get too tall but much larger than before
-        const maxHeight = SCREEN_HEIGHT * 0.82;
+        // Massive Story-style fill (88% of screen height)
+        const maxHeight = SCREEN_HEIGHT * 0.88;
         const finalHeight = Math.min(targetHeight, maxHeight);
         const finalWidth = finalHeight / aspectRatio;
         
@@ -183,7 +183,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
             top: interpolate(p, [0, 1], [sourceLayout.y, targetY]) + translateY.value,
             width: interpolate(p, [0, 1], [sourceLayout.width, finalWidth]),
             height: interpolate(p, [0, 1], [sourceLayout.height, finalHeight]),
-            borderRadius: interpolate(p, [0, 1], [16, 24]),
+            borderRadius: interpolate(p, [0, 1], [16, 36]), // Smoother corners
             transform: [{ scale: scale.value }],
             overflow: 'hidden',
         };
@@ -286,14 +286,12 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                             onChangeText={setComment}
                             multiline
                         />
-                        {comment.trim() ? (
-                            <Pressable 
-                                style={styles.sendIconBtn}
-                                onPress={() => onSendComment?.(comment)}
-                            >
-                                <MaterialIcons name="send" size={20} color="white" />
-                            </Pressable>
-                        ) : null}
+                        <Pressable 
+                            style={[styles.sendIconBtn, !comment.trim() && { opacity: 0.3 }]}
+                            onPress={() => comment.trim() && onSendComment?.(comment)}
+                        >
+                            <MaterialIcons name="send" size={24} color="white" />
+                        </Pressable>
                     </View>
                 </Animated.View>
             </KeyboardAvoidingView>
@@ -424,7 +422,7 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         right: 0,
-        paddingBottom: Platform.OS === 'ios' ? 40 : 25,
+        paddingBottom: Platform.OS === 'ios' ? 65 : 45, // Moved higher up
         backgroundColor: 'transparent',
     },
     inputContainer: {
