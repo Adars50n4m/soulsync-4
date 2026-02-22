@@ -48,6 +48,9 @@ interface EnhancedMediaViewerProps {
     onClose: () => void;
     onSendComment?: (comment: string) => void;
     onDownload?: () => void;
+    onReply?: () => void;
+    onForward?: () => void;
+    onReaction?: (emoji: string) => void;
 }
 
 export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
@@ -57,6 +60,9 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
     onClose,
     onSendComment,
     onDownload,
+    onReply,
+    onForward,
+    onReaction,
 }) => {
     const [isFullyOpen, setIsFullyOpen] = useState(false);
     const [comment, setComment] = useState('');
@@ -147,19 +153,29 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
         const p = animationProgress.value;
         if (!sourceLayout) return {};
 
-        // Morph from source bubble to full-screen/center
-        const targetWidth = SCREEN_WIDTH;
-        const targetHeight = SCREEN_WIDTH * (sourceLayout.height / sourceLayout.width);
-        const targetY = (SCREEN_HEIGHT - targetHeight) / 2;
+        // Morph from source bubble to refined card layout
+        const HORIZONTAL_MARGIN = 24;
+        const targetWidth = SCREEN_WIDTH - (HORIZONTAL_MARGIN * 2);
+        const aspectRatio = sourceLayout.height / sourceLayout.width;
+        const targetHeight = targetWidth * aspectRatio;
+        
+        // Ensure it doesn't get too tall
+        const maxHeight = SCREEN_HEIGHT * 0.7;
+        const finalHeight = Math.min(targetHeight, maxHeight);
+        const finalWidth = finalHeight / aspectRatio;
+        
+        const targetX = (SCREEN_WIDTH - finalWidth) / 2;
+        const targetY = (SCREEN_HEIGHT - finalHeight) / 2;
 
         return {
             position: 'absolute',
-            left: interpolate(p, [0, 1], [sourceLayout.x, 0]),
+            left: interpolate(p, [0, 1], [sourceLayout.x, targetX]),
             top: interpolate(p, [0, 1], [sourceLayout.y, targetY]) + translateY.value,
-            width: interpolate(p, [0, 1], [sourceLayout.width, SCREEN_WIDTH]),
-            height: interpolate(p, [0, 1], [sourceLayout.height, targetHeight]),
-            borderRadius: interpolate(p, [0, 1], [16, 0]),
+            width: interpolate(p, [0, 1], [sourceLayout.width, finalWidth]),
+            height: interpolate(p, [0, 1], [sourceLayout.height, finalHeight]),
+            borderRadius: interpolate(p, [0, 1], [16, 24]),
             transform: [{ scale: scale.value }],
+            overflow: 'hidden',
         };
     });
 
@@ -174,8 +190,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
     }));
 
     const handleReaction = (emoji: string) => {
-        // Implementation for reaction would go here
-        console.log('Reaction:', emoji);
+        if (onReaction) runOnJS(onReaction)(emoji);
         menuProgress.value = withTiming(0, { duration: 150 }, () => runOnJS(setShowMenu)(false));
     };
 
@@ -184,7 +199,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
     return (
         <View style={StyleSheet.absoluteFill} pointerEvents="auto">
             <Animated.View style={[StyleSheet.absoluteFill, animatedContainerStyle]}>
-                <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+                <BlurView intensity={65} tint="dark" style={StyleSheet.absoluteFill} />
                 <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
             </Animated.View>
 
@@ -251,6 +266,22 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                                     </Pressable>
                                 ))}
                             </View>
+                            <View style={styles.menuDivider} />
+                            <Pressable style={styles.menuItem} onPress={() => {
+                                onReply?.();
+                                menuProgress.value = withTiming(0, { duration: 150 }, () => setShowMenu(false));
+                            }}>
+                                <MaterialIcons name="reply" size={22} color="white" />
+                                <Text style={styles.menuItemText}>Reply</Text>
+                            </Pressable>
+                            <View style={styles.menuDivider} />
+                            <Pressable style={styles.menuItem} onPress={() => {
+                                onForward?.();
+                                menuProgress.value = withTiming(0, { duration: 150 }, () => setShowMenu(false));
+                            }}>
+                                <MaterialIcons name="forward" size={22} color="white" />
+                                <Text style={styles.menuItemText}>Forward</Text>
+                            </Pressable>
                             <View style={styles.menuDivider} />
                             <Pressable style={styles.menuItem} onPress={() => {
                                 onDownload?.();
