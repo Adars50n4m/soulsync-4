@@ -17,7 +17,9 @@
         "UIBackgroundModes": [
           "audio",
           "voip",
-          "remote-notification"
+          "remote-notification",
+          "fetch",
+          "processing"
         ],
         "LSApplicationQueriesSchemes": [
           "mailto"
@@ -47,7 +49,9 @@
         "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
         "android.permission.VIBRATE",
         "android.permission.WAKE_LOCK",
-        "android.permission.SYSTEM_ALERT_WINDOW"
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
       ],
       "googleServicesFile": "./google-services.json"
     },
@@ -77,8 +81,21 @@
           "recordAudioAndroid": true
         }
       ],
-      "expo-notifications",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#ffffff",
+          "sounds": []
+        }
+      ],
       "expo-sqlite",
+      [
+        "expo-background-fetch",
+        {
+          "minimumInterval": 900
+        }
+      ],
       "./plugins/withCallKit",
       "./plugins/withAndroidCalling"
     ],
