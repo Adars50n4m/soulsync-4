@@ -388,7 +388,7 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         right: 0,
-        paddingBottom: Platform.OS === 'ios' ? 240 : 200, // Re-applied Sky-High position
+        paddingBottom: Platform.OS === 'ios' ? 400 : 350, // Sky-High positioning (v8)
         backgroundColor: 'transparent',
     },
     inputContainer: {
