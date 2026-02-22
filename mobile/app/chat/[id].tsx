@@ -1472,6 +1472,22 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                     }
                 }}
                 onDownload={handleSaveCurrentMedia}
+                onReply={() => {
+                    if (mediaViewer) {
+                        const msg = chatMessages.find((m: any) => m.id === mediaViewer.messageId);
+                        if (msg) setReplyingTo(msg);
+                        setMediaViewer(null);
+                        setSelectedMediaLayout(null);
+                    }
+                }}
+                onForward={() => {
+                    Alert.alert('Coming Soon', 'Forwarding will be available soon.');
+                }}
+                onReaction={(emoji) => {
+                    if (mediaViewer && id) {
+                        addReaction(id, mediaViewer.messageId, emoji);
+                    }
+                }}
             />
 
         </View>
