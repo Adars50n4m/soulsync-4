@@ -255,9 +255,6 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
             >
                 <Animated.View style={[styles.inputContainer, animatedOverlayStyle]}>
                     <View style={styles.inputPill}>
-                        <Pressable style={styles.cameraBtn}>
-                            <MaterialIcons name="photo-camera" size={22} color="white" />
-                        </Pressable>
                         <TextInput
                             style={styles.input}
                             placeholder="Reply..."
@@ -402,7 +399,7 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         right: 0,
-        paddingBottom: Platform.OS === 'ios' ? 220 : 180, // Ultra-Extreme High (v5)
+        paddingBottom: Platform.OS === 'ios' ? 320 : 280, // Sky-High positioning (v6)
         backgroundColor: 'transparent',
     },
     inputContainer: {
