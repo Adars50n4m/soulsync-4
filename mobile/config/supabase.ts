@@ -1,19 +1,21 @@
 import { createClient } from '@supabase/supabase-js';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './api';
+import { getSupabaseUrl, SUPABASE_ANON_KEY } from './api';
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+export const supabase = createClient(getSupabaseUrl(), SUPABASE_ANON_KEY, {
+    realtime: {
+        params: {
+            eventsPerSecond: 10,
+        },
+    },
+});
 
 /**
- * Get the Realtime WebSocket URL for connectivity testing
+ * Get the Realtime WebSocket URL for connectivity testing.
+ * Derives from the active Supabase endpoint (proxy or direct).
  */
 export const getRealtimeUrl = (): string => {
-    try {
-        const url = new URL(SUPABASE_URL);
-        return `wss://${url.hostname.replace('.supabase.co', '.supabase.co')}/realtime/v1`;
-    } catch {
-        // Fallback to default derivation
-        return SUPABASE_URL.replace('https://', 'wss://').replace('/rest/v1', '/realtime/v1');
-    }
+    const baseUrl = getSupabaseUrl();
+    return baseUrl.replace('https://', 'wss://') + '/realtime/v1';
 };
 
 /**

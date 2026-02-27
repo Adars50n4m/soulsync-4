@@ -21,34 +21,43 @@ let isTaskRegistered = false;
  * Background sync task definition
  * This runs when the app is in background or terminated
  */
-TaskManager.defineTask(BACKGROUND_SYNC_TASK, async () => {
-  try {
-    console.log('[BackgroundSync] Starting background sync...');
-    
-    // Get current user
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      console.log('[BackgroundSync] No authenticated user, skipping');
-      return BackgroundFetch.BackgroundFetchResult.NoData;
-    }
-    
-    // Fetch unread messages from Supabase
-    const syncedCount = await syncMessagesFromServer(user.id);
-    
-    console.log(`[BackgroundSync] Synced ${syncedCount} messages`);
-    
-    if (syncedCount > 0) {
-      // Show local notification for new messages
-      await showSyncNotification(syncedCount);
-      return BackgroundFetch.BackgroundFetchResult.NewData;
-    }
-    
-    return BackgroundFetch.BackgroundFetchResult.NoData;
-  } catch (error) {
-    console.error('[BackgroundSync] Error:', error);
-    return BackgroundFetch.BackgroundFetchResult.Failed;
+try {
+  if (TaskManager.isTaskDefined(BACKGROUND_SYNC_TASK)) {
+    console.log(`[BackgroundSync] Task ${BACKGROUND_SYNC_TASK} already defined`);
+  } else {
+    TaskManager.defineTask(BACKGROUND_SYNC_TASK, async () => {
+      try {
+        console.log('[BackgroundSync] Starting background sync...');
+        
+        // Get current user
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          console.log('[BackgroundSync] No authenticated user, skipping');
+          return BackgroundFetch.BackgroundFetchResult.NoData;
+        }
+        
+        // Fetch unread messages from Supabase
+        const syncedCount = await syncMessagesFromServer(user.id);
+        
+        console.log(`[BackgroundSync] Synced ${syncedCount} messages`);
+        
+        if (syncedCount > 0) {
+          // Show local notification for new messages
+          await showSyncNotification(syncedCount);
+          return BackgroundFetch.BackgroundFetchResult.NewData;
+        }
+        
+        return BackgroundFetch.BackgroundFetchResult.NoData;
+      } catch (error) {
+        console.error('[BackgroundSync] Error in task execution:', error);
+        return BackgroundFetch.BackgroundFetchResult.Failed;
+      }
+    });
+    console.log(`[BackgroundSync] Task ${BACKGROUND_SYNC_TASK} defined successfully`);
   }
-});
+} catch (error) {
+  console.warn('[BackgroundSync] Failed to define task (native module might be missing):', error);
+}
 
 /**
  * Sync messages from Supabase server to local database
@@ -200,15 +209,23 @@ async function setLastSyncTime(time: string): Promise<void> {
  */
 export async function registerBackgroundSync(): Promise<boolean> {
   try {
+    // Safety check: is the background fetch available?
+    const isAvailable = await BackgroundFetch.getStatusAsync();
+    if (isAvailable === BackgroundFetch.BackgroundFetchStatus.Restricted || 
+        isAvailable === BackgroundFetch.BackgroundFetchStatus.Denied) {
+      console.log('[BackgroundSync] Background fetch is restricted or denied');
+      return false;
+    }
+
     if (isTaskRegistered) {
       console.log('[BackgroundSync] Task already registered');
       return true;
     }
     
-    // Check if task is already registered
+    // Check if task is already registered in system
     const isRegistered = await TaskManager.isTaskRegisteredAsync(BACKGROUND_SYNC_TASK);
     if (isRegistered) {
-      console.log('[BackgroundSync] Task already registered in system');
+      console.log('[BackgroundSync] Task already registered in native system');
       isTaskRegistered = true;
       return true;
     }
@@ -224,7 +241,7 @@ export async function registerBackgroundSync(): Promise<boolean> {
     console.log('[BackgroundSync] Task registered successfully');
     return true;
   } catch (error) {
-    console.error('[BackgroundSync] Registration error:', error);
+    console.warn('[BackgroundSync] Registration error (native module might be missing):', error);
     return false;
   }
 }

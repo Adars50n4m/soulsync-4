@@ -410,6 +410,17 @@ export const offlineService = {
   },
 
   /**
+   * Delete a message entirely from local storage
+   */
+  async deleteMessage(messageId: string): Promise<void> {
+    const db = await getDB();
+    if (!db) return;
+    
+    await db.runAsync(`DELETE FROM media_downloads WHERE message_id = ?;`, [messageId]);
+    await db.runAsync(`DELETE FROM messages WHERE id = ?;`, [messageId]);
+  },
+
+  /**
    * Get storage stats for media management
    */
   async getMediaStorageStats(): Promise<{ totalFiles: number; totalSize: number }> {

@@ -1,9 +1,11 @@
-import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useLayoutEffect, useMemo } from 'react';
 import {
-    View, Text, Image, FlatList, TextInput, Pressable,
+    View, Text, Image, TextInput, Pressable,
     StyleSheet, StatusBar, Platform,
-    Modal, Animated as RNAnimated, Dimensions, Keyboard, KeyboardEvent, Alert, InteractionManager, ScrollView
+    Modal, Animated as RNAnimated, Dimensions, Keyboard, KeyboardEvent, Alert, InteractionManager, ScrollView, FlatList
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
+
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -11,12 +13,25 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Haptics from 'expo-haptics';
+import VoiceNotePlayer from '../../components/chat/VoiceNotePlayer';
+import ProgressiveBlur from '../../components/chat/ProgressiveBlur';
+import MessageBubble from '../../components/chat/MessageBubble';
+import MessageContextMenu from '../../components/chat/MessageContextMenu';
+import { ChatStyles, SCREEN_WIDTH, SCREEN_HEIGHT, HEADER_PILL_HEIGHT, HEADER_PILL_RADIUS } from '../../components/chat/ChatStyles';
+import { formatDuration } from '../../utils/formatters';
+import { getMessageMediaItems, sanitizeSongTitle } from '../../utils/chatUtils';
+
+
+
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
     withSpring,
     withTiming,
     withDelay,
+    withRepeat,
+    withSequence,
     runOnJS,
     interpolate,
     interpolateColor,
@@ -24,9 +39,10 @@ import Animated, {
     Easing,
 } from 'react-native-reanimated';
 import { MORPH_EASING, MORPH_IN_DURATION, MORPH_OUT_DURATION, MORPH_OUT_EASING, MORPH_SPRING_CONFIG } from '../../constants/transitions';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import 'react-native-gesture-handler';
 
 import { useApp } from '../../context/AppContext';
+import { chatService } from '../../services/ChatService';
 import { MusicPlayerOverlay } from '../../components/MusicPlayerOverlay';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { MediaPreviewModal } from '../../components/MediaPreviewModal';
@@ -34,660 +50,16 @@ import { storageService } from '../../services/StorageService';
 import { EnhancedMediaViewer } from '../../components/EnhancedMediaViewer';
 import { Contact, Message } from '../../types';
 import { ResizeMode, Video, Audio } from 'expo-av';
-import * as Haptics from 'expo-haptics';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
-
-
-// Header Pill Constants
+const IS_IOS = Platform.OS === 'ios';
+const IOS_KEYBOARD_SAFE_ADJUST = 0; 
 const HEADER_PILL_TOP = 62;
-const HEADER_PILL_HEIGHT = 64;
-const HEADER_PILL_RADIUS = HEADER_PILL_HEIGHT / 2;
 
 type ChatMediaItem = {
-    type: 'image' | 'video' | 'audio' | 'file' | 'status_reply';
     url: string;
+    type: 'image' | 'video' | 'audio';
     caption?: string;
-};
-
-const getMessageMediaItems = (msg: any): ChatMediaItem[] => {
-    if (!msg?.media) return [];
-
-    if (Array.isArray(msg.media)) {
-        return msg.media.filter((m: any) => m?.url);
-    }
-
-    if (Array.isArray(msg.media?.items)) {
-        return msg.media.items.filter((m: any) => m?.url);
-    }
-
-    if (msg.media?.url) {
-        return [msg.media];
-    }
-
-    return [];
-};
-
-// Sanitize song title - remove metadata like "(From ...)" or "[Album Name]"
-const sanitizeSongTitle = (title: string): string => {
-    if (!title) return '';
-    // Remove text in parentheses and brackets
-    return title
-        .replace(/\s*\([^)]*\)/g, '')  // Remove (anything)
-        .replace(/\s*\[[^\]]*\]/g, '') // Remove [anything]
-        .trim();
-};
-
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const IS_IOS = Platform.OS === 'ios';
-const IOS_KEYBOARD_SAFE_ADJUST = 16; // Elegant small gap above keyboard
-
-const ProgressiveBlur = ({
-    position = 'top',
-    height = 180,
-    intensity = 300,
-    steps = 90,
-}: {
-    position?: 'top' | 'bottom';
-    height?: number;
-    intensity?: number;
-    steps?: number;
-}) => {
-    // Progressive blur without dark overlay:
-    // Stack many blur layers anchored to the same edge with increasing height.
-    // This avoids hard "join lines" because layers overlap fully from the edge.
-    return (
-        <View
-            style={{
-                position: 'absolute',
-                [position]: 0,
-                left: 0,
-                right: 0,
-                height,
-                zIndex: position === 'top' ? 90 : 50,
-                overflow: 'hidden',
-            }}
-            pointerEvents="none"
-        >
-            {Array.from({ length: steps }).map((_, i) => {
-                const ratio = (i + 1) / steps;
-                const layerHeight = height * ratio;
-
-                // More weight near the edge, smoother fade out.
-                const fade = Math.pow(1 - ratio, 1.4);
-                const opacity = Math.max(0, Math.min(1, fade));
-
-                return (
-                    <BlurView
-                        key={i}
-                        intensity={intensity / steps}
-                        tint="dark"
-                        style={{
-                            position: 'absolute',
-                            [position]: 0,
-                            left: 0,
-                            right: 0,
-                            height: layerHeight,
-                            opacity,
-                        }}
-                    />
-                );
-            })}
-        </View>
-    );
-};
-
-const formatDuration = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-};
-
-// Message Bubble with Liquid Glass UI - wrapped with React.memo for performance
-const VoiceNotePlayer = ({ uri, isMe, theme }: any) => {
-    const soundRef = useRef<Audio.Sound | null>(null);
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [position, setPosition] = useState(0);
-    const [duration, setDuration] = useState(0);
-
-    const onPlaybackStatusUpdate = (status: any) => {
-        if (status.isLoaded) {
-            setPosition(status.positionMillis);
-            setDuration(status.durationMillis || 0);
-            if (status.didJustFinish) {
-                setIsPlaying(false);
-                setPosition(0);
-                soundRef.current?.setPositionAsync(0);
-            }
-        }
-    };
-
-    const togglePlayPause = async () => {
-        try {
-            if (!soundRef.current) {
-                const { sound } = await Audio.Sound.createAsync(
-                    { uri },
-                    { shouldPlay: true },
-                    onPlaybackStatusUpdate
-                );
-                soundRef.current = sound;
-                setIsPlaying(true);
-            } else {
-                if (isPlaying) {
-                    await soundRef.current.pauseAsync();
-                    setIsPlaying(false);
-                } else {
-                    await soundRef.current.playAsync();
-                    setIsPlaying(true);
-                }
-            }
-        } catch (err) {
-            console.error('Playback failed', err);
-        }
-    };
-
-    useEffect(() => {
-        return () => {
-            if (soundRef.current) {
-                soundRef.current.unloadAsync();
-            }
-        };
-    }, []);
-
-    const progress = duration > 0 ? position / duration : 0;
-
-    return (
-        <View style={styles.voiceNoteContainer}>
-            <Pressable onPress={togglePlayPause} style={[styles.vnPlayButton, { backgroundColor: isMe ? 'rgba(255,255,255,0.2)' : theme.primary }]}>
-                <MaterialIcons name={isPlaying ? 'pause' : 'play-arrow'} size={24} color="white" />
-            </Pressable>
-            <View style={styles.vnProgressWrapper}>
-                <View style={[styles.vnProgressBackground, { backgroundColor: isMe ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.05)' }]} />
-                <View style={[styles.vnProgressBar, { width: `${progress * 100}%`, backgroundColor: isMe ? '#fff' : theme.primary }]} />
-            </View>
-            <Text style={styles.vnDuration}>{formatDuration(Math.floor((duration || 0) / 1000))}</Text>
-        </View>
-    );
-};
-
-const MessageBubble = React.memo(({ 
-  msg, 
-  contactName, 
-  onLongPress, 
-  onReply, 
-  isSelected, 
-  onReaction, 
-  quotedMessage, 
-  onDoubleTap, 
-  onMediaTap, 
-  isClone
-}: any) => {
-  const { activeTheme } = useApp();
-    const translateX = useSharedValue(0);
-    const isMe = msg.sender === 'me';
-
-    const doubleTapGesture = Gesture.Tap()
-        .numberOfTaps(2)
-        .maxDuration(250)
-        .onEnd(() => {
-            if (onDoubleTap) runOnJS(onDoubleTap)(msg.id);
-        });
-
-    const bubbleRef = useRef<View>(null);
-
-    const measureAndShowMenu = useCallback((id: string) => {
-        bubbleRef.current?.measure((x, y, width, height, pageX, pageY) => {
-            if (onLongPress) {
-                onLongPress(id, { x: pageX, y: pageY, width, height });
-            }
-        });
-    }, [onLongPress]);
-
-    const mediaItems = getMessageMediaItems(msg);
-
-    const measureAndShowMedia = useCallback((index: number, openGallery: boolean) => {
-        bubbleRef.current?.measure((x, y, width, height, pageX, pageY) => {
-            if (onMediaTap) {
-                onMediaTap({
-                    messageId: msg.id,
-                    mediaItems,
-                    index,
-                    openGallery,
-                    layout: { x: pageX, y: pageY, width, height }
-                });
-            }
-        });
-    }, [onMediaTap, msg.id, mediaItems]);
-
-    const longPressGesture = Gesture.LongPress()
-        .minDuration(400) // slightly faster response
-        .runOnJS(true)
-        .onStart(() => {
-            if (isClone) return; // Prevent interaction on cloned bubbles
-            measureAndShowMenu(msg.id);
-        });
-
-    const panGesture = Gesture.Pan()
-        .activeOffsetX([-10, 10])
-        .failOffsetY([-10, 10])
-        .onUpdate((event) => {
-            if (event.translationX > 0) translateX.value = event.translationX * 0.3;
-        })
-        .onEnd((event) => {
-            if (event.translationX > 60) runOnJS(onReply)(msg);
-            translateX.value = withSpring(0);
-        });
-
-    const composedGestures = Gesture.Simultaneous(panGesture, Gesture.Exclusive(doubleTapGesture, longPressGesture));
-
-    const bubbleStyle = useAnimatedStyle(() => ({
-        transform: [{ translateX: translateX.value }]
-    }));
-
-    const formatTime = (ts: string) => {
-        if (!ts) return '';
-        if (ts.includes('AM') || ts.includes('PM') || ts.includes(':')) {
-            // If it already looks formatted like '10:30 AM' or '14:30' but not an ISO string containing 'T'
-            if (!ts.includes('T')) return ts; 
-        }
-        try {
-            return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        } catch(e) {
-            return ts;
-        }
-    };
-
-    const iconStyle = useAnimatedStyle(() => ({
-        opacity: interpolate(translateX.value, [0, 50], [0, 1], Extrapolation.CLAMP),
-        transform: [
-            { scale: interpolate(translateX.value, [0, 50], [0.5, 1], Extrapolation.CLAMP) },
-            { translateX: interpolate(translateX.value, [0, 50], [-20, 0], Extrapolation.CLAMP) }
-        ]
-    }));
-
-    // const mediaItems = getMessageMediaItems(msg); // Removed duplicate/later declaration
-    const hasText = !!msg.text?.trim();
-    const hasCaption = !!msg.media?.caption?.trim();
-    const isMediaOnly = mediaItems.length > 0 && !hasText && !hasCaption && !quotedMessage;
-
-    const handleMediaPress = (index: number, openGallery = false) => {
-        if (!onMediaTap) return;
-        measureAndShowMedia(index, openGallery);
-    };
-
-    const renderMediaContent = () => {
-        if (!mediaItems.length) return null;
-
-        if (mediaItems.length === 1) {
-            const media = mediaItems[0];
-            
-            if (media.type === 'audio') {
-                return <VoiceNotePlayer uri={media.url} isMe={isMe} theme={activeTheme} />;
-            }
-
-            return (
-                <Pressable
-                    onPress={() => handleMediaPress(0)}
-                    style={[
-                        styles.mediaSurface,
-                        isMe ? styles.mediaSurfaceMe : styles.mediaSurfaceThem,
-                        !hasText && !hasCaption && styles.mediaSingleNoGap
-                    ]}
-                >
-                    <Animated.Image
-                        source={{ uri: media.url }}
-                        style={styles.mediaSingle}
-                    />
-                    {media.type === 'video' && (
-                        <View style={styles.mediaTilePlayOverlay}>
-                            <MaterialIcons name="play-circle-filled" size={46} color="rgba(255,255,255,0.92)" />
-                        </View>
-                    )}
-                </Pressable>
-            );
-        }
-
-        const visibleItems = mediaItems.slice(0, 4);
-        const extraCount = mediaItems.length - 4;
-        return (
-            <View
-                style={[
-                    styles.mediaSurface,
-                    styles.mediaGridSurface,
-                    isMe ? styles.mediaSurfaceMe : styles.mediaSurfaceThem,
-                    !hasText && !hasCaption && styles.mediaGridNoGap
-                ]}
-            >
-                <View style={styles.mediaGrid}>
-                    {visibleItems.map((media, index) => {
-                        const showMore = index === 3 && extraCount > 0;
-                        return (
-                            <Pressable
-                                key={`${media.url}-${index}`}
-                                style={styles.mediaGridTile}
-                                onPress={() => handleMediaPress(index, showMore)}
-                            >
-                                <Animated.Image
-                                    source={{ uri: media.url }}
-                                    style={styles.mediaGridImage}
-                                />
-                                {media.type === 'video' && !showMore && (
-                                    <View style={styles.mediaTilePlayOverlay}>
-                                        <MaterialIcons name="play-circle-filled" size={34} color="rgba(255,255,255,0.92)" />
-                                    </View>
-                                )}
-                                {showMore && (
-                                    <View style={styles.mediaMoreOverlay}>
-                                        <Text style={styles.mediaMoreText}>{`+${extraCount}`}</Text>
-                                    </View>
-                                )}
-                            </Pressable>
-                        );
-                    })}
-                </View>
-            </View>
-        );
-    };
-
-    if (isClone) {
-        return (
-            <Animated.View style={[bubbleStyle, { alignItems: isMe ? 'flex-end' : 'flex-start' }]}>
-                <View style={[
-                    styles.bubbleContainer,
-                    isMe ? styles.bubbleContainerMe : styles.bubbleContainerThem,
-                    quotedMessage && styles.bubbleContainerWithQuote,
-                    isMediaOnly && styles.bubbleContainerMediaOnly,
-                    { maxWidth: '100%' }
-                ]}>
-                    <View style={[styles.messageContent, isMediaOnly && styles.messageContentMediaOnly]}>
-                        {quotedMessage && (
-                            <View style={[styles.quotedContainer, isMe ? styles.quotedMe : styles.quotedThem]}>
-                                <View style={styles.quoteContent}>
-                                    <Text numberOfLines={1} style={[styles.quoteSender, { color: isMe ? '#fff' : activeTheme.primary }]}>
-                                        {quotedMessage.sender === 'me' ? 'You' : contactName}
-                                    </Text>
-                                    <Text style={[styles.quoteText, { color: isMe ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.5)' }]}>
-                                        {quotedMessage.text}
-                                    </Text>
-                                </View>
-                            </View>
-                        )}
-
-                        {/* Media */}
-                        {renderMediaContent()}
-
-                        {/* Caption */}
-                        {msg.media?.caption && (
-                            <Text style={[styles.captionText, isMe ? { color: 'rgba(255,255,255,0.8)' } : { color: 'rgba(255,255,255,0.6)' }]}>
-                                {msg.media.caption}
-                            </Text>
-                        )}
-
-                        {/* Text */}
-                        {hasText && (
-                            <Text style={[styles.messageText, isMe && styles.messageTextMe]}>
-                                {msg.text}
-                            </Text>
-                        )}
-                    </View>
-                </View>
-
-                {/* Reactions */}
-                {msg.reactions && msg.reactions.length > 0 && (
-                    <View style={[styles.reactionsRow, isMe ? styles.reactionsRight : styles.reactionsLeft]}>
-                        {msg.reactions.map((r: string, idx: number) => (
-                            <BlurView key={idx} intensity={40} tint="dark" style={styles.reactionPill}>
-                                <Text style={styles.reactionEmoji}>{r}</Text>
-                            </BlurView>
-                        ))}
-                    </View>
-                )}
-            </Animated.View>
-        );
-    }
-
-    return (
-        <View style={[
-            styles.messageWrapper,
-            isMe && styles.messageWrapperMe,
-            msg.reactions && msg.reactions.length > 0 && styles.messageWrapperWithReactions
-        ]}>
-            <View style={styles.replyIconContainer}>
-                <Animated.View style={[styles.replyIcon, iconStyle]}>
-                    <MaterialIcons name="reply" size={24} color={activeTheme.primary} />
-                </Animated.View>
-            </View>
-
-            <GestureDetector gesture={composedGestures}>
-                <Animated.View style={[bubbleStyle, { alignItems: isMe ? 'flex-end' : 'flex-start' }]}>
-                    <View ref={bubbleRef} style={[
-                        styles.bubbleContainer,
-                        isMe ? styles.bubbleContainerMe : styles.bubbleContainerThem,
-                        quotedMessage && styles.bubbleContainerWithQuote,
-                        isMediaOnly && styles.bubbleContainerMediaOnly,
-                    ]}>
-                        <View style={[styles.messageContent, isMediaOnly && styles.messageContentMediaOnly]}>
-                            {quotedMessage && (
-                                <Pressable style={[styles.quotedContainer, isMe ? styles.quotedMe : styles.quotedThem]}>
-                                    <View style={styles.quoteContent}>
-                                        <Text numberOfLines={1} style={[styles.quoteSender, { color: isMe ? '#fff' : activeTheme.primary }]}>
-                                            {quotedMessage.sender === 'me' ? 'You' : contactName}
-                                        </Text>
-                                        <Text style={[styles.quoteText, { color: isMe ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.5)' }]}>
-                                            {quotedMessage.text}
-                                        </Text>
-                                    </View>
-                                </Pressable>
-                            )}
-
-                            {renderMediaContent()}
-
-                            {msg.media?.caption && (
-                                <Text style={[styles.captionText, isMe ? { color: 'rgba(255,255,255,0.8)' } : { color: 'rgba(255,255,255,0.6)' }]}>
-                                    {msg.media.caption}
-                                </Text>
-                            )}
-
-                            {hasText && (
-                                <Text style={[styles.messageText, isMe && styles.messageTextMe]}>{msg.text}</Text>
-                            )}
-                        </View>
-                    </View>
-
-                    {/* Timestamp outside the bubble */}
-                    <View style={[styles.messageFooter, isMe ? styles.messageFooterMe : styles.messageFooterThem]}>
-                        <Text style={styles.timestamp}>{formatTime(msg.timestamp)}</Text>
-                        {isMe && (
-                            <MaterialIcons
-                                name={msg.status === 'read' ? 'done-all' : 'done'}
-                                size={10}
-                                color={msg.status === 'read' ? '#34B7F1' : 'rgba(255,255,255,0.3)'}
-                            />
-                        )}
-                    </View>
-
-                    {msg.reactions && msg.reactions.length > 0 && (
-                        <View style={[styles.reactionsRow, isMe ? styles.reactionsRight : styles.reactionsLeft]}>
-                            {msg.reactions.map((r: string, idx: number) => (
-                                <BlurView key={idx} intensity={40} tint="dark" style={styles.reactionPill}>
-                                    <Text style={styles.reactionEmoji}>{r}</Text>
-                                </BlurView>
-                            ))}
-                        </View>
-                    )}
-                </Animated.View>
-            </GestureDetector>
-        </View>
-    );
-}, (prevProps: any, nextProps: any) => {
-  // Custom comparison: only re-render if these specific props change
-  if (prevProps.msg?.id !== nextProps.msg?.id) return false;
-  if (prevProps.msg?.text !== nextProps.msg?.text) return false;
-  if (prevProps.msg?.status !== nextProps.msg?.status) return false;
-  if (prevProps.isSelected !== nextProps.isSelected) return false;
-  if (prevProps.isClone !== nextProps.isClone) return false;
-  if (prevProps.quotedMessage?.id !== nextProps.quotedMessage?.id) return false;
-  return true; // Props are equal - don't re-render
-});
-
-// Sophisticated Context Menu Overlay
-const MessageContextMenu = ({ visible, msg, layout, onClose, onReaction, onAction }: any) => {
-    const emojis = ['❤️', '👍', '👎', '🔥', '🥰', '👏', '😁'];
-    const progress = useSharedValue(0);
-
-    useEffect(() => {
-        if (visible && layout) {
-            progress.value = 0;
-            progress.value = withSpring(1, {
-                damping: 20,
-                stiffness: 250,
-                mass: 1,
-            });
-        }
-    }, [visible, layout, progress]);
-
-    const handleClose = () => {
-        progress.value = withTiming(0, {
-            duration: 150,
-            easing: Easing.out(Easing.quad)
-        }, (finished) => {
-            if (finished && onClose) {
-                runOnJS(onClose)();
-            }
-        });
-    };
-
-    const containerStyle = useAnimatedStyle(() => {
-        return {
-            opacity: progress.value,
-            transform: [
-                { scale: interpolate(progress.value, [0, 1], [0.95, 1]) }
-            ]
-        };
-    });
-
-    const backdropStyle = useAnimatedStyle(() => {
-        return {
-            opacity: progress.value
-        };
-    });
-
-    if (!visible || !msg || !layout) return null;
-
-    const isMe = msg.sender === 'me';
-
-    // Dimensions and safe areas
-    // Dimensions and spacing gaps
-    const EMENU_GAP = 12; // Air gap between emoji bar and top of message
-    const AMENU_GAP = 12; // Air gap between action menu and bottom of message
-    const emojiBarHeight = 54;
-    const actionMenuHeight = 260;
-    
-    const safeTop = 110; // Header buffer
-    const safeBottom = SCREEN_HEIGHT - 40; // Bottom screen buffer
-
-    let topAdjust = 0;
-
-    // Shift whole cluster down if emoji bar is cut off at the top edge
-    if (layout.y - emojiBarHeight - EMENU_GAP < safeTop) {
-        topAdjust = safeTop - (layout.y - emojiBarHeight - EMENU_GAP);
-    }
-    // Shift whole cluster up if action menu is cut off at the bottom edge
-    else if (layout.y + layout.height + AMENU_GAP + actionMenuHeight > safeBottom) {
-        topAdjust = safeBottom - (layout.y + layout.height + AMENU_GAP + actionMenuHeight);
-    }
-
-    const adjustedY = layout.y + topAdjust;
-    const emojiBarY = adjustedY - emojiBarHeight - EMENU_GAP;
-    const actionMenuY = adjustedY + layout.height + AMENU_GAP;
-
-    return (
-        <Modal visible={visible} transparent animationType="none" onRequestClose={handleClose}>
-            <View style={StyleSheet.absoluteFill}>
-                {/* Backdrop Blur */}
-                <Animated.View style={[StyleSheet.absoluteFill, backdropStyle]}>
-                    <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
-                    <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
-                </Animated.View>
-
-                {/* Animated Menu Elements */}
-                <Animated.View style={[StyleSheet.absoluteFill, containerStyle]} pointerEvents="box-none">
-                    
-                    {/* Emoji Reaction Bar */}
-                    <View style={[{
-                        position: 'absolute',
-                        top: emojiBarY,
-                        [isMe ? 'right' : 'left']: isMe ? SCREEN_WIDTH - layout.x - layout.width : layout.x,
-                        width: 270,
-                        height: 54,
-                        shadowColor: '#000',
-                        shadowOffset: { width: 0, height: 10 },
-                        shadowOpacity: 0.5,
-                        shadowRadius: 15,
-                        elevation: 10,
-                    }]}>
-                        <BlurView intensity={80} tint="dark" style={[styles.contextEmojiTail, { [isMe ? 'right' : 'left']: 20 }]} />
-                        
-                        <BlurView intensity={80} tint="dark" style={{ flex: 1, borderRadius: 27, overflow: 'hidden', backgroundColor: 'rgba(30,30,30,0.5)' }}>
-                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: 'center', paddingHorizontal: 16, gap: 14 }}>
-                                {emojis.map(e => (
-                                    <Pressable key={e} onPress={() => { onReaction(e); handleClose(); }} style={{ paddingVertical: 10 }}>
-                                        <Text style={{ fontSize: 26 }}>{e}</Text>
-                                    </Pressable>
-                                ))}
-                                <Pressable style={{ backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 16, width: 32, height: 32, alignItems: 'center', justifyContent: 'center', marginLeft: 4 }} onPress={() => { /* Open wide picker later */ }}>
-                                    <MaterialIcons name="add" size={20} color="#fff" />
-                                </Pressable>
-                            </ScrollView>
-                        </BlurView>
-                    </View>
-
-                    {/* Exact Cloned Message */}
-                    <View style={{
-                        position: 'absolute',
-                        top: adjustedY,
-                        left: layout.x,
-                        width: layout.width,
-                        height: layout.height,
-                    }}>
-                        <MessageBubble msg={msg} isClone />
-                    </View>
-
-                    {/* Action Menu (Reply, Pin, Forward...) */}
-                    <View style={[{
-                        position: 'absolute',
-                        top: actionMenuY,
-                        [isMe ? 'right' : 'left']: isMe ? SCREEN_WIDTH - layout.x - layout.width : layout.x,
-                        width: 200,
-                        shadowColor: '#000',
-                        shadowOffset: { width: 0, height: 10 },
-                        shadowOpacity: 0.5,
-                        shadowRadius: 15,
-                        elevation: 10,
-                    }]}>
-                        <BlurView intensity={80} tint="dark" style={{ borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(30,30,30,0.5)' }}>
-                            <Pressable style={styles.contextActionBtn} onPress={() => { onAction('reply'); handleClose(); }}>
-                                <MaterialIcons name="reply" size={20} color="#fff" />
-                                <Text style={styles.contextActionText}>Reply</Text>
-                            </Pressable>
-                            <Pressable style={styles.contextActionBtn} onPress={() => { onAction('pin'); handleClose(); }}>
-                                <MaterialIcons name="push-pin" size={20} color="#fff" />
-                                <Text style={styles.contextActionText}>Pin</Text>
-                            </Pressable>
-                            <Pressable style={styles.contextActionBtn} onPress={() => { /* Select */ handleClose(); }}>
-                                <MaterialIcons name="check-circle-outline" size={20} color="#fff" />
-                                <Text style={styles.contextActionText}>Select</Text>
-                            </Pressable>
-                            <Pressable style={[styles.contextActionBtn, { borderBottomWidth: 0 }]} onPress={() => { onAction('delete'); handleClose(); }}>
-                                <MaterialIcons name="delete-outline" size={20} color="#ff4444" />
-                                <Text style={[styles.contextActionText, { color: '#ff4444' }]}>Delete</Text>
-                            </Pressable>
-                        </BlurView>
-                    </View>
-
-                </Animated.View>
-            </View>
-        </Modal>
-    );
 };
 
 interface SingleChatScreenProps {
@@ -697,7 +69,106 @@ interface SingleChatScreenProps {
     sourceY?: number;
 }
 
-MessageBubble.displayName = 'MessageBubble';
+
+const AnyFlashList = FlashList as any;
+
+// Format "last seen" relative time (e.g. "today at 2:30 PM", "yesterday at 11:00 AM")
+const formatLastSeen = (isoString: string): string => {
+    try {
+        const date = new Date(isoString);
+        const now = new Date();
+        const diffMs = now.getTime() - date.getTime();
+        const diffMins = Math.floor(diffMs / 60000);
+        if (diffMins < 1) return 'just now';
+        if (diffMins < 60) return `${diffMins}m ago`;
+        const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const isToday = date.toDateString() === now.toDateString();
+        if (isToday) return `today at ${timeStr}`;
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        if (date.toDateString() === yesterday.toDateString()) return `yesterday at ${timeStr}`;
+        return `${date.toLocaleDateString([], { day: 'numeric', month: 'short' })} at ${timeStr}`;
+    } catch {
+        return 'offline';
+    }
+};
+
+// Animated 3-dot typing indicator (WhatsApp / iMessage style)
+const TypingDots = () => {
+    const [dot, setDot] = useState(0);
+    useEffect(() => {
+        const id = setInterval(() => setDot(d => (d + 1) % 3), 400);
+        return () => clearInterval(id);
+    }, []);
+    return (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+            {[0, 1, 2].map(i => (
+                <View
+                    key={i}
+                    style={{
+                        width: 5,
+                        height: 5,
+                        borderRadius: 2.5,
+                        backgroundColor: dot === i ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.3)',
+                    }}
+                />
+            ))}
+        </View>
+    );
+};
+
+const SiriWaveform = ({ level, active }: { level: number; active: boolean }) => {
+    const [phase, setPhase] = useState(0);
+    const width = 200;
+    const height = 40;
+    const centerY = height / 2;
+
+    useEffect(() => {
+        if (!active) return;
+        const id = setInterval(() => {
+            setPhase((prev) => prev + 0.28);
+        }, 40);
+        return () => clearInterval(id);
+    }, [active]);
+
+    const clampedLevel = Math.max(0, Math.min(1, level));
+    const amplitude = 4 + clampedLevel * 14;
+
+    const buildWavePath = (phaseOffset: number, ampFactor: number, freq: number) => {
+        const step = 5;
+        let path = `M 0 ${centerY}`;
+        for (let x = 0; x <= width; x += step) {
+            const theta = (x / width) * Math.PI * 2 * freq + phase + phaseOffset;
+            const theta2 = (x / width) * Math.PI * 2 * (freq * 1.7) + phase * 0.7 + phaseOffset;
+            const y = centerY + Math.sin(theta) * amplitude * ampFactor + Math.sin(theta2) * amplitude * 0.2;
+            path += ` L ${x} ${y}`;
+        }
+        return path;
+    };
+
+    const mainPath = buildWavePath(0, 1, 1.4);
+    const secondPath = buildWavePath(1.2, 0.72, 1.1);
+    const thirdPath = buildWavePath(2.1, 0.48, 0.85);
+
+    return (
+        <View style={styles.siriWaveWrap}>
+            <Svg width={width} height={height}>
+                <Defs>
+                    <SvgLinearGradient id="siriGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <Stop offset="0%" stopColor="#FF6A88" stopOpacity="0" />
+                        <Stop offset="10%" stopColor="#FF6A88" stopOpacity="0.58" />
+                        <Stop offset="50%" stopColor="#FF1E56" stopOpacity="1" />
+                        <Stop offset="90%" stopColor="#BC002A" stopOpacity="0.58" />
+                        <Stop offset="100%" stopColor="#BC002A" stopOpacity="0" />
+                    </SvgLinearGradient>
+                </Defs>
+                <Path d={thirdPath} fill="none" stroke="url(#siriGradient)" strokeWidth={3} opacity={0.28} />
+                <Path d={secondPath} fill="none" stroke="url(#siriGradient)" strokeWidth={4} opacity={0.5} />
+                <Path d={mainPath} fill="none" stroke="url(#siriGradient)" strokeWidth={5} opacity={0.95} />
+            </Svg>
+        </View>
+    );
+};
 
 export default function SingleChatScreen({ user: propsUser, onBack, onBackStart, sourceY: propsSourceY }: SingleChatScreenProps) {
     const { id: paramsId, sourceY: paramsSourceY } = useLocalSearchParams();
@@ -711,6 +182,9 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
     const [isReady, setIsReady] = useState(false);
+
+    // Memoize reversed messages to avoid expensive array operations in render
+    const reversedMessages = useMemo(() => [...(messages[id] || [])].reverse(), [messages, id]);
 
     // Defer heavy rendering until transition completes
     useEffect(() => {
@@ -771,7 +245,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         const onShow = (event: KeyboardEvent) => {
             const rawHeight = event.endCoordinates?.height || 0;
             const height = IS_IOS
-                ? Math.max(0, rawHeight - IOS_KEYBOARD_SAFE_ADJUST)
+                ? Math.max(0, rawHeight - keyboardOffset.value)
                 : rawHeight;
             const duration = event.duration || 250;
             keyboardOffset.value = withTiming(height, { duration });
@@ -803,8 +277,20 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         }
     }, [onBack, navigation]);
 
+    const [replyingTo, setReplyingTo] = useState<any>(null);
+    const [selectedContextMessage, setSelectedContextMessage] = useState<{ msg: any, layout: any } | null>(null);
+    const [showMusicPlayer, setShowMusicPlayer] = useState(false);
+    const [selectionMode, setSelectionMode] = useState(false);
+    const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
+	
     // Animate OUT — butter smooth unified morph back to pill
         const handleBack = useCallback(() => {
+        if (selectionMode) {
+            setSelectionMode(false);
+            setSelectedMessageIds([]);
+            return;
+        }
+
         if (onBackStart) onBackStart();
 
         // Content fades out quickly for smoother perceived transition
@@ -821,7 +307,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         } else {
             console.warn('Navigation: Cannot go back');
         }
-    }, [onBackStart, onBack, navigation, chatBodyOpacity]);
+    }, [onBackStart, onBack, navigation, chatBodyOpacity, selectionMode]);
 
     // Animation Values
     const plusRotation = useSharedValue(0);
@@ -833,14 +319,20 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const flatListRef = useRef<FlatList>(null);
     const hasScrolledInitial = useRef(false);
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const [replyingTo, setReplyingTo] = useState<any>(null);
-    const [selectedContextMessage, setSelectedContextMessage] = useState<{ msg: any, layout: any } | null>(null);
-    const [showMusicPlayer, setShowMusicPlayer] = useState(false);
-
     // Derived State
     const contact = contacts.find(c => c.id === id);
     const chatMessages = messages[id || ''] || [];
     const isTyping = contact ? typingUsers.includes(contact.id) : false;
+
+    // Mark incoming messages as read when chat is open
+    useEffect(() => {
+        const unreadIds = chatMessages
+            .filter(m => m.sender === 'them' && m.status !== 'read')
+            .map(m => m.id);
+        if (unreadIds.length > 0) {
+            chatService.markMessagesAsRead(unreadIds);
+        }
+    }, [chatMessages]);
 
     // Toggle Options Menu
     const toggleOptions = () => {
@@ -887,32 +379,61 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
     // Recording State
     const recordingRef = useRef<Audio.Recording | null>(null);
+    const isPreparingRecordingRef = useRef(false);
+    const isStoppingRecordingRef = useRef(false);
+    const pendingStopAfterPrepareRef = useRef<null | { shouldSend: boolean }>(null);
     const [isRecording, setIsRecording] = useState(false);
     const [recordingDuration, setRecordingDuration] = useState(0);
     const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const [recordingLevel, setRecordingLevel] = useState(0.08);
     const [isRecordingCancelled, setIsRecordingCancelled] = useState(false);
     const recordingTranslateX = useSharedValue(0);
+    const touchStartXRef = useRef(0);
+    const cancelHapticJSRef = useRef(false);
 
     const startRecording = async () => {
+        if (isPreparingRecordingRef.current || isStoppingRecordingRef.current) {
+            return;
+        }
+        isPreparingRecordingRef.current = true;
+        pendingStopAfterPrepareRef.current = null;
         try {
+            // Force-cleanup any lingering recording to avoid "Only one Recording" error
+            if (recordingRef.current) {
+                try { await recordingRef.current.stopAndUnloadAsync(); } catch {}
+                recordingRef.current = null;
+            }
+            if (recordingTimerRef.current) {
+                clearInterval(recordingTimerRef.current);
+                recordingTimerRef.current = null;
+            }
+            setIsRecording(false);
+
             const permission = await Audio.requestPermissionsAsync();
             if (permission.status !== 'granted') {
                 Alert.alert('Permission required', 'Please enable microphone access to record voice notes.');
                 return;
             }
 
+            // Reset audio mode first to release any previous recording resources
+            try {
+                await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
+            } catch {}
+
             await Audio.setAudioModeAsync({
                 allowsRecordingIOS: true,
                 playsInSilentModeIOS: true,
             });
 
-            const { recording } = await Audio.Recording.createAsync(
-                Audio.RecordingOptionsPresets.HIGH_QUALITY
-            );
+            const { recording } = await Audio.Recording.createAsync({
+                ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
+                isMeteringEnabled: true,
+            } as any);
             recordingRef.current = recording;
             setIsRecording(true);
             setIsRecordingCancelled(false);
             setRecordingDuration(0);
+            setRecordingLevel(0.08);
             recordingTranslateX.value = 0;
 
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -920,23 +441,70 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             recordingTimerRef.current = setInterval(() => {
                 setRecordingDuration(prev => prev + 1);
             }, 1000) as unknown as NodeJS.Timeout;
+            recording.setProgressUpdateInterval(90);
+            recording.setOnRecordingStatusUpdate((status: any) => {
+                if (!status?.isRecording) return;
+                if (typeof status?.metering === 'number') {
+                    const normalized = Math.max(0, Math.min(1, (status.metering + 60) / 60));
+                    setRecordingLevel(prev => prev * 0.62 + normalized * 0.38);
+                } else {
+                    // fallback pulse when metering is unavailable on some devices
+                    setRecordingLevel(prev => Math.max(0.08, prev * 0.92));
+                }
+            });
+
+            // If finger was released while recorder was still preparing, resolve immediately.
+            if (pendingStopAfterPrepareRef.current) {
+                const { shouldSend } = pendingStopAfterPrepareRef.current;
+                pendingStopAfterPrepareRef.current = null;
+                await stopRecording(shouldSend);
+            }
         } catch (err) {
             console.error('Failed to start recording', err);
+            pendingStopAfterPrepareRef.current = null;
+            setIsRecording(false);
+            if (recordingTimerRef.current) {
+                clearInterval(recordingTimerRef.current);
+                recordingTimerRef.current = null;
+            }
+            try {
+                if (recordingRef.current) {
+                    await recordingRef.current.stopAndUnloadAsync();
+                    recordingRef.current = null;
+                }
+            } catch {}
+            try {
+                await Audio.setAudioModeAsync({
+                    allowsRecordingIOS: false,
+                    playsInSilentModeIOS: true,
+                });
+            } catch {}
+        } finally {
+            isPreparingRecordingRef.current = false;
         }
     };
 
     const stopRecording = async (shouldSend: boolean = true) => {
-        if (!recordingRef.current) return;
+        if (isStoppingRecordingRef.current) return;
+        if (!recordingRef.current) {
+            if (isPreparingRecordingRef.current) {
+                pendingStopAfterPrepareRef.current = { shouldSend };
+            }
+            return;
+        }
+        isStoppingRecordingRef.current = true;
 
         setIsRecording(false);
         if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
 
-        try {
-            await recordingRef.current.stopAndUnloadAsync();
-            const uri = recordingRef.current.getURI();
-            recordingRef.current = null;
+        const recording = recordingRef.current;
+        recordingRef.current = null;
 
-            if (shouldSend && uri && !isRecordingCancelled) {
+        try {
+            await recording.stopAndUnloadAsync();
+            const uri = recording.getURI();
+
+            if (shouldSend && uri) {
                 handleSendAudio(uri);
             }
         } catch (err) {
@@ -946,6 +514,10 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 allowsRecordingIOS: false,
                 playsInSilentModeIOS: true,
             });
+            setIsRecordingCancelled(false);
+            recordingTranslateX.value = 0;
+            pendingStopAfterPrepareRef.current = null;
+            isStoppingRecordingRef.current = false;
         }
     };
 
@@ -1007,27 +579,96 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         opacity: interpolate(recordingTranslateX.value, [-100, 0], [0, 1], Extrapolation.CLAMP),
     }));
 
-    const micGesture = Gesture.Pan()
-        .activateAfterLongPress(200)
-        .onStart(() => {
-            runOnJS(startRecording)();
-        })
-        .onUpdate((event) => {
-            recordingTranslateX.value = Math.min(0, event.translationX);
-            if (event.translationX < -100 && !isRecordingCancelled) {
-                runOnJS(setIsRecordingCancelled)(true);
-                runOnJS(Haptics.notificationAsync)(Haptics.NotificationFeedbackType.Warning);
-            } else if (event.translationX >= -100 && isRecordingCancelled) {
-                runOnJS(setIsRecordingCancelled)(false);
+    const MIC_TRAVEL_FULL = SCREEN_WIDTH - 150; // drag distance from right mic zone to left delete zone
+
+    const deleteIconAnimatedStyle = useAnimatedStyle(() => {
+        const progress = Math.min(1, Math.abs(recordingTranslateX.value) / MIC_TRAVEL_FULL);
+        return {
+            transform: [{ scale: interpolate(progress, [0, 0.6, 1], [1, 1.15, 1.5], Extrapolation.CLAMP) }],
+            opacity: interpolate(progress, [0, 1], [0.55, 1], Extrapolation.CLAMP),
+        };
+    });
+
+    const recordingMicAnimatedStyle = useAnimatedStyle(() => {
+        const progress = Math.min(1, Math.abs(recordingTranslateX.value) / MIC_TRAVEL_FULL);
+        return {
+            transform: [
+                { translateX: recordingTranslateX.value },
+                { scale: interpolate(progress, [0, 0.9, 0.98, 1], [1, 1, 0.92, 0.28], Extrapolation.CLAMP) },
+            ],
+            opacity: interpolate(progress, [0, 0.97, 1], [1, 1, 0], Extrapolation.CLAMP),
+            backgroundColor: interpolateColor(
+                progress,
+                [0, 0.9, 1],
+                ['#BC002A', '#D3003B', '#ff4d6d']
+            ),
+        };
+    });
+
+    const recordingWaveAnimatedStyle = useAnimatedStyle(() => {
+        const progress = Math.min(1, Math.abs(recordingTranslateX.value) / MIC_TRAVEL_FULL);
+        return {
+            opacity: interpolate(progress, [0, 0.75, 1], [1, 0.45, 0.08], Extrapolation.CLAMP),
+            transform: [{ scaleX: interpolate(progress, [0, 1], [1, 0.92], Extrapolation.CLAMP) }],
+        };
+    });
+
+    // Cancel only when mic is dragged close to delete target on the left.
+    const CANCEL_SWIPE_THRESHOLD = -(MIC_TRAVEL_FULL - 26);
+
+    // Raw touch handlers — guaranteed to fire on every platform (no gesture recognition)
+    const handleMicTouchStart = (e: any) => {
+        touchStartXRef.current = e.nativeEvent.pageX;
+        cancelHapticJSRef.current = false;
+        startRecording();
+    };
+
+    const handleMicTouchMove = (e: any) => {
+        if (!recordingRef.current && !isPreparingRecordingRef.current) return;
+        const dx = e.nativeEvent.pageX - touchStartXRef.current;
+        recordingTranslateX.value = Math.max(-MIC_TRAVEL_FULL, Math.min(0, dx));
+        const shouldCancel = dx < CANCEL_SWIPE_THRESHOLD;
+        setIsRecordingCancelled(shouldCancel);
+        if (shouldCancel && !cancelHapticJSRef.current) {
+            cancelHapticJSRef.current = true;
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        } else if (!shouldCancel) {
+            cancelHapticJSRef.current = false;
+        }
+    };
+
+    const handleMicTouchEnd = (e: any) => {
+        const dx = e.nativeEvent.pageX - touchStartXRef.current;
+        const shouldCancel = dx < CANCEL_SWIPE_THRESHOLD;
+        cancelHapticJSRef.current = false;
+
+        if (shouldCancel) {
+            // Animate mic all the way into the delete icon, then cancel
+            recordingTranslateX.value = withTiming(-MIC_TRAVEL_FULL, {
+                duration: 180,
+                easing: Easing.in(Easing.quad),
+            });
+            setTimeout(() => {
+                stopRecording(false);
+                recordingTranslateX.value = 0;
+            }, 200);
+        } else {
+            recordingTranslateX.value = withTiming(0, { duration: 200 });
+            stopRecording(true);
+        }
+    };
+
+    useEffect(() => {
+        return () => {
+            if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+            // Stop any active recording when unmounting
+            if (recordingRef.current) {
+                recordingRef.current.stopAndUnloadAsync().catch(() => {});
+                recordingRef.current = null;
             }
-        })
-        .onEnd(() => {
-            if (isRecordingCancelled) {
-                runOnJS(stopRecording)(false);
-            } else {
-                runOnJS(stopRecording)(true);
-            }
-        });
+            Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true }).catch(() => {});
+        };
+    }, []);
 
 
 
@@ -1105,9 +746,41 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 // Future Implementation
             } else if (action === 'forward') {
                 // Future Implementation
+            } else if (action === 'select') {
+                setSelectionMode(true);
+                setSelectedMessageIds([selectedContextMessage.msg.id]);
             }
         }
         setSelectedContextMessage(null);
+    };
+
+    const handleSelectToggle = useCallback((msgId: string) => {
+        setSelectedMessageIds(prev => {
+            const next = prev.includes(msgId) ? prev.filter(i => i !== msgId) : [...prev, msgId];
+            if (next.length === 0) setSelectionMode(false);
+            return next;
+        });
+    }, []);
+
+    const handleDeleteSelected = () => {
+        Alert.alert(
+            `Delete ${selectedMessageIds.length} Message${selectedMessageIds.length > 1 ? 's' : ''}`,
+            'Are you sure you want to delete?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: () => {
+                        selectedMessageIds.forEach(msgId => {
+                            if (id) deleteMessage(id, msgId);
+                        });
+                        setSelectionMode(false);
+                        setSelectedMessageIds([]);
+                    }
+                }
+            ]
+        );
     };
 
     const handleDoubleTap = (msgId: string) => {
@@ -1188,8 +861,11 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             onDoubleTap={handleDoubleTap}
             onMediaTap={handleMediaTap}
             quotedMessage={item.replyTo ? chatMessages.find((m: any) => m.id === item.replyTo) : null}
+            selectionMode={selectionMode}
+            isChecked={selectedMessageIds.includes(item.id)}
+            onSelectToggle={handleSelectToggle}
         />
-    ), [selectedContextMessage, chatMessages, contact?.name, handleMediaTap]);
+    ), [selectedContextMessage, chatMessages, contact?.name, handleMediaTap, selectionMode, selectedMessageIds, handleSelectToggle]);
 
     // Stable keyExtractor for FlatList - prevents inline function recreation
     const keyExtractor = useCallback((item: any) => item.id, []);
@@ -1237,24 +913,32 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         Alert.alert('Coming Soon', 'Audio file selection will be available soon.');
     };
 
-    const handleSendMedia = async (caption?: string) => {
-        if (!mediaPreview || !id) return;
+    const handleSendMedia = async (mediaList: { uri: string; type: 'image'|'video'|'audio' }[], caption?: string) => {
+        if (!mediaList || mediaList.length === 0 || !id) return;
         setIsUploading(true);
         try {
-            const publicUrl = await storageService.uploadImage(
-                mediaPreview.uri,
-                'chat-media',
-                currentUser?.id || ''
-            );
-            if (!publicUrl) throw new Error('Upload failed');
+            for (let i = 0; i < mediaList.length; i++) {
+                const item = mediaList[i];
+                let publicUrl: string | null = null;
+                if (item.type === 'video') {
+                    // fallbacks handling if video
+                    publicUrl = await storageService.uploadImage(item.uri, 'chat-media', currentUser?.id || '');
+                } else if (item.type === 'audio') {
+                    publicUrl = await storageService.uploadImage(item.uri, 'chat-media', currentUser?.id || '');
+                } else {
+                    publicUrl = await storageService.uploadImage(item.uri, 'chat-media', currentUser?.id || '');
+                }
+                
+                if (!publicUrl) throw new Error('Upload failed');
 
-            const media: Message['media'] = {
-                type: mediaPreview.type,
-                url: publicUrl,
-                caption: caption || undefined,
-            };
+                const media: Message['media'] = {
+                    type: item.type,
+                    url: publicUrl,
+                    caption: i === 0 ? caption || undefined : undefined,
+                };
 
-            sendChatMessage(id, caption || '', media);
+                await sendChatMessage(id, i === 0 ? (caption || '') : '', media);
+            }
             setMediaPreview(null);
         } catch (error: any) {
             Alert.alert('Upload Failed', error.message || 'Please try again.');
@@ -1288,21 +972,16 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 {isReady && (
                     <View style={{ flex: 1 }}>
                         <Animated.View style={[{ flex: 1 }, messagesContainerAnimatedStyle]}>
-                            {/* Messages - optimized with React.memo */}
+                            {/* Messages - Switched to FlatList for better inverted support on Fabric */}
                             <FlatList
-                                ref={flatListRef}
-                                data={[...chatMessages].reverse()}
-                                inverted
+                                ref={flatListRef as any}
+                                data={reversedMessages}
                                 keyExtractor={keyExtractor}
+                                inverted={true}
                                 renderItem={renderMessage}
                                 style={styles.messagesList}
                                 contentContainerStyle={styles.messagesContent}
                                 showsVerticalScrollIndicator={false}
-                                onContentSizeChange={handleContentSizeChange}
-                                // Performance Optimizations
-                                initialNumToRender={15}
-                                maxToRenderPerBatch={10}
-                                windowSize={5}
                                 removeClippedSubviews={Platform.OS === 'android'}
                                 ListEmptyComponent={
                                     <View style={styles.emptyChat}>
@@ -1313,14 +992,18 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                 }
                             />
 
+
+
                             {/* iOS-style Progressive Blur Effects */}
                             <ProgressiveBlur position="top" height={280} intensity={120} steps={28} />
                             <ProgressiveBlur position="bottom" height={200} intensity={120} steps={28} />
 
-                            {/* Typing Indicator */}
+                            {/* Typing Indicator — animated 3-dot bubble */}
                             {isTyping && (
                                 <View style={styles.typingContainer}>
-                                    <Text style={[styles.typingText, { color: activeTheme.primary }]}>typing...</Text>
+                                    <View style={styles.typingBubble}>
+                                        <TypingDots />
+                                    </View>
                                 </View>
                             )}
                         </Animated.View>
@@ -1331,7 +1014,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                         {replyingTo && (
                             <BlurView intensity={60} tint="dark" style={styles.replyPreview}>
                                 <View style={styles.replyContent}>
-                                    <View style={styles.quoteBar} />
+                                    <View style={[ChatStyles.quoteBar, { backgroundColor: activeTheme.primary }]} />
                                     <View style={styles.replyTextContainer}>
                                         <Text style={[styles.replySender, { color: activeTheme.primary }]}>REPLYING TO</Text>
                                         <Text numberOfLines={1} style={styles.replyText}>{replyingTo.text}</Text>
@@ -1374,75 +1057,97 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                  </Pressable>
                             </Animated.View>
 
-                            <View style={styles.inputWrapper}>
-                                {/* + Button on left inside */}
-                                <Pressable style={styles.attachButton} onPress={toggleOptions}>
-                                    <Animated.View style={animatedPlusStyle}>
-                                        <MaterialIcons name="add" size={20} color="rgba(255,255,255,0.7)" />
-                                    </Animated.View>
-                                </Pressable>
-
-                                <TextInput
-                                    style={styles.input}
-                                    value={inputText}
-                                    onChangeText={(text) => {
-                                        setInputText(text);
-                                        
-                                        // Typing indicator logic
-                                        sendTyping(true);
-                                        
-                                        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-                                        typingTimeoutRef.current = setTimeout(() => {
-                                            sendTyping(false);
-                                        }, 2000) as unknown as NodeJS.Timeout;
-                                    }}
-                                    onFocus={handleFocus}
-                                    placeholder="Sync fragment..."
-                                    placeholderTextColor="rgba(255,255,255,0.3)"
-                                    multiline
-                                    maxLength={1000}
-                                />
-
-                                {/* Emoji button (optional, can remove if not needed) */}
-                                <Pressable style={styles.emojiInputButton}>
-                                    <MaterialIcons name="sentiment-satisfied" size={20} color="rgba(255,255,255,0.5)" />
-                                </Pressable>
-
-                                {/* Mic button on right inside */}
-                                {inputText.trim() ? (
-                                    <Pressable
-                                        style={styles.sendButton}
-                                        onPress={handleSend}
-                                    >
-                                        <MaterialIcons
-                                            name="arrow-upward"
-                                            size={18}
-                                            color={activeTheme.primary}
-                                        />
-                                    </Pressable>
-                                ) : (
-                                    <GestureDetector gesture={micGesture}>
-                                        <Animated.View style={[styles.sendButton, isRecording && recordingPulseStyle]}>
-                                            <MaterialIcons
-                                                name="mic"
-                                                size={18}
-                                                color={isRecording ? '#fff' : 'rgba(255,255,255,0.7)'}
-                                            />
+                            <View
+                                style={[styles.inputWrapper, isRecording && styles.inputWrapperHidden]}
+                            >
+                                    {/* + Button on left inside */}
+                                    <Pressable style={styles.attachButton} onPress={toggleOptions}>
+                                        <Animated.View style={animatedPlusStyle}>
+                                            <MaterialIcons name="add" size={20} color="rgba(255,255,255,0.7)" />
                                         </Animated.View>
-                                    </GestureDetector>
-                                )}
-                            </View>
+                                    </Pressable>
+
+                                    <TextInput
+                                        style={styles.input}
+                                        value={inputText}
+                                        onChangeText={(text) => {
+                                            setInputText(text);
+                                            
+                                            // Typing indicator logic
+                                            sendTyping(true);
+                                            
+                                            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+                                            typingTimeoutRef.current = setTimeout(() => {
+                                                sendTyping(false);
+                                            }, 2000) as unknown as NodeJS.Timeout;
+                                        }}
+                                        onFocus={handleFocus}
+                                        placeholder="Sync fragment..."
+                                        placeholderTextColor="rgba(255,255,255,0.3)"
+                                        multiline
+                                        maxLength={1000}
+                                    />
+
+                                    {/* Emoji button (optional, can remove if not needed) */}
+                                    <Pressable style={styles.emojiInputButton}>
+                                        <MaterialIcons name="sentiment-satisfied" size={20} color="rgba(255,255,255,0.5)" />
+                                    </Pressable>
+
+                                    {/* Mic button on right inside */}
+                                    {inputText.trim() ? (
+                                        <Pressable
+                                            style={styles.sendButton}
+                                            onPress={handleSend}
+                                        >
+                                            <MaterialIcons
+                                                name="arrow-upward"
+                                                size={18}
+                                                color={activeTheme.primary}
+                                            />
+                                        </Pressable>
+                                    ) : (
+                                        <View
+                                            onTouchStart={handleMicTouchStart}
+                                            onTouchMove={handleMicTouchMove}
+                                            onTouchEnd={handleMicTouchEnd}
+                                            onTouchCancel={() => {
+                                                cancelHapticJSRef.current = false;
+                                                recordingTranslateX.value = withTiming(-MIC_TRAVEL_FULL, { duration: 180, easing: Easing.in(Easing.quad) });
+                                                setTimeout(() => {
+                                                    stopRecording(false);
+                                                    recordingTranslateX.value = 0;
+                                                }, 200);
+                                            }}
+                                        >
+                                            <Animated.View style={[styles.sendButton, isRecording && recordingPulseStyle]}>
+                                                <MaterialIcons
+                                                    name="mic"
+                                                    size={18}
+                                                    color={isRecording ? '#fff' : 'rgba(255,255,255,0.7)'}
+                                                />
+                                            </Animated.View>
+                                        </View>
+                                    )}
+                                </View>
 
                             {/* Recording Overlay */}
                             {isRecording && (
-                                <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#000', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, zIndex: 10 }]}>
+                                <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: 'transparent', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, zIndex: 10 }]}>
+                                    <Animated.View style={[styles.deleteIconWrap, deleteIconAnimatedStyle]}>
+                                        <MaterialIcons name="delete" size={20} color={isRecordingCancelled ? '#ff4d6d' : 'rgba(255,255,255,0.72)'} />
+                                    </Animated.View>
                                     <Animated.View style={[styles.recordingIndicator, recordingPulseStyle]} />
                                     <Text style={styles.recordingTimer}>{formatDuration(recordingDuration)}</Text>
                                     
-                                    <Animated.View style={[{ flex: 1, alignItems: 'center' }, slideToCancelStyle]}>
-                                        <Text style={styles.slideToCancel}>
-                                            <MaterialIcons name="chevron-left" size={16} color="rgba(255,255,255,0.5)" /> Slide to cancel
-                                        </Text>
+                                    <Animated.View style={[{ flex: 1, height: 40, justifyContent: 'center', alignItems: 'center' }, recordingWaveAnimatedStyle]}>
+                                        <SiriWaveform level={recordingLevel} active={isRecording} />
+                                    </Animated.View>
+
+                                    <Animated.View style={[styles.cancelHintChevron, slideToCancelStyle]}>
+                                        <MaterialIcons name="chevron-left" size={20} color="rgba(255,255,255,0.42)" />
+                                    </Animated.View>
+                                    <Animated.View style={[styles.recordingMicIconWrap, recordingMicAnimatedStyle]}>
+                                        <MaterialIcons name="mic" size={20} color="#fff" />
                                     </Animated.View>
                                 </Animated.View>
                             )}
@@ -1477,46 +1182,74 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
                     {/* Original Header Content - Rendered exactly over the morph bounds as an absolute overlay */}
                     <View style={[styles.header, { position: 'absolute', top: HEADER_PILL_TOP, left: 16, right: 16, height: HEADER_PILL_HEIGHT, zIndex: 10 }]} pointerEvents="box-none">
-                        <Pressable onPress={handleBack} style={styles.backButton}>
-                            <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
-                        </Pressable>
-
-                        <Pressable style={styles.avatarWrapper} onPress={() => router.push(`/profile/${contact.id}` as any)}>
-                            <Animated.Image
-                                {...{ sharedTransitionTag: `chat-avatar-${id}` } as any}
-                                source={{ uri: contact.avatar }}
-                                style={styles.avatar}
-                            />
-                            {contact.status === 'online' && <View style={styles.onlineIndicator} />}
-                        </Pressable>
-
-                        <View style={styles.headerInfo}>
-                            <View>
-                                <Text style={styles.contactName}>{contact.name}</Text>
-                            </View>
-                            {musicState.currentSong ? (
-                                <View style={styles.nowPlayingStatus}>
-                                    <MaterialIcons name="audiotrack" size={12} color={activeTheme.primary} />
-                                    <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
-                                        {sanitizeSongTitle(musicState.currentSong.name)}
+                        {selectionMode ? (
+                            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, width: '100%' }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    <Pressable onPress={() => { setSelectionMode(false); setSelectedMessageIds([]); }} style={{ marginRight: 24, padding: 4 }}>
+                                        <MaterialIcons name="close" size={24} color="#ffffff" />
+                                    </Pressable>
+                                    <Text style={{ color: '#fff', fontSize: 18, fontWeight: '600' }}>
+                                        {selectedMessageIds.length} Selected
                                     </Text>
                                 </View>
-                            ) : (
-                                <Text style={[styles.statusText, { color: 'rgba(255,255,255,0.5)' }]}>
-                                    {contact.status === 'online' ? 'ONLINE' : 'OFFLINE'}
-                                </Text>
-                            )}
-                        </View>
-
-                        <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
-                            <MaterialIcons name="audiotrack" size={20} color={activeTheme.primary} />
-                        </Pressable>
-
-                        <View ref={callButtonRef} collapsable={false}>
-                            <Pressable style={styles.headerButton} onPress={openCallModal}>
-                                <MaterialIcons name="call" size={20} color={activeTheme.primary} />
+                                <Pressable onPress={handleDeleteSelected} style={{ padding: 4 }}>
+                                    <MaterialIcons name="delete-outline" size={24} color="#ff4444" />
+                                </Pressable>
+                            </View>
+                        ) : (
+                          <>
+                            <Pressable onPress={handleBack} style={styles.backButton}>
+                                <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
                             </Pressable>
-                        </View>
+
+                            <Pressable style={styles.avatarWrapper} onPress={() => router.push(`/profile/${contact.id}` as any)}>
+                                <Animated.Image
+                                    {...{ sharedTransitionTag: `chat-avatar-${id}` } as any}
+                                    source={{ uri: contact.avatar }}
+                                    style={styles.avatar}
+                                />
+                                {contact.status === 'online' && <View style={styles.onlineIndicator} />}
+                            </Pressable>
+
+                            <View style={styles.headerInfo}>
+                                <View>
+                                    <Text style={styles.contactName}>{contact.name}</Text>
+                                </View>
+                                {isTyping ? (
+                                    <Text style={[styles.statusText, { color: '#22c55e' }]}>
+                                        typing...
+                                    </Text>
+                                ) : musicState.currentSong ? (
+                                    <View style={styles.nowPlayingStatus}>
+                                        <MaterialIcons name="audiotrack" size={12} color={activeTheme.primary} />
+                                        <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
+                                            {sanitizeSongTitle(musicState.currentSong.name)}
+                                        </Text>
+                                    </View>
+                                ) : contact.status === 'online' ? (
+                                    <Text style={[styles.statusText, { color: '#22c55e' }]}>
+                                        online
+                                    </Text>
+                                ) : (
+                                    <Text style={[styles.statusText, { color: 'rgba(255,255,255,0.35)' }]}>
+                                        {contact.lastSeen
+                                            ? `last seen ${formatLastSeen(contact.lastSeen)}`
+                                            : 'offline'}
+                                    </Text>
+                                )}
+                            </View>
+
+                            <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
+                                <MaterialIcons name="audiotrack" size={20} color={activeTheme.primary} />
+                            </Pressable>
+
+                            <View ref={callButtonRef} collapsable={false}>
+                                <Pressable style={styles.headerButton} onPress={openCallModal}>
+                                    <MaterialIcons name="call" size={20} color={activeTheme.primary} />
+                                </Pressable>
+                            </View>
+                          </>
+                        )}
                     </View>
             </View>
 
@@ -1528,6 +1261,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 onClose={() => setSelectedContextMessage(null)}
                 onReaction={handleReaction}
                 onAction={handleAction}
+                chatMessages={chatMessages}
+                contactName={contact?.name || 'Them'}
             />
 
             {/* Call Options Dropdown */}
@@ -1734,9 +1469,9 @@ const styles = StyleSheet.create({
         top: 0,
         left: 0,
         right: 0,
-        bottom: 0, // Allow full screen bounds for the transition flight
-        zIndex: 999, // Ensure it's above the ProgressiveBlur (zIndex 90) and Messages
-        pointerEvents: 'box-none', // Let touches pass through the empty areas
+        bottom: 0,
+        zIndex: 999,
+        pointerEvents: 'box-none',
     },
     headerPill: {
         height: HEADER_PILL_HEIGHT,
@@ -1744,12 +1479,11 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: 'rgba(255, 255, 255, 0.08)',
         backgroundColor: 'rgba(30, 30, 35, 0.4)',
-        overflow: 'hidden', // Add hidden back ONLY because the parent acts as the morph now
+        overflow: 'hidden',
     },
     headerGlass: {
         borderRadius: HEADER_PILL_RADIUS,
         overflow: 'hidden',
-        // Slightly more transparent so the blur is visible even on dark backgrounds.
         backgroundColor: 'rgba(30, 30, 35, 0.22)',
     },
     header: {
@@ -1771,7 +1505,7 @@ const styles = StyleSheet.create({
         width: 42,
         height: 42,
         borderRadius: 21,
-        borderWidth: 0, // No border in screenshot
+        borderWidth: 0,
     },
     onlineIndicator: {
         position: 'absolute',
@@ -1782,7 +1516,7 @@ const styles = StyleSheet.create({
         borderRadius: 7,
         backgroundColor: '#22c55e',
         borderWidth: 2,
-        borderColor: '#151515', // Match header bg
+        borderColor: '#151515',
     },
     headerInfo: {
         flex: 1,
@@ -1807,7 +1541,7 @@ const styles = StyleSheet.create({
         width: 44,
         height: 44,
         borderRadius: 22,
-        backgroundColor: '#252525', // Slightly lighter than header bg
+        backgroundColor: '#252525',
         borderWidth: 1,
         borderColor: 'rgba(255, 255, 255, 0.05)',
         alignItems: 'center',
@@ -1818,252 +1552,9 @@ const styles = StyleSheet.create({
     },
     messagesContent: {
         paddingHorizontal: 16,
-        paddingTop: 100, // Reduced from 170 to fix excessive bottom space (inverted list)
-        paddingBottom: 110, // Reduced from 130
+        paddingTop: 110, // Visually paddingBottom due to inverted
+        paddingBottom: 100, // Visually paddingTop due to inverted
         flexGrow: 1,
-    },
-    messageWrapper: {
-        width: '100%',
-        marginBottom: 8,
-        alignItems: 'flex-start',
-    },
-    messageWrapperWithReactions: {
-        marginBottom: 22,
-    },
-    messageWrapperMe: {
-        alignItems: 'flex-end',
-    },
-    replyIconContainer: {
-        position: 'absolute',
-        left: 0,
-        top: 0,
-        bottom: 0,
-        width: 50,
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: -1,
-    },
-    replyIcon: {
-        // Shared value handles this
-    },
-    bubbleContainer: {
-        maxWidth: '82%',
-        minWidth: 7,
-        borderRadius: 20, 
-        overflow: 'hidden',
-        position: 'relative',
-    },
-    bubbleContainerWithQuote: {
-        minWidth: '70%',
-    },
-    bubbleContainerMediaOnly: {
-        borderRadius: 14,
-        borderTopLeftRadius: 14,
-        borderTopRightRadius: 14,
-        borderBottomLeftRadius: 14,
-        borderBottomRightRadius: 14,
-        backgroundColor: 'transparent',
-    },
-    bubbleContainerMe: {
-        backgroundColor: '#BC002A', // Deep crimson for sender
-        borderBottomRightRadius: 4,
-    },
-    bubbleContainerThem: {
-        backgroundColor: 'rgba(255, 255, 255, 0.12)', // Darker subtle gray for receiver
-        borderTopLeftRadius: 4,
-    },
-    // glassBorder removed - we want solid cinematic bubbles, not glass
-    messageContent: {
-        paddingVertical: 6,
-        paddingHorizontal: 16,
-        zIndex: 2,
-        overflow: 'hidden',
-    },
-    messageContentMediaOnly: {
-        padding: 0,
-        position: 'relative',
-    },
-    quotedContainer: {
-        flexDirection: 'row',
-        gap: 10,
-        marginBottom: 10,
-        padding: 10,
-        backgroundColor: 'rgba(255,255,255,0.15)', // Lighter background for quote block inside crimson
-        borderRadius: 10,
-        alignSelf: 'stretch',
-        borderLeftWidth: 3,
-        borderLeftColor: 'rgba(255,255,255,0.85)',
-    },
-    quotedMe: {
-        // Inherits from quotedContainer
-    },
-    quotedThem: {
-        // Inherits from quotedContainer
-    },
-    quoteBar: {
-        width: 3,
-        borderRadius: 2,
-    },
-    quoteContent: {
-        flex: 1,
-        minWidth: 0,
-    },
-    quoteSender: {
-        fontSize: 12,
-        fontWeight: '700',
-        letterSpacing: 0.5,
-        marginBottom: 3,
-        lineHeight: 14,
-        flexShrink: 1,
-    },
-    quoteText: {
-        fontSize: 13,
-        lineHeight: 18,
-        flexShrink: 1,
-        flexWrap: 'wrap',
-    },
-    messageText: {
-        color: '#FFFFFF', // Clean white for all text for maximum contrast against the deep solids
-        fontSize: 16,
-        lineHeight: 22,
-        letterSpacing: 0.1,
-    },
-    messageTextMe: {
-        color: '#FFFFFF', // Keep it white for sent messages too
-    },
-    mediaSingle: {
-        width: Math.min(SCREEN_WIDTH * 0.56, 250),
-        aspectRatio: 1,
-        borderRadius: 0,
-    },
-    mediaSingleNoGap: {
-        marginBottom: 0,
-    },
-    mediaSurface: {
-        borderRadius: 14,
-        overflow: 'hidden',
-        borderWidth: 1,
-    },
-    mediaSurfaceMe: {
-        borderColor: 'rgba(245, 0, 87, 0.58)',
-    },
-    mediaSurfaceThem: {
-        borderColor: 'rgba(255,255,255,0.16)',
-    },
-    mediaGridSurface: {
-        width: Math.min(SCREEN_WIDTH * 0.58, 252),
-    },
-    mediaGrid: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 4,
-    },
-    mediaGridNoGap: {
-        marginBottom: 0,
-    },
-    mediaGridTile: {
-        width: (Math.min(SCREEN_WIDTH * 0.58, 252) - 4) / 2,
-        aspectRatio: 1,
-        borderRadius: 12,
-        overflow: 'hidden',
-        backgroundColor: 'rgba(255,255,255,0.08)',
-    },
-    mediaGridImage: {
-        width: '100%',
-        height: '100%',
-    },
-    mediaTilePlayOverlay: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'rgba(0,0,0,0.3)',
-        borderRadius: 12,
-    },
-    mediaMoreOverlay: {
-        ...StyleSheet.absoluteFillObject,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'rgba(0,0,0,0.45)',
-    },
-    mediaMoreText: {
-        color: '#fff',
-        fontSize: 28,
-        fontWeight: '700',
-    },
-    audioWaveform: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        backgroundColor: 'rgba(255,255,255,0.05)',
-        borderRadius: 12,
-        padding: 12,
-        minWidth: 200,
-    },
-    audioDuration: {
-        color: 'rgba(255,255,255,0.7)',
-        fontSize: 13,
-        fontWeight: '500',
-        flex: 1,
-    },
-    captionText: {
-        color: 'rgba(255,255,255,0.8)',
-        fontSize: 13,
-        lineHeight: 18,
-        marginTop: 4,
-        fontWeight: '500',
-    },
-    messageFooter: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-        marginTop: 4, // Tight spacing right under the bubble
-    },
-    messageFooterMe: {
-        alignSelf: 'flex-end',
-        marginRight: 4,
-    },
-    messageFooterThem: {
-        alignSelf: 'flex-start',
-        marginLeft: 4,
-    },
-    timestamp: {
-        color: 'rgba(255,255,255,0.35)', // Faint color outside the bubble
-        fontSize: 9, // Reduced from 11 for extreme subtlety
-        fontWeight: '500', 
-    },
-    reactionsRow: {
-        position: 'absolute',
-        bottom: -16,
-        flexDirection: 'row',
-        gap: 6,
-        zIndex: 10,
-    },
-    reactionsRight: {
-        right: 16,
-    },
-    reactionsLeft: {
-        left: 16,
-    },
-    reactionPill: {
-        borderRadius: 14,
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.2)',
-        backgroundColor: 'rgba(0,0,0,0.7)',
-        overflow: 'hidden',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
-        shadowRadius: 4,
-        elevation: 3,
-    },
-    reactionEmoji: {
-        fontSize: 14,
     },
     emptyChat: {
         flex: 1,
@@ -2085,12 +1576,14 @@ const styles = StyleSheet.create({
     typingContainer: {
         paddingHorizontal: 20,
         paddingBottom: 10,
+        alignItems: 'flex-start' as const,
     },
-    typingText: {
-        fontSize: 8,
-        fontWeight: '900',
-        color: '#f43f5e', // Keeping default for now, or dynamic? Let's verify if user wants ALL pinks changed.
-        letterSpacing: 4,
+    typingBubble: {
+        backgroundColor: 'rgba(255,255,255,0.08)',
+        borderRadius: 16,
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        borderTopLeftRadius: 4,
     },
     replyPreview: {
         marginBottom: 8,
@@ -2100,6 +1593,8 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         alignItems: 'center',
         overflow: 'hidden',
+        maxWidth: '85%',
+        alignSelf: 'flex-end',
     },
     replyContent: {
         flexDirection: 'row',
@@ -2192,7 +1687,7 @@ const styles = StyleSheet.create({
         top: 0,
         left: 0,
         right: 0,
-        height: 140, // Height to cover header and status bar
+        height: 140,
         zIndex: 90,
     },
     bottomScrollBlur: {
@@ -2200,67 +1695,9 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         right: 0,
-        height: 140, // Height to cover input area's float zone (reduced from 180)
+        height: 140,
         zIndex: 50,
     },
-    // Context Menu Styles
-    contextEmojiBar: {
-        flexDirection: 'row',
-        backgroundColor: '#2a2a2a',
-        borderRadius: 30,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        alignItems: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.5,
-        shadowRadius: 15,
-        elevation: 10,
-        gap: 8,
-    },
-    contextEmojiBtn: {
-        paddingHorizontal: 4,
-    },
-    contextEmojiTail: {
-        position: 'absolute',
-        bottom: -5,
-        width: 13,
-        height: 13,
-        backgroundColor: 'rgba(30,30,30,0.5)',
-        overflow: 'hidden',
-        borderLeftWidth: 1,
-        borderTopWidth: 1,
-        borderColor: 'rgba(255,255,255,0.05)',
-        transform: [{ rotate: '45deg' }],
-    },
-    contextActionMenu: {
-        backgroundColor: '#1e1e1e',
-        borderRadius: 18,
-        width: 200,
-        overflow: 'hidden',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.5,
-        shadowRadius: 15,
-        elevation: 10,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.05)',
-    },
-    contextActionBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 14,
-        paddingHorizontal: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.03)',
-        gap: 14,
-    },
-    contextActionText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '500',
-    },
-    // Call Options Modal
     modalOverlay: {
         flex: 1,
         backgroundColor: 'rgba(0,0,0,0.5)',
@@ -2440,7 +1877,6 @@ const styles = StyleSheet.create({
         flexWrap: 'wrap',
         justifyContent: 'space-around',
         overflow: 'hidden',
-        // Removed margins/padding/border radius as it's now inside the unified pill
     },
     optionItem: {
         alignItems: 'center',
@@ -2454,16 +1890,14 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         marginBottom: 6,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.3,
-        shadowRadius: 3,
-        elevation: 4,
     },
     optionText: {
         color: 'rgba(255,255,255,0.7)',
         fontSize: 11,
         fontWeight: '500',
+    },
+    inputWrapperHidden: {
+        opacity: 0,
     },
     recordingIndicator: {
         width: 8,
@@ -2472,52 +1906,46 @@ const styles = StyleSheet.create({
         backgroundColor: '#BC002A',
         marginRight: 8,
     },
+    deleteIconWrap: {
+        width: 34,
+        height: 34,
+        borderRadius: 17,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.06)',
+        marginRight: 6,
+    },
     recordingTimer: {
         color: '#fff',
         fontSize: 16,
         fontWeight: '600',
         width: 45,
     },
-    slideToCancel: {
-        color: 'rgba(255,255,255,0.5)',
-        fontSize: 14,
-    },
-    voiceNoteContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: 8,
-        minWidth: 200,
-        gap: 12,
-    },
-    vnPlayButton: {
-        width: 40,
+    siriWaveWrap: {
+        width: 200,
         height: 40,
-        borderRadius: 20,
         alignItems: 'center',
         justifyContent: 'center',
+        borderRadius: 20,
+        overflow: 'hidden',
+        shadowColor: '#FF1E56',
+        shadowOpacity: 0.55,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 0 },
     },
-    vnProgressWrapper: {
-        flex: 1,
-        height: 4,
-        position: 'relative',
+    cancelHintChevron: {
+        alignItems: 'center',
         justifyContent: 'center',
+        width: 18,
+        marginLeft: 2,
     },
-    vnProgressBackground: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        height: 4,
-        borderRadius: 2,
-    },
-    vnProgressBar: {
-        height: 4,
-        borderRadius: 2,
-        zIndex: 1,
-    },
-    vnDuration: {
-        color: 'rgba(255,255,255,0.6)',
-        fontSize: 12,
-        width: 35,
-        textAlign: 'right',
+    recordingMicIconWrap: {
+        width: 42,
+        height: 42,
+        borderRadius: 21,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#BC002A',
+        marginLeft: 6,
     },
 });
