@@ -1,5 +1,5 @@
 import { supabase } from '../config/supabase';
-import { SUPABASE_URL } from '../config/api';
+import { SUPABASE_URL, getSupabaseUrl } from '../config/api';
 import { offlineService, type QueuedMessage, type MessageStatus } from './LocalDBService';
 import { AppState, AppStateStatus } from 'react-native';
 
@@ -164,7 +164,7 @@ class ChatService {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
 
-            await fetch(SUPABASE_URL, { 
+            await fetch(getSupabaseUrl(), { 
                 method: 'GET', // GET is sometimes better for some proxies
                 signal: controller.signal,
                 mode: 'no-cors'
@@ -307,6 +307,22 @@ class ChatService {
 
             if (error) {
                 throw error;
+            }
+
+            // --- PUSH NOTIFICATION TRIGGER ---
+            try {
+                // Call Supabase Edge Function to send push
+                await supabase.functions.invoke('send-message-push', {
+                    body: {
+                        receiverId: message.chatId,
+                        senderId: this.userId,
+                        senderName: 'Someone', // Fallback, server should ideally use profiles table
+                        text: message.text,
+                        messageId: data.id
+                    }
+                });
+            } catch (pError) {
+                console.warn('[ChatService] Push notification trigger failed (expected if edge function not deployed yet):', pError);
             }
 
             // Success - update local status and ID
@@ -465,6 +481,21 @@ class ChatService {
                 .eq('id', messageId);
         } catch (e) {
             console.warn('Failed to update message status:', e);
+        }
+    }
+
+    /**
+     * Batch mark messages as read — called when user views the chat screen
+     */
+    async markMessagesAsRead(messageIds: string[]): Promise<void> {
+        if (!messageIds.length) return;
+        try {
+            await supabase
+                .from('messages')
+                .update({ status: 'read' })
+                .in('id', messageIds);
+        } catch (e) {
+            console.warn('Failed to batch mark messages as read:', e);
         }
     }
 

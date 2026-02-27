@@ -1,5 +1,7 @@
 import React, { useRef, useState, useCallback, useMemo } from 'react';
-import { View, Text, Image, FlatList, Pressable, StyleSheet, StatusBar, Dimensions, Alert } from 'react-native';
+import { View, Text, Image, Pressable, StyleSheet, StatusBar, Dimensions, Alert, FlatList } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
+
 import { useRouter, useNavigation } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
@@ -383,16 +385,13 @@ export default function HomeScreen() {
     >
       <StatusBar barStyle="light-content" />
       
-      <FlatList
+      <FlashList
         data={visibleContacts}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
-        // Performance optimizations
-        initialNumToRender={20}
-        maxToRenderPerBatch={10}
-        windowSize={5}
-        removeClippedSubviews={true}
+        estimatedItemSize={80}
         ListHeaderComponent={() => (
+
           <View style={styles.statusRail}>
             <FlatList
               horizontal
@@ -460,6 +459,7 @@ export default function HomeScreen() {
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
       />
+
 
       <StatusViewerModal
         visible={isViewerVisible}

@@ -4,6 +4,8 @@ import {
     FlatList, Dimensions, ActivityIndicator, ImageBackground,
     KeyboardAvoidingView, Platform, Keyboard, ScrollView
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
+
 import { useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -548,7 +550,7 @@ export default function MusicScreen() {
                     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
                         <View style={styles.dragHandle} />
 
-                        <FlatList
+                        <FlashList
                             data={displaySongs}
                             renderItem={renderSongItem}
                             keyExtractor={(item) => item.id}
@@ -558,11 +560,8 @@ export default function MusicScreen() {
                             keyboardShouldPersistTaps="handled"
                             onEndReached={loadMore}
                             onEndReachedThreshold={0.5}
-                            initialNumToRender={10}
-                            maxToRenderPerBatch={10}
-                            windowSize={5}
+                            estimatedItemSize={75}
                             removeClippedSubviews={Platform.OS === 'android'}
-                            updateCellsBatchingPeriod={50}
                             ListFooterComponent={
                                 <View style={{ height: 120, alignItems: 'center', paddingTop: 20 }}>
                                     {isLoading && songs.length > 0 && <ActivityIndicator color={MAGENTA} />}
@@ -572,6 +571,7 @@ export default function MusicScreen() {
                                 <ActivityIndicator color={MAGENTA} style={{ marginTop: 20 }} />
                             ) : null}
                         />
+
 
                         {/* Liquid Tabs Navigation */}
                         {!keyboardVisible && (

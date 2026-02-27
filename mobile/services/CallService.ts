@@ -248,9 +248,30 @@ class CallService {
                 event: 'signal',
                 payload: signal
             });
-            if (status !== 'ok') console.error(`[CallService] ❌ Failed to send [${signal.type}]: status is ${status}`);
+            if (status !== 'ok') {
+                const isNonFatal =
+                    signal.type === 'call-end' ||
+                    signal.type === 'call-reject' ||
+                    status === 'timed out';
+
+                if (isNonFatal) {
+                    console.warn(
+                        `[CallService] ⚠️ Non-fatal send failure for [${signal.type}]: status is ${status}`
+                    );
+                } else {
+                    console.warn(
+                        `[CallService] Failed to send [${signal.type}]: status is ${status}`
+                    );
+                }
+            }
         } else {
-            console.warn(`[CallService] ⚠️ Cannot send [${signal.type}]: No roomChannel subscribed`);
+            if (signal.type === 'call-end' || signal.type === 'call-reject') {
+                console.warn(
+                    `[CallService] Skipping [${signal.type}] send: roomChannel already cleaned up`
+                );
+            } else {
+                console.warn(`[CallService] ⚠️ Cannot send [${signal.type}]: No roomChannel subscribed`);
+            }
         }
     }
 

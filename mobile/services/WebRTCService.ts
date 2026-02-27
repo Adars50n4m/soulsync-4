@@ -39,13 +39,13 @@ const ICE_SERVERS: RTCIceServer[] = [
         username: 'openrelayproject',
         credential: 'openrelayproject'
     },
+    {
+        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+        username: 'openrelayproject',
+        credential: 'openrelayproject'
+    },
     // Add a public TURN server if possible, or ensure you are testing on WiFi.
     // For 4G/5G, you strictly need a TURN server.
-    // {
-    //    urls: 'turn:openrelay.metered.ca:80',
-    //    username: 'openrelayproject',
-    //    credential: 'openrelayproject'
-    // }
     // --- PRODUCTION CONFIGURATION START ---
     // Uncomment and replace with your credentials (e.g. from Metered.ca or OpenRelay)
     /*

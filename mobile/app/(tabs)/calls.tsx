@@ -1,60 +1,69 @@
-import React from 'react';
-import { View, Text, FlatList, Image, Pressable, StyleSheet, StatusBar } from 'react-native';
+import React, { useCallback } from 'react';
+import { View, Text, Image, Pressable, StyleSheet, StatusBar } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../../context/AppContext';
 
+const CallItem = React.memo(({ item, contact, onCall, activeTheme }: any) => {
+    const isMissed = item.type === 'missed';
+    const isIncoming = item.type === 'incoming';
+
+    return (
+        <Pressable
+            style={styles.callItem}
+            onPress={() => contact && onCall(contact.id, item.callType || 'audio')}
+        >
+            <View style={styles.avatarWrapper}>
+                <Image
+                    source={{ uri: contact?.avatar || 'https://via.placeholder.com/50' }}
+                    style={styles.avatar}
+                />
+            </View>
+            <View style={styles.callInfo}>
+                <Text style={[styles.contactName, isMissed && styles.missedCall]}>
+                    {contact?.name || 'Unknown'}
+                </Text>
+                <View style={styles.callDetails}>
+                    <MaterialIcons
+                        name={isIncoming ? 'call-received' : 'call-made'}
+                        size={14}
+                        color={isMissed ? '#ef4444' : 'rgba(255,255,255,0.4)'}
+                    />
+                    <Text style={[styles.callType, isMissed && styles.missedCall]}>
+                        {item.callType === 'video' ? 'Video' : 'Audio'} • {item.time || 'Just now'}
+                    </Text>
+                </View>
+            </View>
+            <Pressable
+                style={[styles.callButton, { backgroundColor: `${activeTheme.primary}1A` }]}
+                onPress={() => contact && onCall(contact.id, item.callType || 'audio')}
+            >
+                <MaterialIcons
+                    name={item.callType === 'video' ? 'videocam' : 'call'}
+                    size={22}
+                    color={activeTheme.primary}
+                />
+            </Pressable>
+        </Pressable>
+    );
+});
+
 export default function CallsScreen() {
     const { calls, contacts, startCall, activeTheme } = useApp();
 
-    const getContact = (contactId: string) => {
+    const getContact = useCallback((contactId: string) => {
         return contacts.find(c => c.id === contactId);
-    };
+    }, [contacts]);
 
-    const renderCallItem = ({ item }: { item: any }) => {
-        const contact = getContact(item.contactId);
-        const isMissed = item.type === 'missed';
-        const isIncoming = item.type === 'incoming';
-
-        return (
-            <Pressable
-                style={styles.callItem}
-                onPress={() => contact && startCall(contact.id, item.callType || 'audio')}
-            >
-                <View style={styles.avatarWrapper}>
-                    <Image
-                        source={{ uri: contact?.avatar || 'https://via.placeholder.com/50' }}
-                        style={styles.avatar}
-                    />
-                </View>
-                <View style={styles.callInfo}>
-                    <Text style={[styles.contactName, isMissed && styles.missedCall]}>
-                        {contact?.name || 'Unknown'}
-                    </Text>
-                    <View style={styles.callDetails}>
-                        <MaterialIcons
-                            name={isIncoming ? 'call-received' : 'call-made'}
-                            size={14}
-                            color={isMissed ? '#ef4444' : 'rgba(255,255,255,0.4)'}
-                        />
-                        <Text style={[styles.callType, isMissed && styles.missedCall]}>
-                            {item.callType === 'video' ? 'Video' : 'Audio'} • {item.time || 'Just now'}
-                        </Text>
-                    </View>
-                </View>
-                <Pressable
-                    style={[styles.callButton, { backgroundColor: `${activeTheme.primary}1A` }]}
-                    onPress={() => contact && startCall(contact.id, item.callType || 'audio')}
-                >
-                    <MaterialIcons
-                        name={item.callType === 'video' ? 'videocam' : 'call'}
-                        size={22}
-                        color={activeTheme.primary}
-                    />
-                </Pressable>
-            </Pressable>
-        );
-    };
+    const renderCallItem = useCallback(({ item }: { item: any }) => (
+        <CallItem 
+            item={item} 
+            contact={getContact(item.contactId)} 
+            onCall={startCall}
+            activeTheme={activeTheme}
+        />
+    ), [getContact, startCall, activeTheme]);
 
     return (
         <View style={styles.container}>
@@ -80,10 +89,11 @@ export default function CallsScreen() {
                     <Text style={styles.emptyStateHint}>Your call history will appear here</Text>
                 </View>
             ) : (
-                <FlatList
+                <FlashList
                     data={calls}
                     keyExtractor={item => item.id}
                     renderItem={renderCallItem}
+                    estimatedItemSize={72}
                     contentContainerStyle={styles.listContent}
                     showsVerticalScrollIndicator={false}
                 />

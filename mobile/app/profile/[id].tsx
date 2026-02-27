@@ -1,8 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
     View, Text, Image, Pressable, StyleSheet, StatusBar,
-    ScrollView, Animated, Dimensions, Alert, Modal, Share, FlatList
+    ScrollView, Animated, useWindowDimensions, Alert, Modal, Share, FlatList
 } from 'react-native';
+
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -12,9 +13,9 @@ import Animated2, {
     useSharedValue, useAnimatedStyle, withSpring, withTiming, interpolate, Extrapolate, runOnJS, Easing
 } from 'react-native-reanimated';
 
-const { width, height } = Dimensions.get('window');
-
 const MediaGalleryItem = ({ item, activeCategory, morphProgress }: any) => {
+    const { width, height } = useWindowDimensions();
+
     const itemStyle = useAnimatedStyle(() => {
         return {
             transform: [
@@ -49,6 +50,8 @@ const MediaGalleryItem = ({ item, activeCategory, morphProgress }: any) => {
 };
 
 export default function ProfileScreen() {
+    const { width, height } = useWindowDimensions();
+
     const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
     const navigation = useNavigation();
@@ -119,16 +122,19 @@ export default function ProfileScreen() {
         transform: [{ translateY: interpolate(morphProgress.value, [0, 1], [20, 0]) }]
     }));
 
-    const chatMessages = (messages[id as string] || []).filter(m => m.media);
+    const chatMessages = useMemo(() => 
+        (messages[id as string] || []).filter(m => m.media),
+    [messages, id]);
 
-    const categorizedMedia = {
+    const categorizedMedia = useMemo(() => ({
         photos: chatMessages.filter(m => m.media?.type === 'image').map(m => m.media!),
         videos: chatMessages.filter(m => m.media?.type === 'video').map(m => m.media!),
         audio: chatMessages.filter(m => m.media?.type === 'audio').map(m => m.media!),
         docs: chatMessages.filter(m => m.media?.type === 'file').map(m => m.media!),
-    };
+    }), [chatMessages]);
 
     const sharedMedia = categorizedMedia[activeCategory];
+
 
     const openViewer = (index: number, layout: any) => {
         setSelectedIndex(index);
@@ -389,7 +395,12 @@ export default function ProfileScreen() {
                                             <Pressable 
                                                 key={index} 
                                                 ref={(el) => { gridRefs.current[index] = el; }}
-                                                style={[styles.mediaItem, (viewerVisible && selectedIndex === index) && { opacity: 0 }]}
+                                                style={[
+                                                    styles.mediaItem, 
+                                                    { width: (width - 60) / 3, height: (width - 60) / 3 },
+                                                    (viewerVisible && selectedIndex === index) && { opacity: 0 }
+                                                ]}
+
                                                 onPress={() => {
                                                     gridRefs.current[index]?.measure((x: number, y: number, width: number, height: number, px: number, py: number) => {
                                                         openViewer(index, { x: px, y: py, width, height });
@@ -504,7 +515,8 @@ export default function ProfileScreen() {
                             showsHorizontalScrollIndicator={false}
                             keyExtractor={(_, i) => i.toString()}
                             renderItem={({ item }) => (
-                                <View style={styles.viewerContent}>
+                                <View style={[styles.viewerContent, { width }]}>
+
                                     <View style={styles.morphContainer}>
                                         {activeCategory === 'videos' ? (
                                             <View style={styles.videoPlaceholder}>
@@ -762,14 +774,13 @@ const styles = StyleSheet.create({
         gap: 12,
     },
     mediaItem: {
-        width: (width - 60) / 3,
-        height: (width - 60) / 3,
         borderRadius: 18,
         overflow: 'hidden',
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.05)',
         position: 'relative',
     },
+
     playIconOverlay: {
         ...StyleSheet.absoluteFillObject,
         backgroundColor: 'rgba(0,0,0,0.2)',
@@ -922,10 +933,10 @@ const styles = StyleSheet.create({
         marginTop: 2,
     },
     viewerContent: {
-        width: width,
         justifyContent: 'center',
         alignItems: 'center',
     },
+
     morphContainer: {
         width: '100%',
         height: '80%',

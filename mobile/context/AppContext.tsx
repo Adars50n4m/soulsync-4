@@ -19,12 +19,13 @@ import { nativeCallService } from '../services/NativeCallService';
 import { supabase } from '../config/supabase';
 import { offlineService } from '../services/LocalDBService';
 import { storageService } from '../services/StorageService';
+import { backgroundSyncService } from '../services/BackgroundSyncService';
+import { soundService } from '../services/SoundService';
 
 if (!offlineService) {
     console.warn('[AppContext] LocalDBService failed to load. Check native modules.');
 }
-import { AppState, Alert, Image, Platform } from 'react-native';
-import { socket } from '../src/webrtc/socket';
+import { AppState, AppStateStatus, Alert, Image, Platform } from 'react-native';
 
 export type ThemeName = 'midnight' | 'liquid-blue' | 'sunset' | 'emerald' | 'cyber' | 'amethyst';
 
@@ -149,6 +150,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [isCloudConnected, setIsCloudConnected] = useState(true);
     const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
     const [typingUsers, setTypingUsers] = useState<string[]>([]);
+    const appStateRef = useRef<AppStateStatus>(AppState.currentState as AppStateStatus);
 
     const [musicState, setMusicState] = useState<MusicState>({
         currentSong: null,
@@ -182,87 +184,91 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         configureAudio();
     }, []);
 
-    // --- Real-Time Presence Logic ---
+    const updatePresenceInSupabase = useCallback(async (userId: string, isOnline: boolean) => {
+        try {
+            await supabase
+                .from('profiles')
+                .update({
+                    is_online: isOnline,
+                    last_seen: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                })
+                .eq('id', userId);
+        } catch (e) {
+            console.warn('[AppContext] Failed to update presence in DB:', e);
+        }
+    }, []);
+
+    // Ref for the Supabase presence channel (used by sendTyping and cleanup)
+    const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+    // --- Real-Time Presence & Typing via Supabase Realtime ---
     useEffect(() => {
         if (!currentUser) return;
 
-        const handleAppStateChange = (nextAppState: string) => {
-            if (nextAppState === 'active') {
-                console.log('[AppContext] App active, connecting socket...');
-                if (!socket?.connected) {
-                    socket?.connect();
-                }
-                socket?.emit('user-online', currentUser.id);
-            } else if (nextAppState === 'background') {
-                console.log('[AppContext] App background, disconnecting socket...');
-                // Optional: Emit user-offline before disconnecting if server supports it, 
-                // but disconnect usually triggers it on server too.
-                socket?.disconnect();
-            }
-        };
-
-        // Initial Connection
-        if (!socket?.connected) {
-            socket?.connect();
-        }
-        socket?.emit('user-online', currentUser.id);
-
-        const subscription = AppState.addEventListener('change', handleAppStateChange);
-
-        socket?.on('user-connected', (userId: string) => {
-            console.log('[AppContext] User connected:', userId);
-            setOnlineUsers((prev) => Array.from(new Set([...prev, userId])));
-            setContacts(prev => prev.map(c => 
-                c.id === userId ? { ...c, status: 'online' } : c
-            ));
+        const channel = supabase.channel('presence-global', {
+            config: { presence: { key: currentUser.id } },
         });
+        presenceChannelRef.current = channel;
 
-        socket?.on('user-disconnected', (userId: string) => {
-            console.log('[AppContext] User disconnected:', userId);
-            setOnlineUsers((prev) => prev.filter(id => id !== userId));
-            setContacts(prev => prev.map(c => 
-                c.id === userId ? { ...c, status: 'offline' } : c
-            ));
-        });
-
-        socket?.on('online-users-list', (users: string[]) => {
-            console.log('[AppContext] Online users list:', users);
-            setOnlineUsers(users);
+        // Presence sync — fires whenever the presence state changes
+        channel.on('presence', { event: 'sync' }, () => {
+            const state = channel.presenceState();
+            const onlineIds = Object.keys(state);
+            setOnlineUsers(onlineIds);
             setContacts(prev => prev.map(c => ({
                 ...c,
-                status: users.includes(c.id) ? 'online' : 'offline'
+                status: onlineIds.includes(c.id) ? 'online' : 'offline',
+                // When user goes offline, stamp lastSeen with current time
+                lastSeen: !onlineIds.includes(c.id) && c.status === 'online'
+                    ? new Date().toISOString()
+                    : c.lastSeen,
             })));
         });
 
-        socket?.on('user-typing', ({ userId }: { userId: string }) => {
-            console.log('[AppContext] User typing:', userId);
-            if (userId !== currentUser.id) {
-                setTypingUsers(prev => Array.from(new Set([...prev, userId])));
+        // Typing broadcast listener
+        channel.on('broadcast', { event: 'typing' }, ({ payload }) => {
+            if (payload.userId !== currentUser.id) {
+                setTypingUsers(prev => Array.from(new Set([...prev, payload.userId])));
             }
         });
 
-        socket?.on('user-stop-typing', ({ userId }: { userId: string }) => {
-            setTypingUsers(prev => prev.filter(id => id !== userId));
+        channel.on('broadcast', { event: 'stop-typing' }, ({ payload }) => {
+            setTypingUsers(prev => prev.filter(id => id !== payload.userId));
         });
 
-        socket?.on('connect', () => {
-            console.log('[AppContext] Socket connected/reconnected');
-            if (currentUser) {
-                socket?.emit('user-online', currentUser.id);
+        channel.subscribe(async (status) => {
+            if (status === 'SUBSCRIBED') {
+                await channel.track({ user_id: currentUser.id, online_at: new Date().toISOString() });
+                console.log('[Presence] Subscribed & tracking');
             }
         });
+
+        // App state handling — track/untrack on foreground/background
+        const handleAppStateChange = async (nextAppState: AppStateStatus) => {
+            if (nextAppState === 'active') {
+                console.log('[Presence] App active, tracking...');
+                await channel.track({ user_id: currentUser.id, online_at: new Date().toISOString() });
+                updatePresenceInSupabase(currentUser.id, true);
+            } else if (nextAppState === 'background') {
+                console.log('[Presence] App background, untracking...');
+                await channel.untrack();
+                updatePresenceInSupabase(currentUser.id, false);
+            }
+            appStateRef.current = nextAppState;
+        };
+
+        updatePresenceInSupabase(currentUser.id, true);
+        const subscription = AppState.addEventListener('change', handleAppStateChange);
 
         return () => {
             subscription.remove();
-            socket?.off('user-connected');
-            socket?.off('user-disconnected');
-            socket?.off('online-users-list');
-            socket?.off('user-typing');
-            socket?.off('user-stop-typing');
-            socket?.off('connect');
-            // Do not disconnect on unmount of effect, only on active/background or logout
+            channel.untrack();
+            supabase.removeChannel(channel);
+            presenceChannelRef.current = null;
+            updatePresenceInSupabase(currentUser.id, false);
         };
-    }, [currentUser]);
+    }, [currentUser, updatePresenceInSupabase]);
 
     // Initialize Music Sync
     useEffect(() => {
@@ -365,14 +371,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         console.error('[AppContext] Failed to load local DB:', e);
                     }
 
-                    // 2. Fetch from Network (Sync)
-                    await Promise.all([
-                        fetchProfileFromSupabase(userId),
-                        fetchMessagesFromSupabase(userId, other.id),
-                        fetchCallsFromSupabase(userId),
-                        fetchOtherUserProfile(other.id),
-                        fetchStatusesFromSupabase(userId, other.id)
-                    ]);
+                    // 2. Fetch from Network (Sync) - non-blocking for instant startup
+                    fetchProfileFromSupabase(userId);
+                    fetchMessagesFromSupabase(userId, other.id);
+                    fetchCallsFromSupabase(userId);
+                    fetchOtherUserProfile(other.id);
+                    fetchStatusesFromSupabase(userId, other.id);
                 }
 
                 const [storedTheme, storedFavorites, storedLastSong] = await Promise.all([
@@ -405,7 +409,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         loadSession();
     }, []);
 
-    useEffect(() => { AsyncStorage.setItem('ss_messages', JSON.stringify(messages)); }, [messages]);
+    // Persistence is handled by LocalDBService (offlineService)
+    // Removed redundant and slow AsyncStorage.setItem('ss_messages') logic
+
     useEffect(() => { AsyncStorage.setItem('ss_theme', theme); }, [theme]);
     useEffect(() => {
         if (currentUser) {
@@ -434,6 +440,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         timestamp: incomingMessage.timestamp,
                         status: isFromMe ? 'sent' : 'delivered',
                         media: incomingMessage.media,
+                        replyTo: incomingMessage.reply_to || undefined,
                     };
                     
                     // Update State using helper
@@ -611,16 +618,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             .channel('public:messages')
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, async (payload) => {
                 const newMsg = payload.new as any;
-                if (newMsg.receiver === currentUser.id || newMsg.sender === currentUser.id) {
-                    const partnerId = newMsg.sender === currentUser.id ? newMsg.receiver : newMsg.sender;
+                // Skip messages sent by me — ChatService.sendMessage already handles
+                // optimistic UI + ID reconciliation for outgoing messages.
+                // Processing them here again would cause duplicates (different local vs server IDs).
+                if (newMsg.sender === currentUser.id) return;
+
+                if (newMsg.receiver === currentUser.id) {
+                    const partnerId = newMsg.sender;
                     
                     const message: Message = {
                         id: newMsg.id.toString(),
-                        sender: newMsg.sender === currentUser.id ? 'me' : 'them',
+                        sender: 'them',
                         text: newMsg.text,
                         // Keep ISO timestamp for consistent sorting/deduplication
                         timestamp: newMsg.created_at,
-                        status: newMsg.status || 'sent',
+                        status: 'delivered',
                         media: newMsg.media_url ? { type: newMsg.media_type, url: newMsg.media_url, caption: newMsg.media_caption } : undefined,
                         replyTo: newMsg.reply_to_id
                     };
@@ -637,11 +649,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     setContacts(prev => prev.map(c => 
                         c.id === partnerId ? {
                             ...c,
-                            lastMessage: message.media ? '梼 Attachment' : message.text,
-                            unreadCount: message.sender === 'them' ? (c.unreadCount || 0) + 1 : c.unreadCount
+                            lastMessage: message.media ? '📎 Attachment' : message.text,
+                            unreadCount: (c.unreadCount || 0) + 1
                         } : c
                     ));
                 }
+            })
+            .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, async (payload) => {
+                const oldMsg = payload.old as any;
+                if (!oldMsg?.id) return;
+                
+                const msgId = oldMsg.id.toString();
+
+                if (offlineService) {
+                    await offlineService.deleteMessage(msgId);
+                }
+
+                setMessages(prev => {
+                    const next = { ...prev };
+                    for (const [chatId, msgs] of Object.entries(next)) {
+                        const filtered = msgs.filter(m => m.id !== msgId);
+                        if (filtered.length !== msgs.length) {
+                            next[chatId] = filtered;
+                            // Update Contact Last Message
+                            const lastMsg = filtered[filtered.length - 1];
+                            setContacts(prevContacts => prevContacts.map(c =>
+                                c.id === chatId ? {
+                                    ...c,
+                                    lastMessage: lastMsg ? (lastMsg.media ? '📎 Attachment' : lastMsg.text) : ''
+                                } : c
+                            ));
+                        }
+                    }
+                    return next;
+                });
             })
             .subscribe();
 
@@ -696,7 +737,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 unreadCount: 0,
             }]);
 
-            // Force fetch immediately upon login
+            // Force fetch immediately upon login (non-blocking)
             fetchProfileFromSupabase(normalizedUser);
             fetchMessagesFromSupabase(normalizedUser, other.id);
             fetchCallsFromSupabase(normalizedUser);
@@ -746,7 +787,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     ...c,
                     name: data.name,
                     avatar: data.avatar_url,
-                    about: data.bio
+                    about: data.bio,
+                    status: data.is_online ? 'online' : 'offline',
+                    lastSeen: data.last_seen || undefined,
                 } : c));
 
                 // Then Save to Local DB
@@ -756,7 +799,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         name: data.name,
                         avatar: data.avatar_url,
                         about: data.bio,
-                        status: 'offline' as 'online' | 'offline', // Default, will be updated by socket
+                        status: data.is_online ? 'online' as const : 'offline' as const,
+                        lastSeen: data.last_seen || undefined,
                         unreadCount: 0,
                         lastMessage: ''
                     };
@@ -824,6 +868,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const logout = async () => {
+        if (currentUser) {
+            await updatePresenceInSupabase(currentUser.id, false);
+        }
+        if (presenceChannelRef.current) {
+            await presenceChannelRef.current.untrack();
+            supabase.removeChannel(presenceChannelRef.current);
+            presenceChannelRef.current = null;
+        }
         setCurrentUser(null);
         setOtherUser(null);
         setContacts([]);
@@ -833,9 +885,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // ... (Keep Music Functions) ...
     const sendTyping = useCallback((isTyping: boolean) => {
         if (!currentUser || !otherUser) return;
-        socket?.emit(isTyping ? 'typing' : 'stop-typing', { 
-            senderId: currentUser.id, 
-            receiverId: otherUser.id 
+        presenceChannelRef.current?.send({
+            type: 'broadcast',
+            event: isTyping ? 'typing' : 'stop-typing',
+            payload: { userId: currentUser.id },
         });
     }, [currentUser, otherUser]);
 
@@ -1044,7 +1097,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
     };
 
-    const deleteMessage = (chatId: string, messageId: string) => {
+    const deleteMessage = async (chatId: string, messageId: string) => {
         setMessages((prev) => {
             const chatMessages = prev[chatId] || [];
             const filteredMessages = chatMessages.filter(m => m.id !== messageId);
@@ -1052,11 +1105,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setContacts(prevContacts => prevContacts.map(c =>
                 c.id === chatId ? {
                     ...c,
-                    lastMessage: lastMsg ? (lastMsg.media ? '梼 Attachment' : lastMsg.text) : ''
+                    lastMessage: lastMsg ? (lastMsg.media ? '📎 Attachment' : lastMsg.text) : ''
                 } : c
             ));
             return { ...prev, [chatId]: filteredMessages };
         });
+
+        if (offlineService) {
+            await offlineService.deleteMessage(messageId);
+        }
+
+        try {
+            await supabase.from('messages').delete().eq('id', messageId);
+        } catch (error) {
+            console.error('Error deleting message from server:', error);
+        }
     };
 
     const addReaction = (chatId: string, messageId: string, emoji: string) => {
@@ -1204,6 +1267,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     useEffect(() => {
         if (currentUser) {
             callService.initialize(currentUser.id);
+            backgroundSyncService.register();
 
             // ── Initialize Native Call Bridge (CallKit / ConnectionService) ──
             nativeCallBridge.initialize(currentUser.id, {
@@ -1288,7 +1352,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                                         roomId: signal.roomId || signal.callId,
                                     });
                                 } else if (__DEV__) {
-                                    console.log('[AppContext] Skipping native incoming call UI for Simulator/Dev mode');
+                                    console.log('[AppContext] Simulator/Dev mode: Triggering local notification fallback');
+                                    notificationService.showIncomingCall({
+                                        callId: signal.callId,
+                                        callerId: signal.callerId,
+                                        callerName: caller?.name || "Unknown User",
+                                        callType: signal.callType,
+                                    });
                                 }
 
                                 // Also show the in-app notification (for foreground state)
@@ -1298,13 +1368,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                                     callerName: caller?.name || "Unknown User",
                                     callType: signal.callType
                                 });
-                                callService.notifyRinging(signal.callId, signal.callerId, signal.callType);
+                                callService.notifyRinging(signal.roomId || signal.callId, signal.callerId, signal.callType);
+                                // Play ringtone for incoming call
+                                soundService.playRingtone();
                             }
                         }
                         break;
                     case 'call-ringing' as any:
                         if (currentActiveCall && !currentActiveCall.isIncoming) {
                             setActiveCall(prev => prev ? { ...prev, isRinging: true } : null);
+                            // Play ringing sound when callee is ringing
+                            soundService.playRinging();
                         }
                         break;
                     case 'call-accept':
@@ -1314,6 +1388,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                             await webRTCService.onCallAccepted();
                             // Report connected to native UI
                             nativeCallBridge.reportCallConnected(signal.callId);
+                            // Stop sound when accepted
+                            soundService.stopAll();
                         }
                         await notificationService.dismissCallNotification(signal.callId);
                         break;
@@ -1337,6 +1413,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         const { webRTCService: wrtc } = require('../services/WebRTCService');
                         wrtc.endCall();
                         setActiveCall(null);
+                        // Stop any sound and play call end
+                        soundService.playCallEnd();
                         // End native call UI
                         nativeCallBridge.reportCallEnded(signal.callId);
                         await notificationService.dismissCallNotification(signal.callId);
@@ -1377,6 +1455,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 type
             ).catch(e => console.warn('[AppContext] startCall: Push trigger failed:', e));
 
+            // Play dialing sound
+            soundService.playDialing();
+
             // Report outgoing call to native system
             if (Platform.OS !== 'ios' || !__DEV__) { 
                 // In iOS Simulator, CallKit can be flaky for outgoing calls
@@ -1408,6 +1489,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             };
             await callService.acceptCall(signal);
             await notificationService.dismissCallNotification(activeCall.callId);
+            // Stop sound when accepting
+            soundService.stopAll();
         }
     };
 
@@ -1437,10 +1520,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 time: 'Just now'
             });
 
+            // Stop sound
+            soundService.stopAll();
+
             try {
                 const { webRTCService } = require('../services/WebRTCService');
                 webRTCService.endCall();
             } catch (e) {}
+            // Play call end sound
+            soundService.playCallEnd();
             setActiveCall(null);
         }
     };
@@ -1632,7 +1720,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                              about: updatedProfile.bio || contact.about,
                              birthdate: updatedProfile.birthdate || contact.birthdate,
                              note: updatedProfile.note || '',
-                             noteTimestamp: updatedProfile.note_timestamp || ''
+                             noteTimestamp: updatedProfile.note_timestamp || '',
+                             status: updatedProfile.is_online ? 'online' : 'offline',
+                             lastSeen: updatedProfile.last_seen || contact.lastSeen,
                           };
                     }
                     return contact;

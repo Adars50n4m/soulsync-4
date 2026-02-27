@@ -1,23 +1,8 @@
-
+import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 import { supabase } from '../config/supabase';
 import { R2_CONFIG } from '../config/r2';
 import { r2StorageService } from './R2StorageService';
-
-// Convert blob to base64 string using FileReader
-async function blobToBase64(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            const result = reader.result as string;
-            // Extract base64 part from "data:...;base64,..." format
-            const base64 = result.split(',')[1];
-            resolve(base64);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
-}
 
 export const storageService = {
     /**
@@ -48,10 +33,8 @@ export const storageService = {
                 contentType = `audio/${ext === 'm4a' ? 'x-m4a' : ext}`;
             }
 
-            // Read file using fetch and convert to ArrayBuffer
-            const response = await fetch(uri);
-            const blob = await response.blob();
-            const base64 = await blobToBase64(blob);
+            // Read file using expo-file-system and convert to ArrayBuffer
+            const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
             const arrayBuffer = decode(base64);
 
             // Try uploading

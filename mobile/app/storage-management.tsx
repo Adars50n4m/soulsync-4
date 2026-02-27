@@ -10,9 +10,13 @@ import { Paths } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system/legacy';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useApp } from '../context/AppContext';
+import BreakdownItem from '../components/storage/BreakdownItem';
+import ChatStorageItem from '../components/storage/ChatStorageItem';
+import { useWindowDimensions } from 'react-native';
 
-const { width } = Dimensions.get('window');
-const GRID_ITEM_SIZE = (width - 32 - 8) / 3; // 3 columns, 16px padding each side, 4px gaps
+
+
+
 
 interface StorageInfo {
     totalDevice: number;
@@ -73,6 +77,9 @@ const getMediaColor = (type: string): string => {
 };
 
 export default function StorageManagementScreen() {
+    const { width } = useWindowDimensions();
+    const GRID_ITEM_SIZE = (width - 32 - 8) / 3;
+
     const router = useRouter();
     const { activeTheme, messages, contacts, deleteMessage } = useApp();
 
@@ -435,8 +442,10 @@ export default function StorageManagementScreen() {
                                             key={compositeId}
                                             style={[
                                                 styles.mediaGridItem,
+                                                { width: GRID_ITEM_SIZE, height: GRID_ITEM_SIZE },
                                                 isSelected && { borderColor: activeTheme.primary, borderWidth: 2 }
                                             ]}
+
                                             onPress={() => {
                                                 if (isSelecting) {
                                                     toggleSelectItem(item.chatId, item.messageId);
@@ -532,55 +541,15 @@ export default function StorageManagementScreen() {
                     <BlurView intensity={10} tint="dark" style={styles.glassContainer}>
                         {chatStorageData.length > 0 ? (
                             chatStorageData.map((chat, index) => (
-                                <View key={chat.chatId}>
-                                    <View style={styles.chatStorageItem}>
-                                        {chat.avatar ? (
-                                            <Image source={{ uri: chat.avatar }} style={styles.chatAvatar} />
-                                        ) : (
-                                            <View style={[styles.chatAvatar, styles.chatAvatarPlaceholder]}>
-                                                <MaterialIcons name="person" size={22} color="rgba(255,255,255,0.4)" />
-                                            </View>
-                                        )}
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={styles.chatName}>{chat.contactName}</Text>
-                                            <Text style={styles.chatStorageDetail}>
-                                                {chat.totalMessages} message{chat.totalMessages !== 1 ? 's' : ''}
-                                                {chat.mediaMessages > 0 && ` \u00B7 ${chat.mediaMessages} media`}
-                                            </Text>
-                                        </View>
-                                        <View style={styles.chatMediaCounts}>
-                                            {chat.imageCount > 0 && (
-                                                <View style={styles.mediaBadge}>
-                                                    <MaterialIcons name="image" size={12} color="#10b981" />
-                                                    <Text style={styles.mediaBadgeText}>{chat.imageCount}</Text>
-                                                </View>
-                                            )}
-                                            {chat.videoCount > 0 && (
-                                                <View style={styles.mediaBadge}>
-                                                    <MaterialIcons name="videocam" size={12} color="#3b82f6" />
-                                                    <Text style={styles.mediaBadgeText}>{chat.videoCount}</Text>
-                                                </View>
-                                            )}
-                                            {chat.audioCount > 0 && (
-                                                <View style={styles.mediaBadge}>
-                                                    <MaterialIcons name="audiotrack" size={12} color="#f59e0b" />
-                                                    <Text style={styles.mediaBadgeText}>{chat.audioCount}</Text>
-                                                </View>
-                                            )}
-                                            {chat.fileCount > 0 && (
-                                                <View style={styles.mediaBadge}>
-                                                    <MaterialIcons name="insert-drive-file" size={12} color="#8b5cf6" />
-                                                    <Text style={styles.mediaBadgeText}>{chat.fileCount}</Text>
-                                                </View>
-                                            )}
-                                        </View>
-                                    </View>
-                                    {index < chatStorageData.length - 1 && (
-                                        <View style={styles.separator} />
-                                    )}
-                                </View>
+                                <ChatStorageItem 
+                                    key={chat.chatId} 
+                                    chat={chat} 
+                                    isLast={index === chatStorageData.length - 1} 
+                                />
                             ))
                         ) : (
+
+
                             <View style={styles.emptyChatStorage}>
                                 <MaterialIcons name="chat-bubble-outline" size={36} color="rgba(255,255,255,0.15)" />
                                 <Text style={styles.emptyText}>No chat data yet</Text>
@@ -630,19 +599,7 @@ export default function StorageManagementScreen() {
 }
 
 // Sub-component: Breakdown Item
-function BreakdownItem({ icon, label, value, color }: {
-    icon: string; label: string; value: string; color: string;
-}) {
-    return (
-        <View style={styles.breakdownItem}>
-            <View style={[styles.breakdownIcon, { backgroundColor: `${color}20` }]}>
-                <MaterialIcons name={icon as any} size={18} color={color} />
-            </View>
-            <Text style={styles.breakdownLabel}>{label}</Text>
-            <Text style={styles.breakdownValue}>{value}</Text>
-        </View>
-    );
-}
+
 
 const styles = StyleSheet.create({
     container: {
@@ -824,12 +781,11 @@ const styles = StyleSheet.create({
         gap: 4,
     },
     mediaGridItem: {
-        width: GRID_ITEM_SIZE,
-        height: GRID_ITEM_SIZE,
         borderRadius: 12,
         overflow: 'hidden',
         backgroundColor: 'rgba(255,255,255,0.05)',
     },
+
     mediaThumbnail: {
         width: '100%',
         height: '100%',
@@ -888,50 +844,7 @@ const styles = StyleSheet.create({
         marginTop: 10,
     },
 
-    // Per-Chat Storage
-    chatStorageItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        padding: 14,
-        gap: 12,
-    },
-    chatAvatar: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: 'rgba(255,255,255,0.1)',
-    },
-    chatAvatarPlaceholder: {
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    chatName: {
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#fff',
-    },
-    chatStorageDetail: {
-        fontSize: 12,
-        color: 'rgba(255,255,255,0.4)',
-        marginTop: 2,
-    },
-    chatMediaCounts: {
-        flexDirection: 'row',
-        gap: 6,
-    },
-    mediaBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 3,
-        backgroundColor: 'rgba(255,255,255,0.05)',
-        paddingHorizontal: 6,
-        paddingVertical: 3,
-        borderRadius: 6,
-    },
-    mediaBadgeText: {
-        fontSize: 11,
-        color: 'rgba(255,255,255,0.5)',
-    },
+
 
     // Actions
     actionItem: {

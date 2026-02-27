@@ -1,26 +1,27 @@
 import React from 'react';
 import {
     View, Text, StyleSheet, Pressable, StatusBar, 
-    Image, Dimensions, ScrollView, Platform
+    Image, useWindowDimensions, ScrollView, Platform
+
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 
-const { width } = Dimensions.get('window');
+const AboutItem = ({ icon, title, onPress }: { icon: string, title: string, onPress?: () => void }) => (
+    <Pressable style={styles.item} onPress={onPress}>
+        <MaterialIcons name={icon as any} size={22} color="rgba(255,255,255,0.6)" />
+        <Text style={styles.itemTitle}>{title}</Text>
+        <MaterialIcons name="chevron-right" size={24} color="rgba(255,255,255,0.2)" />
+    </Pressable>
+);
 
 export default function AboutScreen() {
     const router = useRouter();
     const { activeTheme } = useApp();
+    const { width } = useWindowDimensions();
 
-    const AboutItem = ({ icon, title, onPress }: { icon: string, title: string, onPress?: () => void }) => (
-        <Pressable style={styles.item} onPress={onPress}>
-            <MaterialIcons name={icon as any} size={22} color="rgba(255,255,255,0.6)" />
-            <Text style={styles.itemTitle}>{title}</Text>
-            <MaterialIcons name="chevron-right" size={24} color="rgba(255,255,255,0.2)" />
-        </Pressable>
-    );
 
     return (
         <View style={styles.container}>

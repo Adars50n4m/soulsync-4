@@ -134,6 +134,20 @@ export const StatusViewerModal = ({
 
   if (!visible || !currentStory) return null;
 
+  const formatStoryTime = (value?: string) => {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return value;
+    const now = Date.now();
+    const diffMs = now - parsed.getTime();
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return 'now';
+    if (diffMin < 60) return `${diffMin}m`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h`;
+    return parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  };
+
   const handleReplySend = () => {
     const text = replyText.trim();
     if (!text || !onReply) return;
@@ -161,9 +175,17 @@ export const StatusViewerModal = ({
         <View
           style={[
             styles.contentContainer,
-            { paddingTop: insets.top + 84, paddingBottom: insets.bottom + 198 },
+            { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 },
           ]}
         >
+          {currentStory.type === 'image' && !mediaLoadFailed && (
+            <Image
+              source={{ uri: currentStory.url }}
+              style={styles.mediaBackdrop}
+              resizeMode="cover"
+              blurRadius={28}
+            />
+          )}
           {currentStory.type === 'image' && !mediaLoadFailed ? (
             <Image
               source={{ uri: currentStory.url }}
@@ -194,18 +216,18 @@ export const StatusViewerModal = ({
                         key={story.id} 
                         index={index} 
                         currentIndex={currentIndex} 
-                        duration={story.duration || 5} 
+                        duration={story.duration || 10} 
                         onComplete={handleNext}
                     />
                 ))}
             </View>
 
             {/* Header */}
-            <View style={[styles.header, { paddingTop: Math.max(0, insets.top - 6) }]}>
+            <View style={[styles.header, { paddingTop: Math.max(0, insets.top - 160) }]}>
                 <View style={styles.userInfo}>
                     <Image source={{ uri: contactAvatar }} style={styles.avatar} />
                     <Text style={styles.userName}>{contactName}</Text>
-                    <Text style={styles.timestamp}>{currentStory.timestamp}</Text>
+                    <Text style={styles.timestamp}>{formatStoryTime(currentStory.timestamp)}</Text>
                 </View>
                 <View style={styles.headerActions}>
                   {isOwnStatus && (
@@ -268,12 +290,6 @@ export const StatusViewerModal = ({
             >
               <MaterialIcons name="send" size={20} color="#ffffff" />
             </Pressable>
-            <Pressable
-              style={[styles.likeButton, { borderColor: `${activeTheme.primary}66`, backgroundColor: `${activeTheme.primary}22` }]}
-              onPress={() => onReact?.(currentStory.id)}
-            >
-              <MaterialIcons name="favorite" size={22} color={activeTheme.primary} />
-            </Pressable>
           </View>
         </KeyboardAvoidingView>
 
@@ -293,13 +309,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingTop: 110,
     paddingBottom: 220,
-    paddingHorizontal: 12,
+    paddingHorizontal: 0,
+    overflow: 'hidden',
+  },
+  mediaBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.55,
+    transform: [{ scale: 1.08 }],
   },
   media: {
-    width: width - 24,
-    height: height * 0.5,
-    maxHeight: height * 0.58,
-    borderRadius: 16,
+    width: width,
+    height: '100%',
+    borderRadius: 0,
   },
   videoPlaceholder: {
     backgroundColor: 'rgba(255,255,255,0.08)',
@@ -317,7 +338,7 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    paddingTop: 10,
+    paddingTop: 2,
     zIndex: 10,
   },
   progressContainer: {
@@ -325,7 +346,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     gap: 4,
     height: 3,
-    marginBottom: 12,
+    marginBottom: 8,
   },
   progressTrack: {
     flex: 1,
@@ -455,15 +476,5 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.18)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.24)',
-  },
-  likeButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
   },
 });
