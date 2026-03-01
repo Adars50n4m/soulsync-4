@@ -103,9 +103,10 @@ Deno.serve(async (req: Request) => {
     }
 
     if (tokens.length === 0) {
+      console.log(`No push token found for callee ${calleeId}`);
       return new Response(
-        JSON.stringify({ error: 'No push token found for callee', calleeId }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } }
+        JSON.stringify({ success: true, message: 'No push token found for callee, push skipped.', calleeId }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
       );
     }
 

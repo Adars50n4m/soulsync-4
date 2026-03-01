@@ -206,21 +206,21 @@ export const ChatStyles = StyleSheet.create({
     },
     reactionsRow: {
         position: 'absolute',
-        bottom: -16,
+        bottom: 14,
         flexDirection: 'row',
-        gap: 6,
+        gap: 4,
         zIndex: 10,
     },
     reactionsRight: {
-        right: 16,
+        right: 35,
     },
     reactionsLeft: {
         left: 16,
     },
     reactionPill: {
-        borderRadius: 14,
-        paddingHorizontal: 8,
-        paddingVertical: 4,
+        borderRadius: 11,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.2)',
         backgroundColor: 'rgba(0,0,0,0.7)',
@@ -232,7 +232,7 @@ export const ChatStyles = StyleSheet.create({
         elevation: 3,
     },
     reactionEmoji: {
-        fontSize: 16,
+        fontSize: 13,
     },
     selectionCheckboxContainer: {
         position: 'absolute',

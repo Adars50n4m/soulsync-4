@@ -3,5 +3,25 @@
     "source.fixAll": "explicit",
     "source.organizeImports": "explicit",
     "source.sortMembers": "explicit"
-  }
+  },
+  "java.configuration.runtimes": [
+    {
+      "name": "JavaSE-21",
+      "path": "/Users/adarsh/Library/Java/JavaVirtualMachines/ms-21.0.9/Contents/Home",
+      "default": true
+    }
+  ],
+  "java.jdt.ls.java.home": "/Users/adarsh/Library/Java/JavaVirtualMachines/ms-21.0.9/Contents/Home",
+  "gradle.java.home": "/Users/adarsh/Library/Java/JavaVirtualMachines/ms-21.0.9/Contents/Home",
+  
+  // Disable auto-build to prevent Java 25 from being used
+  "java.autobuild.enabled": false,
+  
+  // Import settings for Gradle
+  "java.import.gradle.java.home": "/Users/adarsh/Library/Java/JavaVirtualMachines/ms-21.0.9/Contents/Home",
+  "java.import.gradle.wrapper.enabled": true,
+  
+  // Additional settings to ensure compatibility
+  "java.format.settings.url": "https://raw.githubusercontent.com/google/styleguide/gh-pages/eclipse-java-google-style.xml",
+  "java.format.settings.profile": "GoogleStyle"
 }

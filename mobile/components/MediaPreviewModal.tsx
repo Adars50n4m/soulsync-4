@@ -28,6 +28,7 @@ interface MediaPreviewModalProps {
   onClose: () => void;
   onSend: (mediaList: { uri: string; type: 'image' | 'video' | 'audio' }[], caption?: string) => void;
   isUploading?: boolean;
+  mode?: 'chat' | 'status';
 }
 
 export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
@@ -37,8 +38,10 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
   onClose,
   onSend,
   isUploading = false,
+  mode = 'chat',
 }) => {
   const [caption, setCaption] = useState('');
+  const [isTrimming, setIsTrimming] = useState(false);
   
   // Media List state for multi-sending
   const [mediaItems, setMediaItems] = useState<{ uri: string; type: 'image' | 'video' | 'audio' }[]>([]);
@@ -61,6 +64,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
   // Text Overlays
   const [textOverlays, setTextOverlays] = useState<{ id: string; text: string; x: number; y: number; color: string }[]>([]);
   const [activeTextId, setActiveTextId] = useState<string | null>(null);
+  const dragStartPos = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
     setMediaItems([{ uri: mediaUri, type: mediaType }]);
@@ -148,6 +152,32 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
     );
   };
 
+  const handleTrimVideo = async () => {
+    if (currentType !== 'video' || isUploading || isTrimming) return;
+    try {
+      setIsTrimming(true);
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+        allowsEditing: true,
+        quality: 1,
+        videoMaxDuration: 120,
+      });
+
+      if (!result.canceled && result.assets?.[0]) {
+        const trimmed = result.assets[0];
+        setMediaItems(prev => prev.map((item, idx) => (
+          idx === currentIndex
+            ? { uri: trimmed.uri, type: 'video' as const }
+            : item
+        )));
+      }
+    } catch (error) {
+      Alert.alert('Trim Failed', 'Could not trim video. Please try again.');
+    } finally {
+      setIsTrimming(false);
+    }
+  };
+
   const toggleDrawing = () => {
     if (!isDrawingMode) setActiveTextId(null);
     setIsDrawingMode(!isDrawingMode);
@@ -157,6 +187,21 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
     if (paths.length > 0) {
       setPaths(paths.slice(0, -1));
     }
+  };
+
+  const handleRemoveCurrentMedia = () => {
+    if (mediaItems.length <= 1) {
+      handleClose();
+      return;
+    }
+    const newItems = [...mediaItems];
+    newItems.splice(currentIndex, 1);
+    setMediaItems(newItems);
+    if (currentIndex >= newItems.length) {
+      setCurrentIndex(newItems.length - 1);
+    }
+    setPaths([]);
+    setTextOverlays([]);
   };
 
   const handleAddText = () => {
@@ -178,9 +223,20 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
   };
 
   // Text Drag Pan Handlers
+  const onTextDragStateChange = (e: any, t: any) => {
+    if (e.nativeEvent.state === State.BEGAN) {
+      dragStartPos.current = { x: t.x, y: t.y };
+    }
+  };
+
   const onTextDrag = (e: any, id: string) => {
+    if (activeTextId === id) return; // disable drag while typing
     const { translationX, translationY } = e.nativeEvent;
-    // Basic handler idea for smooth drag. Proper implementation involves mapping a PanGestureHandler to animated values
+    setTextOverlays(prev => prev.map(o => o.id === id ? { 
+      ...o, 
+      x: dragStartPos.current.x + translationX, 
+      y: dragStartPos.current.y + translationY 
+    } : o));
   };
 
   // Drawing Handlers
@@ -207,25 +263,40 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
       >
         {/* Top Header Controls */}
         <View style={styles.header}>
-          <Pressable style={styles.iconButton} onPress={handleClose} disabled={isUploading}>
-            <MaterialIcons name="close" size={28} color="#fff" />
+          <Pressable style={styles.closeButton} onPress={handleClose} disabled={isUploading}>
+            <MaterialIcons name="close" size={26} color="#fff" />
           </Pressable>
           
           <View style={styles.headerActions}>
+            <Pressable style={styles.iconButton} onPress={() => Alert.alert("Music", "Coming soon!")}>
+              <MaterialIcons name="music-note" size={24} color="#fff" />
+            </Pressable>
+            <Pressable style={[styles.iconButton, { opacity: currentType === 'video' ? 0.3 : 1 }]} onPress={handleCrop} disabled={isUploading || currentType === 'video'}>
+              <MaterialIcons name="crop-rotate" size={24} color="#fff" />
+            </Pressable>
+            {currentType === 'video' && (
+              <Pressable style={styles.iconButton} onPress={handleTrimVideo} disabled={isUploading || isTrimming}>
+                {isTrimming ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <MaterialIcons name="content-cut" size={22} color="#fff" />
+                )}
+              </Pressable>
+            )}
+            <Pressable style={[styles.iconButton, { opacity: currentType === 'video' ? 0.3 : 1 }]} onPress={handleAddText} disabled={isUploading || currentType === 'video'}>
+              <Text style={styles.aaText}>Aa</Text>
+            </Pressable>
+            <Pressable style={[styles.iconButton, isDrawingMode && styles.iconActive, { opacity: currentType === 'video' ? 0.3 : 1 }]} onPress={toggleDrawing} disabled={isUploading || currentType === 'video'}>
+              <MaterialIcons name="edit" size={24} color={isDrawingMode ? activeTheme.primary : '#fff'} />
+            </Pressable>
+            <Pressable style={styles.iconButton} onPress={handleRemoveCurrentMedia} disabled={isUploading}>
+              <MaterialIcons name="delete-outline" size={24} color="#fff" />
+            </Pressable>
             {isDrawingMode && paths.length > 0 && (
               <Pressable style={styles.iconButton} onPress={handleUndoPen}>
                 <MaterialIcons name="undo" size={24} color="#fff" />
               </Pressable>
             )}
-            <Pressable style={[styles.iconButton, { opacity: currentType === 'video' ? 0.3 : 1 }]} onPress={handleCrop} disabled={isUploading || currentType === 'video'}>
-              <MaterialIcons name="crop-rotate" size={24} color="#fff" />
-            </Pressable>
-            <Pressable style={[styles.iconButton, { opacity: currentType === 'video' ? 0.3 : 1 }]} onPress={handleAddText} disabled={isUploading || currentType === 'video'}>
-              <MaterialIcons name="title" size={24} color="#fff" />
-            </Pressable>
-            <Pressable style={[styles.iconButton, isDrawingMode && styles.iconActive, { opacity: currentType === 'video' ? 0.3 : 1 }]} onPress={toggleDrawing} disabled={isUploading || currentType === 'video'}>
-              <MaterialIcons name="edit" size={24} color={isDrawingMode ? activeTheme.primary : '#fff'} />
-            </Pressable>
           </View>
         </View>
 
@@ -252,11 +323,8 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
                       {textOverlays.map((t) => (
                         <PanGestureHandler
                           key={t.id}
-                          onGestureEvent={(e) => {
-                            if (activeTextId === t.id) return; // disable drag while typing
-                            const { translationX, translationY } = e.nativeEvent;
-                            setTextOverlays(prev => prev.map(o => o.id === t.id ? { ...o, x: o.x + translationX/10, y: o.y + translationY/10 } : o));
-                          }}
+                          onGestureEvent={(e) => onTextDrag(e, t.id)}
+                          onHandlerStateChange={(e) => onTextDragStateChange(e, t)}
                         >
                           <Animated.View style={[styles.canvasTextContainer, { left: t.x, top: t.y }]}>
                             <Pressable 
@@ -332,8 +400,8 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
         <View style={styles.bottomContainer}>
           <View style={styles.inputActionRow}>
             <View style={styles.inputWrapper}>
-              <Pressable style={styles.cameraRollIcon} onPress={handlePickGallery} disabled={isUploading}>
-                <MaterialIcons name="photo-library" size={24} color="#fff" />
+              <Pressable style={styles.captionIcon} onPress={handlePickGallery} disabled={isUploading}>
+                <MaterialIcons name="add-photo-alternate" size={24} color="#fff" />
               </Pressable>
               <TextInput
                 style={styles.captionInput}
@@ -345,20 +413,17 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
                 editable={!isUploading}
                 multiline
               />
-              <Pressable style={styles.timerIcon} disabled={isUploading}>
-                <MaterialIcons name="av-timer" size={22} color="#fff" />
-              </Pressable>
             </View>
-            
+
             <Pressable
-              style={[styles.sendButton, { backgroundColor: activeTheme.primary }, isUploading && styles.sendButtonDisabled]}
+              style={[styles.themedSendButton, { backgroundColor: activeTheme.primary }, isUploading && styles.sendButtonDisabled]}
               onPress={handleSend}
               disabled={isUploading}
             >
               {isUploading ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
-                <MaterialIcons name="send" size={20} color="#fff" />
+                <MaterialIcons name="send" size={18} color="#fff" />
               )}
             </Pressable>
           </View>
@@ -401,6 +466,21 @@ const styles = StyleSheet.create({
     height: 40,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 20,
+  },
+  closeButton: {
+    width: 46,
+    height: 46,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 23,
+  },
+  aaText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '700',
   },
   mediaContainer: {
     flex: 1,
@@ -479,47 +559,46 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     width: '100%',
+    marginBottom: 12,
   },
   inputWrapper: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1E1E1E',
-    borderRadius: 24,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginRight: 10,
-    minHeight: 48,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 28,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    minHeight: 56,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+    marginRight: 14,
   },
-  cameraRollIcon: {
-    marginRight: 8,
-    padding: 4,
-  },
-  timerIcon: {
-    marginLeft: 8,
-    padding: 4,
+  captionIcon: {
+    padding: 2,
   },
   captionInput: {
     flex: 1,
     color: '#fff',
-    fontSize: 16,
-    maxHeight: 100,
+    fontSize: 17,
+    maxHeight: 120,
+    paddingHorizontal: 12,
     paddingTop: Platform.OS === 'ios' ? 8 : 4,
     paddingBottom: Platform.OS === 'ios' ? 8 : 4,
   },
-  sendButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+  themedSendButton: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 2,
+    elevation: 4,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
   },
   sendButtonDisabled: {
-    backgroundColor: '#1E1E1E',
+    opacity: 0.6,
   },
 });

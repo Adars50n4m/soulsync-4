@@ -1,6 +1,6 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { Tabs } from 'expo-router';
-import { View, Pressable, StyleSheet, Dimensions } from 'react-native';
+import { View, Pressable, StyleSheet, Dimensions, Platform } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -68,8 +68,18 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
     <View style={styles.tabBarContainer}>
       <View style={styles.tabBarGlassContainer}>
         {/* Layer 1: The Glass background */}
-        <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={styles.tabBarOverlay} />
+        <BlurView
+          intensity={Platform.OS === 'android' ? 80 : 30}
+          tint="dark"
+          style={[StyleSheet.absoluteFill, { backgroundColor: 'transparent' }]}
+          experimentalBlurMethod="dimezisBlurView"
+        />
+        <View style={[
+          styles.tabBarOverlay,
+          { backgroundColor: Platform.OS === 'android'
+            ? 'rgba(21,21,21,0.35)'
+            : 'rgba(21,21,21,0.75)' }
+        ]} />
         
         {/* Layer 2: The Indicator Pill (Vibrant & SOLID) */}
         <Animated.View 
@@ -169,7 +179,6 @@ const styles = StyleSheet.create({
   },
   tabBarOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(21,21,21,0.8)', // Matching userlist pill background tone
   },
   tabBarInner: {
     flexDirection: 'row',

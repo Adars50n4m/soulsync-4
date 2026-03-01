@@ -13,9 +13,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import Animated, { 
     useSharedValue, 
     useAnimatedStyle, 
-    withSpring, 
+    withTiming,
     FadeInDown, 
-    Layout,
     runOnJS,
     interpolate,
     Extrapolation
@@ -54,25 +53,23 @@ const SongItem = memo(({
     magentaColor: string;
 }) => {
     return (
-        <Animated.View layout={Layout.springify()}>
-            <Pressable 
-                onPress={() => onPress(item)}
-                style={[styles.songItem, isCurrent && styles.songItemActive]}
-            >
-                <Image source={{ uri: item.image }} style={styles.songThumb} />
-                <View style={styles.songInfo}>
-                    <Text style={styles.songName} numberOfLines={1}>{item.name}</Text>
-                    <Text style={styles.songArtistName} numberOfLines={1}>{item.artist}</Text>
-                </View>
-                <View style={styles.songAction}>
-                    <MaterialIcons 
-                        name="favorite" 
-                        size={18} 
-                        color={isFavorite ? magentaColor : 'rgba(255,255,255,0.1)'} 
-                    />
-                </View>
-            </Pressable>
-        </Animated.View>
+        <Pressable 
+            onPress={() => onPress(item)}
+            style={[styles.songItem, isCurrent && styles.songItemActive]}
+        >
+            <Image source={{ uri: item.image }} style={styles.songThumb} />
+            <View style={styles.songInfo}>
+                <Text style={styles.songName} numberOfLines={1}>{item.name}</Text>
+                <Text style={styles.songArtistName} numberOfLines={1}>{item.artist}</Text>
+            </View>
+            <View style={styles.songAction}>
+                <MaterialIcons 
+                    name="favorite" 
+                    size={18} 
+                    color={isFavorite ? magentaColor : 'rgba(255,255,255,0.1)'} 
+                />
+            </View>
+        </Pressable>
     );
 });
 
@@ -207,11 +204,7 @@ export default function MusicScreen() {
     };
 
     const handleClose = () => {
-        slideY.value = withSpring(height, {
-            damping: 20,
-            stiffness: 100,
-            mass: 0.8
-        }, (finished) => {
+        slideY.value = withTiming(height, { duration: 220 }, (finished) => {
             if (finished) {
                 runOnJS(closeScreen)();
             }
@@ -220,12 +213,7 @@ export default function MusicScreen() {
 
     useEffect(() => {
         // Open the music overlay
-        slideY.value = withSpring(0, {
-            damping: 18,
-            stiffness: 90,
-            mass: 0.6,
-            velocity: 2
-        });
+        slideY.value = withTiming(0, { duration: 220 });
 
         // Initial Load Logic:
         // Fetch Bollywood Trending but DO NOT auto-play.
@@ -251,7 +239,11 @@ export default function MusicScreen() {
     }));
 
     const backgroundStyle = useAnimatedStyle(() => ({
-        opacity: interpolate(slideY.value, [0, height * 0.8], [1, 0], Extrapolation.CLAMP)
+        opacity: interpolate(slideY.value, [0, height], [1, 0]),
+    }));
+
+    const backdropBlurOpacity = useAnimatedStyle(() => ({
+        opacity: interpolate(slideY.value, [0, height], [1, 0]),
     }));
 
     // Real Progress Sync
@@ -542,11 +534,32 @@ export default function MusicScreen() {
                 <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
             </Animated.View>
 
+            <Animated.View style={[StyleSheet.absoluteFill, backdropBlurOpacity, { zIndex: 40 }]}>
+                {Platform.OS === 'ios' && (
+                    <BlurView 
+                        intensity={25} 
+                        tint="dark" 
+                        style={StyleSheet.absoluteFill}
+                    />
+                )}
+                <View 
+                    style={[
+                        StyleSheet.absoluteFill, 
+                        Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.4)' }
+                    ]} 
+                />
+            </Animated.View>
+
             {/* Transparent Pressable to close the overlay with animation */}
-            <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
+            <Pressable style={[StyleSheet.absoluteFill, { zIndex: 41 }]} onPress={handleClose} />
 
             <Animated.View style={[styles.musicOverlay, overlayStyle]}>
-                <BlurView intensity={95} tint="dark" style={styles.overlayGlass}>
+                <BlurView 
+                    intensity={Platform.OS === 'android' ? 100 : 95} 
+                    tint="dark" 
+                    style={styles.overlayGlass} 
+                    experimentalBlurMethod="dimezisBlurView"
+                >
                     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
                         <View style={styles.dragHandle} />
 
@@ -576,7 +589,12 @@ export default function MusicScreen() {
                         {/* Liquid Tabs Navigation */}
                         {!keyboardVisible && (
                             <View style={styles.tabBarContainer}>
-                                <BlurView intensity={40} tint="dark" style={styles.tabPill}>
+                                <BlurView 
+                                    intensity={Platform.OS === 'android' ? 80 : 40} 
+                                    tint="dark" 
+                                    style={styles.tabPill} 
+                                    experimentalBlurMethod="dimezisBlurView"
+                                >
                                     <Pressable 
                                         onPress={() => setActiveTab('favorites')}
                                         style={[styles.tabBtn, activeTab === 'favorites' && styles.tabBtnActive]}
@@ -606,7 +624,7 @@ const styles = StyleSheet.create({
     
     // Music Overlay
     musicOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '82%', zIndex: 60, borderTopLeftRadius: 40, borderTopRightRadius: 40, overflow: 'hidden' },
-    overlayGlass: { flex: 1, backgroundColor: 'rgba(15,15,15,0.3)', borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)' },
+    overlayGlass: { flex: 1, backgroundColor: Platform.OS === 'android' ? 'rgba(15,15,15,0.7)' : 'rgba(15,15,15,0.3)', borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)' },
     dragHandle: { width: 48, height: 6, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 3, alignSelf: 'center', marginTop: 12, marginBottom: 24 },
     listContent: { paddingHorizontal: 24 },
     overlayHeader: { width: '100%', alignItems: 'center' },
@@ -644,7 +662,7 @@ const styles = StyleSheet.create({
     songAction: { paddingLeft: 10 },
 
     tabBarContainer: { position: 'absolute', bottom: 40, left: 0, right: 0, alignItems: 'center' },
-    tabPill: { flexDirection: 'row', width: '85%', borderRadius: 40, padding: 6, backgroundColor: 'rgba(20,20,20,0.6)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', overflow: 'hidden' },
+    tabPill: { flexDirection: 'row', width: '85%', borderRadius: 40, padding: 6, backgroundColor: Platform.OS === 'android' ? 'rgba(20,20,20,0.45)' : 'rgba(20,20,20,0.6)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', overflow: 'hidden' },
     tabBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, gap: 8, borderRadius: 34 },
     tabBtnActive: { backgroundColor: 'rgba(255,0,128,0.2)', borderWidth: 1, borderColor: 'rgba(255,0,128,0.5)' },
     tabText: { color: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1.5 },

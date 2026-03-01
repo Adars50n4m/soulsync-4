@@ -50,7 +50,7 @@ export default function AboutScreen() {
 
                 {/* Info Groups */}
                 <View style={styles.groupContainer}>
-                    <BlurView intensity={10} tint="dark" style={styles.glassGroup}>
+                    <BlurView intensity={10} tint="dark" style={styles.glassGroup} experimentalBlurMethod="dimezisBlurView">
                         <AboutItem icon="description" title="Terms of Service" />
                         <View style={styles.separator} />
                         <AboutItem icon="privacy-tip" title="Privacy Policy" />

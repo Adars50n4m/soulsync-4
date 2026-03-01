@@ -1,7 +1,9 @@
 import React from 'react';
-import { View, StyleSheet, ViewStyle, StyleProp } from 'react-native';
+import { View, StyleSheet, ViewStyle, StyleProp, Platform } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
+
+const isAndroid = Platform.OS === 'android';
 
 interface LiquidGlassCardProps {
     children: React.ReactNode;
@@ -15,7 +17,9 @@ interface LiquidGlassCardProps {
 
 /**
  * LiquidGlassCard - iOS-style glassmorphism card component
- * Creates a frosted glass effect with subtle glow and depth
+ * Creates a frosted glass effect with subtle glow and depth.
+ * On Android, adds a dark translucent backing layer so the blur
+ * has visible depth instead of appearing as a plain transparent shade.
  */
 export const LiquidGlassCard: React.FC<LiquidGlassCardProps> = ({
     children,
@@ -47,6 +51,8 @@ export const LiquidGlassCard: React.FC<LiquidGlassCardProps> = ({
     };
 
     const variantStyles = getVariantStyles();
+    // Android dimezisBlurView needs higher intensity to look comparable to iOS
+    const blurIntensity = isAndroid ? Math.min(intensity + 40, 100) : intensity;
 
     return (
         <View
@@ -60,11 +66,17 @@ export const LiquidGlassCard: React.FC<LiquidGlassCardProps> = ({
                 style,
             ]}
         >
+            {/* Android: dark frosted backing so blur produces visible glass depth */}
+            {isAndroid && (
+                <View style={[styles.androidBacking, { borderRadius }]} />
+            )}
+
             {/* Glass Background */}
             <BlurView
-                intensity={intensity}
+                intensity={blurIntensity}
                 tint="dark"
                 style={[styles.blur, { borderRadius }]}
+                experimentalBlurMethod="dimezisBlurView"
             >
                 {/* Inner Glow Gradient */}
                 <LinearGradient
@@ -97,11 +109,22 @@ export const LiquidGlassView: React.FC<{
     children: React.ReactNode;
     style?: StyleProp<ViewStyle>;
     intensity?: number;
-}> = ({ children, style, intensity = 80 }) => (
-    <BlurView intensity={intensity} tint="dark" style={[styles.glassView, style]}>
-        {children}
-    </BlurView>
-);
+}> = ({ children, style, intensity = 80 }) => {
+    const blurIntensity = isAndroid ? Math.min(intensity + 20, 100) : intensity;
+    return (
+        <View style={[styles.glassViewWrapper, style]}>
+            {isAndroid && <View style={styles.androidBackingFull} />}
+            <BlurView
+                intensity={blurIntensity}
+                tint="dark"
+                style={[styles.glassView, style]}
+                experimentalBlurMethod="dimezisBlurView"
+            >
+                {children}
+            </BlurView>
+        </View>
+    );
+};
 
 /**
  * GlassButton - Glass-styled pressable button
@@ -159,6 +182,14 @@ const styles = StyleSheet.create({
         shadowRadius: 24,
         elevation: 10,
     },
+    androidBacking: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: 'rgba(20, 20, 25, 0.75)',
+    },
+    androidBackingFull: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: 'rgba(20, 20, 25, 0.70)',
+    },
     blur: {
         overflow: 'hidden',
     },
@@ -176,6 +207,9 @@ const styles = StyleSheet.create({
     },
     content: {
         // Content wrapper
+    },
+    glassViewWrapper: {
+        overflow: 'hidden',
     },
     glassView: {
         overflow: 'hidden',

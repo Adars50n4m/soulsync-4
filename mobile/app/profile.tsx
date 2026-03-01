@@ -1,6 +1,6 @@
-import React, { useRef } from 'react';
+import React from 'react';
 import {
-    View, Text, Image, StyleSheet, StatusBar, ScrollView, Animated as RNAnimated, Dimensions, Pressable
+    View, Text, Image, StyleSheet, StatusBar, Dimensions, Pressable
 } from 'react-native';
 import { useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
@@ -16,16 +16,54 @@ import Animated, {
     withSpring,
     useAnimatedScrollHandler,
     useSharedValue,
+    useAnimatedStyle,
+    interpolate,
+    Extrapolation,
 } from 'react-native-reanimated';
 
 const { width } = Dimensions.get('window');
 const HEADER_HEIGHT = 300;
 
+const MenuItem = ({ icon, title, subtitle, onPress, isLast, danger }: any) => (
+    <Pressable
+        style={({ pressed }) => [
+            styles.menuItem,
+            pressed && { opacity: 0.7 },
+            !isLast && styles.menuItemBorder
+        ]}
+        onPress={onPress}
+    >
+        <View style={[styles.menuIconContainer, danger && { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
+            <Ionicons name={icon} size={22} color={danger ? '#ef4444' : '#fff'} />
+        </View>
+        <View style={styles.menuTextContainer}>
+            <Text style={[styles.menuTitle, danger && { color: '#ef4444' }]}>{title}</Text>
+            {subtitle && <Text style={styles.menuSubtitle}>{subtitle}</Text>}
+        </View>
+        <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.2)" />
+    </Pressable>
+);
+
 export default function ProfileScreen() {
     const router = useRouter();
     const navigation = useNavigation();
     const { currentUser, logout, activeTheme } = useApp();
-    const scrollY = useRef(new RNAnimated.Value(0)).current;
+    const scrollY = useSharedValue(0);
+
+    const scrollHandler = useAnimatedScrollHandler({
+        onScroll: (event) => {
+            scrollY.value = event.contentOffset.y;
+        },
+    });
+
+    const avatarAnimatedStyle = useAnimatedStyle(() => ({
+        opacity: interpolate(scrollY.value, [0, HEADER_HEIGHT / 2], [1, 0], Extrapolation.CLAMP),
+        transform: [{ scale: interpolate(scrollY.value, [0, HEADER_HEIGHT], [1, 0.5], Extrapolation.CLAMP) }],
+    }));
+
+    const headerTitleStyle = useAnimatedStyle(() => ({
+        opacity: interpolate(scrollY.value, [HEADER_HEIGHT / 2, HEADER_HEIGHT], [0, 1], Extrapolation.CLAMP),
+    }));
 
     if (!currentUser) {
         return (
@@ -34,25 +72,6 @@ export default function ProfileScreen() {
             </View>
         );
     }
-
-    // Parallax Animations
-    const avatarScale = scrollY.interpolate({
-        inputRange: [0, HEADER_HEIGHT],
-        outputRange: [1, 0.5],
-        extrapolate: 'clamp'
-    });
-
-    const avatarOpacity = scrollY.interpolate({
-        inputRange: [0, HEADER_HEIGHT / 2],
-        outputRange: [1, 0],
-        extrapolate: 'clamp'
-    });
-
-    const nameOpacity = scrollY.interpolate({
-        inputRange: [HEADER_HEIGHT / 2, HEADER_HEIGHT],
-        outputRange: [0, 1],
-        extrapolate: 'clamp'
-    });
 
     const handleLogout = () => {
         Alert.alert(
@@ -75,26 +94,6 @@ export default function ProfileScreen() {
     const handleEditProfile = () => {
         router.push('/profile-edit' as any);
     };
-
-    const MenuItem = ({ icon, title, subtitle, onPress, isLast, danger }: any) => (
-        <Pressable 
-            style={({ pressed }) => [
-                styles.menuItem,
-                pressed && { opacity: 0.7 },
-                !isLast && styles.menuItemBorder
-            ]} 
-            onPress={onPress}
-        >
-            <View style={[styles.menuIconContainer, danger && { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
-                <Ionicons name={icon} size={22} color={danger ? '#ef4444' : '#fff'} />
-            </View>
-            <View style={styles.menuTextContainer}>
-                <Text style={[styles.menuTitle, danger && { color: '#ef4444' }]}>{title}</Text>
-                {subtitle && <Text style={styles.menuSubtitle}>{subtitle}</Text>}
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.2)" />
-        </Pressable>
-    );
 
     return (
         <View style={styles.container}>
@@ -130,7 +129,7 @@ export default function ProfileScreen() {
                 >
                     <Ionicons name="chevron-back" size={28} color="#ffffff" />
                 </Pressable>
-                <Animated.Text style={[styles.headerTitle, { opacity: nameOpacity }]}>
+                <Animated.Text style={[styles.headerTitle, headerTitleStyle]}>
                     Profile
                 </Animated.Text>
                 <View style={{ width: 44 }} />
@@ -140,11 +139,11 @@ export default function ProfileScreen() {
                 style={styles.scrollView}
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
-                onScroll={RNAnimated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
+                onScroll={scrollHandler}
                 scrollEventThrottle={16}
             >
                 {/* Hero Profile Section */}
-                <Animated.View style={[styles.heroSection, { opacity: avatarOpacity, transform: [{ scale: avatarScale }]}]}>
+                <Animated.View style={[styles.heroSection, avatarAnimatedStyle]}>
                     <Pressable onPress={handleEditProfile}>
                         <Animated.View
                             style={styles.avatarGlowContainer}
@@ -169,7 +168,7 @@ export default function ProfileScreen() {
 
                 {/* Glassmorphism Menu Cards */}
                 <View style={styles.menuContainer}>
-                    <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+                    <BlurView intensity={20} tint="dark" style={styles.glassCard} experimentalBlurMethod="dimezisBlurView">
                         <MenuItem 
                             icon="person-outline" 
                             title="Profile Status" 

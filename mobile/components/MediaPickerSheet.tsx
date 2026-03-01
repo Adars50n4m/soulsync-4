@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { View, Pressable, StyleSheet, Animated, PanResponder, Dimensions, FlatList, Image, Text, ActivityIndicator } from 'react-native';
+import { View, Pressable, StyleSheet, Animated, PanResponder, Dimensions, FlatList, Image, Text, ActivityIndicator, Platform } from 'react-native';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import * as MediaLibrary from 'expo-media-library';
@@ -13,6 +13,7 @@ interface MediaPickerSheetProps {
   onSelectGallery: () => void; // Keeps the gallery picker as a fallback or full view if needed
   onSelectAudio: () => void;
   onSelectNote: () => void;
+  onSelectAsset?: (asset: MediaLibrary.Asset) => void;
 }
 
 export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
@@ -22,6 +23,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
   onSelectGallery,
   onSelectAudio,
   onSelectNote,
+  onSelectAsset,
 }) => {
   const slideAnim = useRef(new Animated.Value(0)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
@@ -30,6 +32,9 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
   const sheetHeight = screenHeight * 0.85; 
 
   const [photos, setPhotos] = useState<MediaLibrary.Asset[]>([]);
+  const [albums, setAlbums] = useState<MediaLibrary.Album[]>([]);
+  const [selectedAlbum, setSelectedAlbum] = useState<MediaLibrary.Album | null>(null);
+  const [viewMode, setViewMode] = useState<'photos' | 'albums'>('photos');
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -55,9 +60,44 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
     })
   ).current;
 
+  const loadPhotos = async (album?: MediaLibrary.Album) => {
+      setIsLoading(true);
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      setHasPermission(status === 'granted');
+      
+      if (status === 'granted') {
+          const assets = await MediaLibrary.getAssetsAsync({
+              first: 50,
+              sortBy: ['creationTime'],
+              mediaType: ['photo', 'video'],
+              album: album ? album.id : undefined,
+          });
+          setPhotos(assets.assets);
+      }
+      setIsLoading(false);
+  };
+
+  const loadAlbums = async () => {
+      setIsLoading(true);
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status === 'granted') {
+          const fetchedAlbums = await MediaLibrary.getAlbumsAsync({
+              includeSmartAlbums: true,
+          });
+          // Filter out empty albums
+          const filtered = fetchedAlbums.filter(a => a.assetCount > 0);
+          setAlbums(filtered);
+      }
+      setIsLoading(false);
+  };
+
   useEffect(() => {
     if (visible) {
-      loadPhotos();
+      if (viewMode === 'photos') {
+          loadPhotos(selectedAlbum || undefined);
+      } else {
+          loadAlbums();
+      }
       Animated.parallel([
         Animated.spring(slideAnim, {
           toValue: 0,
@@ -87,22 +127,6 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
     }
   }, [visible]);
 
-  const loadPhotos = async () => {
-      setIsLoading(true);
-      const { status } = await MediaLibrary.requestPermissionsAsync();
-      setHasPermission(status === 'granted');
-      
-      if (status === 'granted') {
-          const assets = await MediaLibrary.getAssetsAsync({
-              first: 50,
-              sortBy: ['creationTime'],
-              mediaType: ['photo', 'video'],
-          });
-          setPhotos(assets.assets);
-      }
-      setIsLoading(false);
-  };
-
   const handleClose = () => {
     Animated.parallel([
       Animated.timing(slideAnim, {
@@ -128,7 +152,11 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
 
   // Grid Render Items
   const renderItem = ({ item, index }: { item: any, index: number }) => {
-      const isCameraTile = index === 0;
+      if (viewMode === 'albums') {
+          return renderAlbumItem({ item });
+      }
+
+      const isCameraTile = index === 0 && !selectedAlbum;
       const tileSize = (screenWidth) / 3;
 
       if (isCameraTile) {
@@ -145,14 +173,14 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
           );
       }
 
-      // Adjust index for photos array (since 0 is camera)
-      const photoIndex = index - 1;
-      if (photoIndex >= photos.length) return null;
+      // Adjust index for photos array (since 0 is camera if no album selected)
+      const photoIndex = selectedAlbum ? index : index - 1;
+      if (photoIndex >= photos.length || photoIndex < 0) return null;
       const asset = photos[photoIndex];
 
       return (
           <Pressable 
-            onPress={onSelectGallery} // For now triggers standard gallery picker, ideal would be to select this specific asset
+            onPress={() => onSelectAsset ? onSelectAsset(asset) : onSelectGallery()}
             style={{ width: tileSize, height: tileSize, padding: 1 }}
           >
               <Image 
@@ -169,6 +197,28 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
       );
   };
 
+  const renderAlbumItem = ({ item }: { item: MediaLibrary.Album }) => {
+      const tileSize = (screenWidth) / 3;
+      return (
+          <Pressable 
+            onPress={() => {
+                setSelectedAlbum(item);
+                setViewMode('photos');
+                loadPhotos(item);
+            }}
+            style={[styles.albumTile, { width: tileSize, height: tileSize, padding: 4 }]}
+          >
+              <View style={styles.albumCoverPlaceholder}>
+                  <Ionicons name="folder-open" size={40} color="rgba(255,255,255,0.4)" />
+                  <View style={styles.albumBadge}>
+                      <Text style={styles.albumCount}>{item.assetCount}</Text>
+                  </View>
+              </View>
+              <Text numberOfLines={1} style={styles.albumName}>{item.title}</Text>
+          </Pressable>
+      );
+  };
+
   const formatDuration = (duration: number) => {
       const minutes = Math.floor(duration / 60);
       const seconds = Math.floor(duration % 60);
@@ -177,8 +227,10 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
 
   if (!visible) return null;
 
-  // Combined data: First item is a dummy for "Camera", rest are photos
-  const gridData = [ { id: 'camera-tile' }, ...photos ];
+  // Combined data: First item is a dummy for "Camera" if not in album, rest are photos
+  const gridData = viewMode === 'albums' 
+    ? albums 
+    : (selectedAlbum ? photos : [ { id: 'camera-tile' }, ...photos ]);
 
   return (
     <Animated.View style={[styles.overlay, { opacity: opacityAnim }]}>
@@ -200,7 +252,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
         ]}
         {...panResponder.panHandlers}
       >
-        <BlurView intensity={90} tint="dark" style={styles.container}>
+        <BlurView intensity={90} tint="dark" style={styles.container} experimentalBlurMethod="dimezisBlurView">
           
           {/* Header */}
           <View style={styles.header}>
@@ -209,8 +261,21 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
               </Pressable>
               
               <View style={styles.headerTitleContainer}>
-                 <Text style={[styles.headerTitle, { color: '#fff' }]}>Photos</Text>
-                 <Text style={[styles.headerTitle, { opacity: 0.5 }]}>Albums</Text>
+                 <Pressable onPress={() => {
+                     setViewMode('photos');
+                     setSelectedAlbum(null);
+                     loadPhotos();
+                 }}>
+                    <Text style={[styles.headerTitle, viewMode === 'photos' && { color: '#fff' }]}>
+                        {selectedAlbum ? selectedAlbum.title : 'Photos'}
+                    </Text>
+                 </Pressable>
+                 <Pressable onPress={() => {
+                     setViewMode('albums');
+                     loadAlbums();
+                 }}>
+                    <Text style={[styles.headerTitle, viewMode === 'albums' && { color: '#fff' }]}>Albums</Text>
+                 </Pressable>
               </View>
 
               <View style={styles.headerButton} /> 
@@ -232,12 +297,6 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
                   <Text style={styles.optionLabel}>Music</Text>
               </Pressable>
                
-               <Pressable style={styles.optionButton}>
-                  <View style={[styles.optionIcon, { backgroundColor: '#1e1e24' }]}>
-                      <Ionicons name="grid" size={20} color="#fff" />
-                  </View>
-                   <Text style={styles.optionLabel}>Layout</Text>
-              </Pressable>
           </View>
 
           {/* Handler Bar */}
@@ -284,7 +343,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     overflow: 'hidden',
-    backgroundColor: '#000',
+    backgroundColor: Platform.OS === 'android' ? 'rgba(10, 10, 12, 0.75)' : '#000',
   },
   container: {
     flex: 1,
@@ -405,6 +464,41 @@ const styles = StyleSheet.create({
   },
   permissionText: {
       color: 'rgba(255,255,255,0.5)',
+  },
+  
+  // Album Styles
+  albumTile: {
+      margin: 1,
+      justifyContent: 'flex-start',
+  },
+  albumCoverPlaceholder: {
+      flex: 1,
+      backgroundColor: 'rgba(255,255,255,0.05)',
+      borderRadius: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+      position: 'relative',
+  },
+  albumBadge: {
+      position: 'absolute',
+      bottom: 8,
+      right: 8,
+      backgroundColor: 'rgba(0,0,0,0.6)',
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 10,
+  },
+  albumCount: {
+      color: '#fff',
+      fontSize: 10,
+      fontWeight: '700',
+  },
+  albumName: {
+      color: '#fff',
+      fontSize: 12,
+      fontWeight: '600',
+      marginTop: 4,
+      paddingHorizontal: 2,
   },
 });
 

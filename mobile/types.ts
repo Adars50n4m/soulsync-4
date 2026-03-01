@@ -34,6 +34,11 @@ export interface Story {
   userId?: string;
   likes?: string[];
   views?: string[];
+  music?: {
+    name: string;
+    artist: string;
+    image: string;
+  };
 }
 
 export interface Contact {
@@ -61,6 +66,11 @@ export interface StatusUpdate {
     expiresAt: string; // ISO date string, 24h from creation
     views: string[]; // Array of user IDs who viewed
     likes: string[]; // Array of user IDs who liked
+    music?: {
+      name: string;
+      artist: string;
+      image: string;
+    };
     // Legacy fields for backwards compatibility
     contactName?: string;
     avatar?: string;

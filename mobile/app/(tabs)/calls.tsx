@@ -93,7 +93,6 @@ export default function CallsScreen() {
                     data={calls}
                     keyExtractor={item => item.id}
                     renderItem={renderCallItem}
-                    estimatedItemSize={72}
                     contentContainerStyle={styles.listContent}
                     showsVerticalScrollIndicator={false}
                 />

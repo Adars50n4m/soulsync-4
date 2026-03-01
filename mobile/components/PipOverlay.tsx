@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { View, Image, Pressable, Dimensions, Text, StyleSheet, Animated, PanResponder } from 'react-native';
+import { View, Image, Pressable, Dimensions, Text, StyleSheet, Animated, PanResponder, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -112,7 +112,7 @@ export default function PipOverlay() {
                         )
                     ) : (
                         // Audio Call Look
-                        <BlurView intensity={80} tint="dark" style={styles.blur}>
+                        <BlurView intensity={80} tint="dark" style={styles.blur} experimentalBlurMethod="dimezisBlurView">
                             <View style={styles.audioContent}>
                                 <View style={styles.avatarContainer}>
                                     <Image source={{ uri: contact.avatar }} style={styles.avatar} />
@@ -172,7 +172,7 @@ const styles = StyleSheet.create({
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: 'rgba(0,0,0,0.6)',
+        backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.6)',
     },
     videoImage: {
         width: '100%',
