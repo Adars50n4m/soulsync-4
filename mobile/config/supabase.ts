@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
-import { getSupabaseUrl, SUPABASE_ANON_KEY } from './api';
+import { SUPABASE_ENDPOINT, SUPABASE_ANON_KEY } from './api';
 
-export const supabase = createClient(getSupabaseUrl(), SUPABASE_ANON_KEY, {
+export const supabase = createClient(SUPABASE_ENDPOINT, SUPABASE_ANON_KEY, {
     realtime: {
         params: {
             eventsPerSecond: 10,
@@ -14,8 +14,7 @@ export const supabase = createClient(getSupabaseUrl(), SUPABASE_ANON_KEY, {
  * Derives from the active Supabase endpoint (proxy or direct).
  */
 export const getRealtimeUrl = (): string => {
-    const baseUrl = getSupabaseUrl();
-    return baseUrl.replace('https://', 'wss://') + '/realtime/v1';
+    return SUPABASE_ENDPOINT.replace('https://', 'wss://') + '/realtime/v1';
 };
 
 /**
