@@ -14,7 +14,9 @@ if (SUPABASE_ENDPOINT === SUPABASE_URL) {
     console.warn('[API Config] NO PROXY DETECTED. Supabase might be blocked by ISP!');
 }
 
-export const getSupabaseUrl = () => SUPABASE_ENDPOINT;
+export function getSupabaseUrl(): string {
+    return SUPABASE_ENDPOINT;
+}
 
 // JioSaavn API (Fallback to public instance as Supabase function is inactive)
 export const SAAVN_BASE_URL = 'https://saavn.sumit.co';

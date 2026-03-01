@@ -1,5 +1,5 @@
 import { supabase } from '../config/supabase';
-import { SUPABASE_URL, getSupabaseUrl } from '../config/api';
+import { SUPABASE_ENDPOINT } from '../config/api';
 import { offlineService, type QueuedMessage, type MessageStatus } from './LocalDBService';
 import { AppState, AppStateStatus } from 'react-native';
 
@@ -164,7 +164,7 @@ class ChatService {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout
 
-            await fetch(getSupabaseUrl(), { 
+            await fetch(SUPABASE_ENDPOINT, { 
                 method: 'GET', // GET is sometimes better for some proxies
                 signal: controller.signal,
                 mode: 'no-cors'

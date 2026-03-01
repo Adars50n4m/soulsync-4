@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { View, Text, Pressable, Modal, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, Pressable, Modal, StyleSheet, ScrollView, Platform } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, { 
@@ -101,6 +101,16 @@ const MessageContextMenu = ({
     const emojiBarY = adjustedY - emojiBarHeight - EMENU_GAP;
     const actionMenuY = adjustedY + layout.height + AMENU_GAP;
 
+    const previewBubbleFrame = Platform.select({
+        android: {
+            minWidth: layout.width + 8,
+            maxWidth: SCREEN_WIDTH * 0.82,
+        },
+        default: {
+            width: layout.width,
+        },
+    });
+
     return (
         <Modal visible={visible} transparent animationType="none" onRequestClose={handleClose}>
             <View style={StyleSheet.absoluteFill}>
@@ -141,8 +151,8 @@ const MessageContextMenu = ({
                     <View style={{
                         position: 'absolute',
                         top: adjustedY,
-                        left: layout.x,
-                        width: layout.width,
+                        [isMe ? 'right' : 'left']: isMe ? SCREEN_WIDTH - layout.x - layout.width : layout.x,
+                        ...(previewBubbleFrame as object),
                         minHeight: layout.height,
                     }}>
                         <MessageBubble
