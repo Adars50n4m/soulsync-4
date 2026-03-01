@@ -16,6 +16,7 @@ import {
 import { webRTCService } from '../services/WebRTCService';
 import { nativeCallBridge } from '../services/NativeCallBridge';
 import { nativeCallService } from '../services/NativeCallService';
+import { webSocketErrorHandler } from '../services/WebSocketErrorHandler';
 import { supabase } from '../config/supabase';
 import { offlineService } from '../services/LocalDBService';
 import { storageService } from '../services/StorageService';
@@ -26,6 +27,9 @@ if (!offlineService) {
     console.warn('[AppContext] LocalDBService failed to load. Check native modules.');
 }
 import { AppState, AppStateStatus, Alert, Image, Platform } from 'react-native';
+
+// Initialize WebSocket error handler early to catch reload crashes
+webSocketErrorHandler;
 
 export type ThemeName = 'midnight' | 'liquid-blue' | 'sunset' | 'emerald' | 'cyber' | 'amethyst';
 
@@ -132,7 +136,7 @@ interface AppContextType {
     clearChatMessages: (partnerId: string) => Promise<void>;
 }
 
-const AppContext = createContext<AppContextType | undefined>(undefined);
+export const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     // Auth State
@@ -274,13 +278,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     useEffect(() => {
         if (currentUser) {
             // Check realtime connectivity before initializing
-            import('../config/supabase').then(({ checkRealtimeConnectivity }) => {
-                checkRealtimeConnectivity().then((result) => {
-                    if (!result.ok) {
-                        console.warn('[MusicSync] Realtime unavailable, sync will not work:', result.error);
-                    }
+            import('../config/supabase')
+                .then(({ checkRealtimeConnectivity }) => {
+                    checkRealtimeConnectivity()
+                        .then((result) => {
+                            if (!result.ok) {
+                                console.warn('[MusicSync] Realtime unavailable, sync will not work:', result.error);
+                            } else {
+                                console.log('[MusicSync] Realtime connectivity confirmed');
+                            }
+                        })
+                        .catch(err => {
+                            console.error('[MusicSync] connectivity check CRASHED:', err);
+                        });
+                })
+                .catch(err => {
+                    console.error('[MusicSync] Failed to lazy load supabase config:', err);
                 });
-            });
             
             musicSyncService.initialize(currentUser.id, async (remoteState) => {
                 try {
@@ -655,6 +669,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     ));
                 }
             })
+            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, async (payload) => {
+                const updatedMsg = payload.new as any;
+                if (!updatedMsg?.id || !currentUser?.id) return;
+
+                const partnerId =
+                    updatedMsg.sender === currentUser.id
+                        ? updatedMsg.receiver
+                        : updatedMsg.sender;
+                if (!partnerId) return;
+
+                let mergedMessage: Message | null = null;
+
+                setMessages(prev => {
+                    const chatMessages = prev[partnerId] || [];
+                    const idx = chatMessages.findIndex(m => m.id === updatedMsg.id.toString());
+                    if (idx < 0) return prev;
+
+                    const existing = chatMessages[idx];
+                    const updatedReaction = updatedMsg.reaction ? [updatedMsg.reaction] : [];
+                    mergedMessage = {
+                        ...existing,
+                        text: updatedMsg.text ?? existing.text,
+                        status: updatedMsg.status ?? existing.status,
+                        replyTo: updatedMsg.reply_to_id?.toString() ?? existing.replyTo,
+                        media: updatedMsg.media_url
+                            ? {
+                                type: updatedMsg.media_type || 'image',
+                                url: updatedMsg.media_url,
+                                caption: updatedMsg.media_caption,
+                            }
+                            : existing.media,
+                        reactions: updatedReaction,
+                    };
+
+                    const next = [...chatMessages];
+                    next[idx] = mergedMessage;
+                    return { ...prev, [partnerId]: next };
+                });
+
+                if (mergedMessage && offlineService) {
+                    await offlineService.saveMessage(partnerId, mergedMessage);
+                }
+            })
             .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, async (payload) => {
                 const oldMsg = payload.old as any;
                 if (!oldMsg?.id) return;
@@ -705,7 +762,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         timestamp: new Date(dbStatus.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         expiresAt: dbStatus.expires_at,
         views: dbStatus.views || [],
-        likes: dbStatus.likes || []
+        likes: dbStatus.likes || [],
+        music: dbStatus.music || undefined
     });
 
     const sendChatMessage = useCallback(async (chatId: string, text: string, media?: Message['media'], replyTo?: string) => {
@@ -829,6 +887,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     status: dbRow.status,
                     media: dbRow.media_url ? { type: dbRow.media_type || 'image', url: dbRow.media_url, caption: dbRow.media_caption } : undefined,
                     replyTo: dbRow.reply_to_id?.toString(),
+                    reactions: dbRow.reaction ? [dbRow.reaction] : [],
                 }));
 
                 setMessages(prev => {
@@ -837,7 +896,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     
                     mappedMessages.forEach(newMsg => {
                         const idx = merged.findIndex(m => m.id === newMsg.id);
-                        if (idx >= 0) merged[idx] = newMsg;
+                        if (idx >= 0) {
+                            const existingReactions = merged[idx].reactions || [];
+                            merged[idx] = {
+                                ...newMsg,
+                                reactions: (newMsg.reactions && newMsg.reactions.length > 0)
+                                    ? newMsg.reactions
+                                    : existingReactions,
+                            };
+                        }
                         else merged.push(newMsg);
                     });
 
@@ -1123,6 +1190,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const addReaction = (chatId: string, messageId: string, emoji: string) => {
+        let nextReactionValue: string | null = null;
+
         setMessages((prev) => {
             const chatMessages = prev[chatId] || [];
             return {
@@ -1132,12 +1201,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                         const reactions = msg.reactions || [];
                         const isSame = reactions.includes(emoji);
                         const newReactions = isSame ? [] : [emoji];
+                        nextReactionValue = newReactions[0] ?? null;
                         return { ...msg, reactions: newReactions };
                     }
                     return msg;
                 })
             };
         });
+
+        (async () => {
+            try {
+                const { error } = await supabase
+                    .from('messages')
+                    .update({ reaction: nextReactionValue })
+                    .eq('id', messageId);
+                if (error) {
+                    console.warn('[AppContext] Failed to persist reaction:', error);
+                }
+            } catch (e) {
+                console.warn('[AppContext] Reaction persistence error:', e);
+            }
+        })();
     };
 
     // --- CALL LOGIC ---
@@ -1603,7 +1687,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     expires_at: status.expiresAt,
                     created_at: new Date().toISOString(),
                     likes: [],
-                    views: []
+                    views: [],
+                    music: musicState.currentSong ? {
+                      name: musicState.currentSong.name,
+                      artist: musicState.currentSong.artist,
+                      image: musicState.currentSong.image
+                    } : null
                 });
                 
                 if (error) {

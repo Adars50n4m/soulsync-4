@@ -1,6 +1,31 @@
 /* Shared Element Transition Styles */
 
-/* Pill Morph Transition - Smooth morphing animation */
+/* === Page Level Transitions === */
+.page-enter {
+  opacity: 0;
+  transform: scale(0.96) translateY(10px);
+}
+
+.page-enter-active {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+  transition: opacity 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
+              transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.page-exit {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+
+.page-exit-active {
+  opacity: 0;
+  transform: scale(0.98) translateY(-5px);
+  transition: opacity 0.25s cubic-bezier(0.4, 0, 0.6, 1),
+              transform 0.25s cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+/* === Pill Morph Transition === */
 .pill-morph-enter {
   opacity: 0;
   transform: scale(0.9) translateY(20px);
@@ -25,18 +50,60 @@
               transform 0.3s cubic-bezier(0.4, 0, 0.6, 1);
 }
 
-/* Avatar shared element transition */
-.avatar-shared {
+/* === Chat Card Morph Transition === */
+.chat-card-morph {
   transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-/* Chat item expansion effect */
-.chat-item-expanded {
+.chat-card-morph-expanded {
   border-radius: 1.6rem;
-  transition: border-radius 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
 }
 
-/* Smooth layout shift prevention */
+/* === Avatar Shared Element === */
+.avatar-shared {
+  transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: transform, width, height, border-radius;
+}
+
+.avatar-shared-enter {
+  transform: scale(0.8);
+  opacity: 0;
+}
+
+.avatar-shared-enter-active {
+  transform: scale(1);
+  opacity: 1;
+  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
+              opacity 0.35s ease-out;
+}
+
+/* === Text Morph Transitions === */
+.text-morph {
+  transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: font-size, font-weight, letter-spacing;
+}
+
+.text-morph-enter {
+  opacity: 0;
+  transform: translateY(5px);
+}
+
+.text-morph-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.3s cubic-bezier(0.2, 0.8, 0.2, 1),
+              transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* === Stagger Animation Delays === */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.2s; }
+.stagger-5 { animation-delay: 0.25s; }
+
+/* === Smooth Layout Shift Prevention === */
 .layout-container {
   contain: layout;
   will-change: transform, opacity;
@@ -47,7 +114,13 @@
   will-change: transform, opacity;
 }
 
-/* Additional utility classes for transitions */
+/* === Backdrop Blur Transition === */
+.backdrop-transition {
+  transition: backdrop-filter 0.3s cubic-bezier(0.2, 0.8, 0.2, 1),
+              background-color 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* === Utility Classes === */
 .transition-smooth {
   transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -56,7 +129,140 @@
   transition: all 0.5s cubic-bezier(0.32, 1.5, 0.5, 1);
 }
 
+.transition-spring {
+  transition: all 0.4s cubic-bezier(0.26, 0.86, 0.32, 1.2);
+}
+
 /* Prevent scroll during transition */
 .transitioning {
   overflow: hidden;
+}
+
+/* === iOS-style Pop Animation === */
+@keyframes ios-pop {
+  0% {
+    transform: scale(0.9);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.02);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-ios-pop {
+  animation: ios-pop 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+/* === Glass Bloom Animation === */
+@keyframes glassBloom {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+    filter: blur(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+/* === Fade In Animation === */
+@keyframes fade-in {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out forwards;
+}
+
+/* === Scale In Animation === */
+@keyframes scale-in {
+  0% {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-scale-in {
+  animation: scale-in 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+/* === Slide Up Animation === */
+@keyframes slide-up {
+  0% {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+/* === Message Bubble Animations === */
+@keyframes message-pop {
+  0% {
+    transform: scale(0.9) translateY(10px);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.02);
+  }
+  100% {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-message-pop {
+  animation: message-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* === Glow Effects === */
+.text-glow {
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.5),
+               0 0 20px rgba(255, 255, 255, 0.3),
+               0 0 30px rgba(255, 255, 255, 0.1);
+}
+
+.primary-glow {
+  box-shadow: 0 0 10px rgba(244, 63, 94, 0.5),
+              0 0 20px rgba(244, 63, 94, 0.3),
+              0 0 30px rgba(244, 63, 94, 0.1);
+}
+
+/* === Hardware Acceleration === */
+.hw-accel {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+/* === Reduced Motion === */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

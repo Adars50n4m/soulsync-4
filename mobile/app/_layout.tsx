@@ -2,17 +2,27 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { View, ActivityIndicator, Platform, AppState, AppStateStatus } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { AppProvider, useApp } from '../context/AppContext';
-import { View } from 'react-native';
+import { AppContext, AppProvider } from '../context/AppContext';
 import PipOverlay from '../components/PipOverlay';
 import { IncomingCallModal } from '../components/IncomingCallModal';
 import '../global.css';
+import { useContext } from 'react';
 
 function RootContent() {
-  const { activeCall, currentUser, isReady } = useApp();
+  const context = useContext(AppContext);
   const router = useRouter();
   const segments = useSegments();
+
+  if (!context) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#BC002A" />
+      </View>
+    );
+  }
+  const { activeCall, currentUser, isReady } = context;
 
     // --- AUTH GUARD ---
     useEffect(() => {
@@ -64,16 +74,11 @@ function RootContent() {
           headerShown: false
         }} />
         <Stack.Screen name="chat/[id]" options={{
-          // Use a real transition so Reanimated sharedTransitionTag can run
-          // between the chat-list pill and the chat header pill.
           presentation: 'card',
-          // Disable screen-level animation; let the shared-element morph be the animation.
-          animation: 'none',
+          animation: 'ios_from_right',
           headerShown: false,
           gestureEnabled: true,
-          // Keep the previous screen mounted during the transition so the shared element
-          // can be captured and morphed smoothly.
-          contentStyle: { backgroundColor: 'transparent' },
+          contentStyle: { backgroundColor: '#000' },
         }} />
         <Stack.Screen name="profile-edit" options={{
           presentation: 'card',

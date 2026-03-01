@@ -290,7 +290,7 @@ const MessageBubble = React.memo(({
                 {msg.reactions && msg.reactions.length > 0 && (
                     <View style={[ChatStyles.reactionsRow, isMe ? ChatStyles.reactionsRight : ChatStyles.reactionsLeft]}>
                         {msg.reactions.map((r, idx) => (
-                            <BlurView key={idx} intensity={40} tint="dark" style={ChatStyles.reactionPill}>
+                            <BlurView key={idx} intensity={40} tint="dark" style={ChatStyles.reactionPill} experimentalBlurMethod="dimezisBlurView">
                                 <Text style={ChatStyles.reactionEmoji}>{r}</Text>
                             </BlurView>
                         ))}
@@ -386,7 +386,7 @@ const MessageBubble = React.memo(({
                     {msg.reactions && msg.reactions.length > 0 && (
                         <View style={[ChatStyles.reactionsRow, isMe ? ChatStyles.reactionsRight : ChatStyles.reactionsLeft]}>
                             {msg.reactions.map((r, idx) => (
-                                <BlurView key={idx} intensity={40} tint="dark" style={ChatStyles.reactionPill}>
+                                <BlurView key={idx} intensity={40} tint="dark" style={ChatStyles.reactionPill} experimentalBlurMethod="dimezisBlurView">
                                     <Text style={ChatStyles.reactionEmoji}>{r}</Text>
                                 </BlurView>
                             ))}
@@ -400,7 +400,9 @@ const MessageBubble = React.memo(({
   if (prevProps.msg?.id !== nextProps.msg?.id) return false;
   if (prevProps.msg?.text !== nextProps.msg?.text) return false;
   if (prevProps.msg?.status !== nextProps.msg?.status) return false;
-  if (prevProps.msg?.reactions?.length !== nextProps.msg?.reactions?.length) return false;
+  const prevReactions = (prevProps.msg?.reactions || []).join('|');
+  const nextReactions = (nextProps.msg?.reactions || []).join('|');
+  if (prevReactions !== nextReactions) return false;
   if (prevProps.isSelected !== nextProps.isSelected) return false;
   if (prevProps.isClone !== nextProps.isClone) return false;
   if (prevProps.quotedMessage?.id !== nextProps.quotedMessage?.id) return false;

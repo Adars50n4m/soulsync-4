@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Pressable, Image, Modal, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Image, Modal, Dimensions, Platform } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
@@ -44,7 +44,7 @@ const FullPlayerModal: React.FC<FullPlayerModalProps> = ({ visible, onClose }) =
 
     return (
         <Modal visible={visible} animationType="slide" transparent>
-            <BlurView intensity={100} tint="dark" style={styles.fullPlayerContainer}>
+            <BlurView intensity={Platform.OS === 'android' ? 150 : 100} tint="dark" style={styles.fullPlayerContainer} experimentalBlurMethod="dimezisBlurView">
                 <View style={styles.fullPlayerHeader}>
                     <Pressable onPress={onClose} style={styles.chevronDown}>
                         <MaterialIcons name="keyboard-arrow-down" size={32} color="#fff" />
@@ -97,6 +97,8 @@ const styles = StyleSheet.create({
     fullPlayerContainer: {
         flex: 1,
         paddingTop: 60,
+        // Android: translucent backing lets dimezis blur show through; iOS uses native material
+        ...(Platform.OS === 'android' && { backgroundColor: 'rgba(10, 10, 12, 0.4)' }),
     },
     fullPlayerHeader: {
         flexDirection: 'row',

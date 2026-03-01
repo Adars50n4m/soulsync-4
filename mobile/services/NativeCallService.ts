@@ -14,7 +14,7 @@
  * Install: npx expo install react-native-callkeep
  */
 
-import { Platform, AppState, AppStateStatus } from 'react-native';
+import { Platform, AppState, AppStateStatus, NativeModules } from 'react-native';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -44,15 +44,22 @@ export type NativeCallEventHandler = (action: NativeCallAction, callId: string, 
  * 
  * For development without the package, set NATIVE_CALLING_ENABLED = false.
  */
-const NATIVE_CALLING_ENABLED = true; // Set to true after installing react-native-callkeep
+const NATIVE_CALLING_ENABLED = true;
 
 function loadCallKeep(): any {
   if (!NATIVE_CALLING_ENABLED) return null;
+  
+  // Defensive check: RNCallKeep MUST exist in NativeModules to avoid fatal crash on require
+  if (!NativeModules.RNCallKeep) {
+    console.log('[NativeCallService] RNCallKeep native module not found in binary');
+    return null;
+  }
+
   try {
     // Uncomment the line below AFTER running: npx expo install react-native-callkeep
     return require('react-native-callkeep').default;
   } catch (e) {
-    console.log('[NativeCallService] react-native-callkeep not available');
+    console.log('[NativeCallService] react-native-callkeep JS loading failed');
     return null;
   }
 }
@@ -112,9 +119,9 @@ class NativeCallService {
 
       if (Platform.OS === 'android') {
         this.RNCallKeep.setAvailable(true);
-        this.RNCallKeep.registerPhoneAccount();
-        this.RNCallKeep.registerAndroidEvents();
-        this.RNCallKeep.canMakeMultipleCalls(false);
+        this.RNCallKeep.registerPhoneAccount?.();
+        this.RNCallKeep.registerAndroidEvents?.();
+        this.RNCallKeep.canMakeMultipleCalls?.(false);
       }
 
       this.registerEventListeners();
@@ -126,7 +133,7 @@ class NativeCallService {
     } catch (error) {
       this.initialized = true; // Still marked as initialized to avoid re-entry
       this.isReady = false;
-      console.error('[NativeCallService] Setup failed:', error);
+      console.warn('[NativeCallService] Setup failed (non-fatal):', error);
     }
   }
 

@@ -7,6 +7,7 @@ import {
 import { FlashList } from '@shopify/flash-list';
 
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -32,7 +33,6 @@ import Animated, {
     withDelay,
     withRepeat,
     withSequence,
-    runOnJS,
     interpolate,
     interpolateColor,
     Extrapolation,
@@ -178,6 +178,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const sourceY = propsSourceY ?? (paramsSourceY ? Number(Array.isArray(paramsSourceY) ? paramsSourceY[0] : paramsSourceY) : undefined);
     
     const router = useRouter();
+    const isFocused = useIsFocused();
     const { contacts, messages, sendChatMessage, startCall, activeCall, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers } = useApp();
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
@@ -283,14 +284,19 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
 	
+    const isNavigatingRef = useRef(false);
+
     // Animate OUT — butter smooth unified morph back to pill
-        const handleBack = useCallback(() => {
+    const handleBack = useCallback(() => {
+        if (isNavigatingRef.current) return;
+        
         if (selectionMode) {
             setSelectionMode(false);
             setSelectedMessageIds([]);
             return;
         }
 
+        isNavigatingRef.current = true;
         if (onBackStart) onBackStart();
 
         // Content fades out quickly for smoother perceived transition
@@ -299,15 +305,41 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             easing: Easing.out(Easing.quad),
         });
 
+        // Close transient overlays before navigating back to avoid stale touch blockers.
+        setShowCallModal(false);
+        setSelectedContextMessage(null);
+        setShowMediaPicker(false);
+        setMediaPreview(null);
+        setMediaCollection(null);
+        setMediaViewer(null);
+
         // Use native navigation goBack to trigger shared transition OUT
         if (onBack) {
-            runOnJS(onBack)();
+            onBack();
         } else if (navigation.canGoBack()) {
-            runOnJS(navigation.goBack)();
+            navigation.goBack();
         } else {
             console.warn('Navigation: Cannot go back');
+            isNavigatingRef.current = false;
         }
     }, [onBackStart, onBack, navigation, chatBodyOpacity, selectionMode]);
+
+    // Defensive cleanup: if the screen blurs/unmounts while an overlay is open,
+    // ensure it cannot keep intercepting touches above the list screen.
+    useFocusEffect(
+        useCallback(() => {
+            return () => {
+                setShowCallModal(false);
+                setSelectedContextMessage(null);
+                setShowMediaPicker(false);
+                setMediaPreview(null);
+                setMediaCollection(null);
+                setMediaViewer(null);
+                setSelectionMode(false);
+                setSelectedMessageIds([]);
+            };
+        }, [])
+    );
 
     // Animation Values
     const plusRotation = useSharedValue(0);
@@ -882,7 +914,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         const result = await ImagePicker.launchCameraAsync({
             mediaTypes: ImagePicker.MediaTypeOptions.All,
             quality: 0.8,
-            allowsEditing: false,
+            allowsEditing: true,
             videoMaxDuration: 120,
         });
         if (!result.canceled && result.assets[0]) {
@@ -898,7 +930,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         const result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ImagePicker.MediaTypeOptions.All,
             quality: 0.8,
-            allowsEditing: false,
+            allowsEditing: true,
             videoMaxDuration: 120,
         });
         if (!result.canceled && result.assets[0]) {
@@ -956,7 +988,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     }
 
     return (
-        <View style={styles.container}>
+        <View style={styles.container} pointerEvents={isFocused ? 'auto' : 'none'}>
             <StatusBar barStyle="light-content" />
 
             {/* Screen Background — always solid black so there's never a transparent flash */}
@@ -1012,7 +1044,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                         <Animated.View style={[styles.inputArea, inputAreaAnimatedStyle]}>
                         {/* Reply Preview */}
                         {replyingTo && (
-                            <BlurView intensity={60} tint="dark" style={styles.replyPreview}>
+                            <BlurView intensity={60} tint="dark" style={styles.replyPreview} experimentalBlurMethod="dimezisBlurView">
                                 <View style={styles.replyContent}>
                                     <View style={[ChatStyles.quoteBar, { backgroundColor: activeTheme.primary }]} />
                                     <View style={styles.replyTextContainer}>
@@ -1027,7 +1059,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                         )}
                         {/* Unified Pill Container */}
                         <View style={styles.unifiedPillContainer}>
-                            <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
+                            <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} experimentalBlurMethod="dimezisBlurView" />
                             
                             {/* Expandable Options Menu - Now above inputWrapper to open upwards */}
                             <Animated.View style={[styles.optionsMenu, animatedOptionsStyle]}>
@@ -1168,7 +1200,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             <View style={[StyleSheet.absoluteFill, { zIndex: 2 }]} pointerEvents="box-none">
                 {/* The Morph Target: Solid pill background — NO CHILDREN, opacity always 1 */}
                 <Animated.View
-                    {...{ sharedTransitionTag: `chat-pill-${id}` } as any}
                     style={[styles.headerPill, { position: 'absolute', top: HEADER_PILL_TOP, left: 16, right: 16, height: HEADER_PILL_HEIGHT, backgroundColor: 'rgba(30, 30, 35, 0.4)', borderRadius: HEADER_PILL_RADIUS, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.06)', zIndex: 0 }]}
                 />
 
@@ -1177,7 +1208,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                     pointerEvents="none"
                     style={[styles.headerGlass, { position: 'absolute', top: HEADER_PILL_TOP, left: 16, right: 16, height: HEADER_PILL_HEIGHT, borderRadius: HEADER_PILL_RADIUS, zIndex: 1 }]}
                 >
-                    <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
+                    <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} experimentalBlurMethod="dimezisBlurView" />
                 </View>
 
                     {/* Original Header Content - Rendered exactly over the morph bounds as an absolute overlay */}
@@ -1204,7 +1235,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
                             <Pressable style={styles.avatarWrapper} onPress={() => router.push(`/profile/${contact.id}` as any)}>
                                 <Animated.Image
-                                    {...{ sharedTransitionTag: `chat-avatar-${id}` } as any}
                                     source={{ uri: contact.avatar }}
                                     style={styles.avatar}
                                 />
@@ -1284,7 +1314,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             }
                         ]}
                     >
-                        <BlurView intensity={100} tint="dark" style={styles.callDropdownBlur}>
+                        <BlurView intensity={100} tint="dark" style={styles.callDropdownBlur} experimentalBlurMethod="dimezisBlurView">
                             <Pressable style={styles.callDropdownItem} onPress={() => handleCall('audio')}>
                                 <View style={[styles.callDropdownIcon, { backgroundColor: 'rgba(34, 197, 94, 0.15)' }]}>
                                     <MaterialIcons name="call" size={20} color="#22c55e" />

@@ -5,9 +5,14 @@
  * Supports both Objective-C and Swift AppDelegate.
  */
 
-const { withInfoPlist, withEntitlementsPlist, withAppDelegate, withDangerousMod } = require('expo/config-plugins');
+const { withInfoPlist, withEntitlementsPlist, withAppDelegate, withDangerousMod, withPlugins } = require('expo/config-plugins');
 
 function withCallKitPlugin(config) {
+  // Only apply on iOS
+  if (config.platform !== 'ios') {
+    return config;
+  }
+
   // Step 1: Add VoIP background mode to Info.plist
   config = withInfoPlist(config, (config) => {
     const bgModes = config.modResults.UIBackgroundModes || [];

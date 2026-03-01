@@ -26,25 +26,31 @@ export const checkRealtimeConnectivity = async (): Promise<{ ok: boolean; error?
     console.log(`[Supabase] Testing realtime connectivity: ${realtimeUrl}`);
     
     return new Promise((resolve) => {
-        const ws = new WebSocket(realtimeUrl);
-        const timeout = setTimeout(() => {
-            ws.close();
-            console.warn('[Supabase] Realtime connectivity check timed out');
-            resolve({ ok: false, error: 'Connection timed out' });
-        }, 10000);
+        try {
+            const ws = new WebSocket(realtimeUrl);
+            const timeout = setTimeout(() => {
+                ws.close();
+                console.warn('[Supabase] Realtime connectivity check timed out');
+                resolve({ ok: false, error: 'Connection timed out' });
+            }, 10000);
 
-        ws.onopen = () => {
-            clearTimeout(timeout);
-            ws.close();
-            console.log('[Supabase] ✅ Realtime endpoint is reachable');
-            resolve({ ok: true });
-        };
+            ws.onopen = () => {
+                clearTimeout(timeout);
+                ws.close();
+                console.log('[Supabase] ✅ Realtime endpoint is reachable');
+                resolve({ ok: true });
+            };
 
-        ws.onerror = () => {
-            clearTimeout(timeout);
-            console.warn('[Supabase] ❌ Realtime endpoint unreachable');
-            resolve({ ok: false, error: 'WebSocket connection failed' });
-        };
+            ws.onerror = (e) => {
+                clearTimeout(timeout);
+                try { ws.close(); } catch (err) {}
+                console.warn('[Supabase] ❌ Realtime endpoint unreachable:', e);
+                resolve({ ok: false, error: 'WebSocket connection failed' });
+            };
+        } catch (e) {
+            console.warn('[Supabase] ❌ WebSocket initialization failed:', e);
+            resolve({ ok: false, error: 'WebSocket initialization failed' });
+        }
     });
 };
 

@@ -20,10 +20,10 @@ export default function LoginScreen() {
     const [showPassword, setShowPassword] = useState(false);
 
     // Animations
-    const fadeAnim = useRef(new Animated.Value(0)).current;
-    const slideAnim = useRef(new Animated.Value(50)).current;
-    const pulseAnim = useRef(new Animated.Value(1)).current;
-    const shakeAnim = useRef(new Animated.Value(0)).current;
+    const fadeAnimRef = useRef(new Animated.Value(0));
+    const slideAnimRef = useRef(new Animated.Value(50));
+    const pulseAnimRef = useRef(new Animated.Value(1));
+    const shakeAnimRef = useRef(new Animated.Value(0));
 
     useEffect(() => {
         // If already logged in, redirect
@@ -34,12 +34,12 @@ export default function LoginScreen() {
 
         // Entry animations
         Animated.parallel([
-            Animated.timing(fadeAnim, {
+            Animated.timing(fadeAnimRef.current, {
                 toValue: 1,
                 duration: 800,
                 useNativeDriver: true,
             }),
-            Animated.spring(slideAnim, {
+            Animated.spring(slideAnimRef.current, {
                 toValue: 0,
                 tension: 50,
                 friction: 8,
@@ -50,12 +50,12 @@ export default function LoginScreen() {
         // Pulse animation for logo
         Animated.loop(
             Animated.sequence([
-                Animated.timing(pulseAnim, {
+                Animated.timing(pulseAnimRef.current, {
                     toValue: 1.05,
                     duration: 2000,
                     useNativeDriver: true,
                 }),
-                Animated.timing(pulseAnim, {
+                Animated.timing(pulseAnimRef.current, {
                     toValue: 1,
                     duration: 2000,
                     useNativeDriver: true,
@@ -66,10 +66,10 @@ export default function LoginScreen() {
 
     const shake = () => {
         Animated.sequence([
-            Animated.timing(shakeAnim, { toValue: 10, duration: 50, useNativeDriver: true }),
-            Animated.timing(shakeAnim, { toValue: -10, duration: 50, useNativeDriver: true }),
-            Animated.timing(shakeAnim, { toValue: 10, duration: 50, useNativeDriver: true }),
-            Animated.timing(shakeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
+            Animated.timing(shakeAnimRef.current, { toValue: 10, duration: 50, useNativeDriver: true }),
+            Animated.timing(shakeAnimRef.current, { toValue: -10, duration: 50, useNativeDriver: true }),
+            Animated.timing(shakeAnimRef.current, { toValue: 10, duration: 50, useNativeDriver: true }),
+            Animated.timing(shakeAnimRef.current, { toValue: 0, duration: 50, useNativeDriver: true }),
         ]).start();
     };
 
@@ -101,10 +101,10 @@ export default function LoginScreen() {
                     style={[
                         styles.formContainer,
                         {
-                            opacity: fadeAnim,
+                            opacity: fadeAnimRef.current,
                             transform: [
-                                { translateY: slideAnim },
-                                { translateX: shakeAnim }
+                                { translateY: slideAnimRef.current },
+                                { translateX: shakeAnimRef.current }
                             ]
                         }
                     ]}
@@ -115,7 +115,7 @@ export default function LoginScreen() {
                     </View>
 
                     {/* Login Form */}
-                    <BlurView intensity={40} tint="dark" style={styles.formCard}>
+                    <BlurView intensity={40} tint="dark" style={styles.formCard} experimentalBlurMethod="dimezisBlurView">
                         <View style={styles.inputContainer}>
                             <MaterialIcons name="person" size={20} color="rgba(255,255,255,0.4)" />
                             <TextInput

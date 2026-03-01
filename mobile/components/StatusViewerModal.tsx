@@ -14,15 +14,18 @@ import {
   Platform,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
-import { MaterialIcons } from '@expo/vector-icons';
+import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ProgressiveBlur from './chat/ProgressiveBlur';
 import Animated, { 
   useSharedValue, 
   useAnimatedStyle, 
-  withTiming, 
-  runOnJS, 
-  Easing, 
-  cancelAnimation 
+  withTiming,
+  withSpring,
+  withSequence,
+  runOnJS,
+  Easing,
+  cancelAnimation
 } from 'react-native-reanimated';
 import { Story } from '../types';
 import { useApp } from '../context/AppContext';
@@ -44,24 +47,28 @@ interface StatusViewerModalProps {
   onComplete: () => void;
 }
 
-const ProgressBar = ({ index, currentIndex, duration, onComplete }: { index: number, currentIndex: number, duration: number, onComplete: () => void }) => {
+const ProgressBar = ({ index, currentIndex, duration, onComplete, paused }: { index: number, currentIndex: number, duration: number, onComplete: () => void, paused: boolean }) => {
   const progress = useSharedValue(0);
 
   useEffect(() => {
     if (index === currentIndex) {
-      progress.value = 0;
-      progress.value = withTiming(1, { duration: duration * 1000, easing: Easing.linear }, (finished) => {
-        if (finished) {
-          runOnJS(onComplete)();
-        }
-      });
+      if (paused) {
+        cancelAnimation(progress);
+      } else {
+        const remaining = (1 - progress.value) * duration * 1000;
+        progress.value = withTiming(1, { duration: remaining, easing: Easing.linear }, (finished) => {
+          if (finished) {
+            runOnJS(onComplete)();
+          }
+        });
+      }
     } else if (index < currentIndex) {
       progress.value = 1;
     } else {
       progress.value = 0;
     }
     return () => cancelAnimation(progress);
-  }, [currentIndex, index]);
+  }, [currentIndex, index, paused, duration, onComplete]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     width: `${progress.value * 100}%`,
@@ -88,11 +95,20 @@ export const StatusViewerModal = ({
   onClose,
   onComplete,
 }: StatusViewerModalProps) => {
-  const { activeTheme } = useApp();
+  const { activeTheme, contacts, currentUser } = useApp();
   const insets = useSafeAreaInsets();
   const [currentIndex, setCurrentIndex] = useState(0);
   const [replyText, setReplyText] = useState('');
   const [mediaLoadFailed, setMediaLoadFailed] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [isUIVisible, setIsUIVisible] = useState(true);
+  const [isLongPressActive, setIsLongPressActive] = useState(false);
+  const [isLiked, setIsLiked] = useState(false);
+  const [showViewers, setShowViewers] = useState(false);
+  
+  const heartScale = useSharedValue(1);
+  const viewersTranslateY = useSharedValue(height);
+  const backdropOpacity = useSharedValue(0);
   const currentStory = stories[currentIndex];
   const isOwnStatus = !!currentUserId && statusOwnerId === currentUserId;
 
@@ -101,13 +117,17 @@ export const StatusViewerModal = ({
       setCurrentIndex(0);
       setReplyText('');
       setMediaLoadFailed(false);
-       // Hide status bar on Android/iOS if possible for immersion
+      setShowViewers(false);
+      viewersTranslateY.value = height;
+      backdropOpacity.value = 0;
     }
   }, [visible]);
 
   useEffect(() => {
     setMediaLoadFailed(false);
-  }, [currentStory?.id]);
+    // Sync liked state with current story
+    setIsLiked(currentStory?.likes?.includes(currentUserId || '') || false);
+  }, [currentStory?.id, currentUserId]);
 
   useEffect(() => {
     if (visible && currentStory?.id && onStorySeen) {
@@ -130,6 +150,50 @@ export const StatusViewerModal = ({
       // Create a restart feel or do nothing
        setCurrentIndex(0);
     }
+  };
+
+  const handleHeartPress = () => {
+    const nextState = !isLiked;
+    setIsLiked(nextState);
+    if (onReact) onReact(currentStory.id);
+
+    // Bouncy heart pop animation
+    heartScale.value = withSequence(
+      withSpring(1.4, { damping: 10, stiffness: 100 }),
+      withSpring(1, { damping: 12, stiffness: 120 })
+    );
+  };
+
+  const heartAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: heartScale.value }],
+  }));
+
+  const viewersAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: viewersTranslateY.value }],
+  }));
+
+  const backdropAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: backdropOpacity.value,
+  }));
+
+  const toggleViewers = (show: boolean) => {
+    setShowViewers(show);
+    setIsPaused(show);
+    
+    viewersTranslateY.value = withTiming(show ? 0 : height, {
+      duration: 350,
+      easing: Easing.out(Easing.quad),
+    });
+    
+    backdropOpacity.value = withTiming(show ? 1 : 0, { duration: 300 });
+  };
+
+  const getViewerDetails = (userIds: string[] = []) => {
+    return userIds.map(id => {
+      if (id === currentUser?.id) return { id: currentUser.id, name: currentUser.name, avatar: currentUser.avatar };
+      const contact = contacts.find(u => u.id === id);
+      return contact || { id, name: 'Unknown User', avatar: '' };
+    });
   };
 
   if (!visible || !currentStory) return null;
@@ -164,18 +228,35 @@ export const StatusViewerModal = ({
     }
   };
 
+  const handlePause = () => {
+    setIsPaused(true);
+    setIsUIVisible(false);
+  };
+
+  const handleResume = () => {
+    setIsPaused(false);
+    setIsUIVisible(true);
+  };
+
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
       <View style={styles.container}>
         <RNStatusBar hidden />
         
-        <BlurView intensity={24} tint="dark" style={StyleSheet.absoluteFill} />
+        <BlurView intensity={24} tint="dark" style={StyleSheet.absoluteFill} experimentalBlurMethod="dimezisBlurView" />
+        
+        {isUIVisible && (
+          <>
+            <ProgressiveBlur position="top" height={220} intensity={400} />
+            <ProgressiveBlur position="bottom" height={350} intensity={400} />
+          </>
+        )}
 
         {/* Main Content */}
         <View
           style={[
             styles.contentContainer,
-            { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 20 },
+            { paddingTop: insets.top, paddingBottom: insets.bottom + 20 },
           ]}
         >
           {currentStory.type === 'image' && !mediaLoadFailed && (
@@ -208,7 +289,7 @@ export const StatusViewerModal = ({
         </View>
 
         {/* Overlay UI */}
-        <SafeAreaView style={styles.overlay}>
+        <SafeAreaView style={[styles.overlay, { opacity: isUIVisible ? 1 : 0 }]} pointerEvents={isUIVisible ? 'auto' : 'none'}>
              {/* Progress Bars */}
              <View style={styles.progressContainer}>
                 {stories.map((story, index) => (
@@ -218,6 +299,7 @@ export const StatusViewerModal = ({
                         currentIndex={currentIndex} 
                         duration={story.duration || 10} 
                         onComplete={handleNext}
+                        paused={isPaused}
                     />
                 ))}
             </View>
@@ -226,72 +308,163 @@ export const StatusViewerModal = ({
             <View style={[styles.header, { paddingTop: Math.max(0, insets.top - 160) }]}>
                 <View style={styles.userInfo}>
                     <Image source={{ uri: contactAvatar }} style={styles.avatar} />
-                    <Text style={styles.userName}>{contactName}</Text>
-                    <Text style={styles.timestamp}>{formatStoryTime(currentStory.timestamp)}</Text>
+                    <View style={styles.userTextInfo}>
+                      <Text style={styles.userName}>{contactName}</Text>
+                      <View style={styles.metaRow}>
+                        <Text style={styles.timestamp}>{formatStoryTime(currentStory.timestamp)}</Text>
+                        {!!currentStory.music && (
+                          <>
+                            <Text style={styles.metaDivider}> • </Text>
+                            <Ionicons name="musical-notes" size={12} color="rgba(255,255,255,0.6)" />
+                            <Text style={styles.musicText} numberOfLines={1}>
+                              {currentStory.music.artist} {currentStory.music.name}
+                            </Text>
+                            <MaterialIcons name="chevron-right" size={16} color="rgba(255,255,255,0.6)" />
+                          </>
+                        )}
+                      </View>
+                    </View>
                 </View>
                 <View style={styles.headerActions}>
-                  {isOwnStatus && (
-                    <Pressable
-                      onPress={() => onDeleteStory?.(currentStory.id)}
-                      style={styles.iconButton}
-                    >
-                      <MaterialIcons name="delete-outline" size={22} color="#fff" />
-                    </Pressable>
-                  )}
+                  <Pressable style={styles.iconButton}>
+                    <MaterialIcons name="more-horiz" size={24} color="#fff" />
+                  </Pressable>
                   <Pressable onPress={onClose} style={styles.iconButton}>
                     <MaterialIcons name="close" size={24} color="#fff" />
                   </Pressable>
                 </View>
             </View>
+
+            {/* Floating Music Art */}
+            {!!currentStory.music && (
+              <View style={styles.floatingMusicContainer}>
+                <Image source={{ uri: currentStory.music.image }} style={styles.floatingMusicArt} />
+                <View style={styles.musicVinyl}>
+                   <View style={styles.musicVinylCenter} />
+                </View>
+              </View>
+            )}
         </SafeAreaView>
 
         {/* Touch Navigation Overlay */}
         <View style={[styles.touchOverlay, { bottom: insets.bottom + 188 }]}>
-            <Pressable style={styles.touchLeft} onPress={handlePrev} />
-            <Pressable style={styles.touchRight} onPress={handleNext} />
+            <Pressable 
+              style={styles.touchLeft} 
+              onPress={handlePrev} 
+              onLongPress={handlePause}
+              onPressOut={handleResume}
+              delayLongPress={300}
+            />
+            <Pressable 
+              style={styles.touchRight} 
+              onPress={handleNext} 
+              onLongPress={handlePause}
+              onPressOut={handleResume}
+              delayLongPress={300}
+            />
         </View>
 
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           keyboardVerticalOffset={Platform.OS === 'ios' ? insets.bottom + 4 : 0}
-          style={[styles.bottomContainer, { paddingBottom: insets.bottom + 34 }]}
+          style={[styles.bottomContainer, { paddingBottom: insets.bottom + 12, opacity: isUIVisible ? 1 : 0 }]}
+          pointerEvents={isUIVisible ? 'auto' : 'none'}
         >
           {!!currentStory.caption && (
-            <Text style={styles.captionText}>{currentStory.caption}</Text>
+            <View style={styles.captionContainer}>
+              <Text style={styles.captionText}>{currentStory.caption}</Text>
+              <View style={styles.captionDivider} />
+            </View>
           )}
 
-          <View style={styles.reactionRow}>
-            {['❤️', '😍', '🔥', '😂'].map(emoji => (
-              <Pressable
-                key={emoji}
-                style={[styles.emojiChip, { borderColor: `${activeTheme.primary}66` }]}
-                onPress={() => onReact?.(currentStory.id)}
+          <View style={styles.bottomActionsRow}>
+            {isOwnStatus ? (
+              <Pressable 
+                style={styles.viewsIndicator}
+                onPress={() => toggleViewers(true)}
               >
-                <Text style={styles.emojiText}>{emoji}</Text>
+                <Ionicons name="chevron-up" size={20} color="#fff" />
+                <Text style={styles.viewsCountText}>{currentStory.views?.length || 0} views</Text>
               </Pressable>
-            ))}
-          </View>
-
-          <View style={styles.replyRow}>
-            <View style={styles.replyInputWrap}>
-              <TextInput
-                value={replyText}
-                onChangeText={setReplyText}
-                placeholder="Reply"
-                placeholderTextColor="rgba(255,255,255,0.55)"
-                style={styles.replyInput}
-                returnKeyType="send"
-                onSubmitEditing={handleReplySend}
-              />
-            </View>
-            <Pressable
-              style={[styles.sendButton, { backgroundColor: activeTheme.primary, borderColor: `${activeTheme.primary}CC` }]}
-              onPress={handleReplySend}
-            >
-              <MaterialIcons name="send" size={20} color="#ffffff" />
-            </Pressable>
+            ) : (
+              <>
+                <View style={styles.replyInputWrap}>
+                  <TextInput
+                    value={replyText}
+                    onChangeText={setReplyText}
+                    placeholder="Reply"
+                    placeholderTextColor="rgba(255,255,255,0.7)"
+                    style={styles.replyInput}
+                    returnKeyType="send"
+                    onSubmitEditing={handleReplySend}
+                  />
+                </View>
+                <Pressable
+                  style={styles.heartButton}
+                  onPress={handleHeartPress}
+                >
+                  <Animated.View style={heartAnimatedStyle}>
+                    <Ionicons 
+                      name={isLiked ? "heart" : "heart-outline"} 
+                      size={26} 
+                      color={isLiked ? "#FF3B81" : "#fff"} 
+                    />
+                  </Animated.View>
+                </Pressable>
+              </>
+            )}
           </View>
         </KeyboardAvoidingView>
+
+        {/* Viewers List Drawer */}
+        {isOwnStatus && (
+          <>
+            <Animated.View 
+              style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 90 }, backdropAnimatedStyle]} 
+              pointerEvents={showViewers ? 'auto' : 'none'}
+            >
+              <Pressable style={{ flex: 1 }} onPress={() => toggleViewers(false)} />
+            </Animated.View>
+            
+            <Animated.View style={[styles.viewersDrawer, viewersAnimatedStyle]}>
+              <View style={styles.drawerHeader}>
+                <View style={styles.drawerHandle} />
+                <View style={styles.drawerTitleRow}>
+                  <Text style={styles.drawerTitle}>Views</Text>
+                  <Pressable onPress={() => toggleViewers(false)}>
+                    <Ionicons name="close" size={24} color="#fff" />
+                  </Pressable>
+                </View>
+              </View>
+              
+              <View style={styles.viewersList}>
+                {currentStory.views && currentStory.views.length > 0 ? (
+                  currentStory.views.map((userId, idx) => {
+                    const user = userId === currentUser?.id ? currentUser : contacts.find(u => u.id === userId);
+                    const liked = currentStory.likes?.includes(userId);
+                    return (
+                      <View key={userId} style={styles.viewerItem}>
+                        <Image source={{ uri: user?.avatar }} style={styles.viewerAvatar} />
+                        <View style={styles.viewerInfo}>
+                          <Text style={styles.viewerName}>{user?.name || 'Anonymous'}</Text>
+                          <Text style={styles.viewerTime}>Just now</Text>
+                        </View>
+                        {liked && (
+                          <Ionicons name="heart" size={20} color="#FF3B81" />
+                        )}
+                      </View>
+                    );
+                  })
+                ) : (
+                  <View style={styles.emptyViewers}>
+                    <Ionicons name="eye-off-outline" size={48} color="rgba(255,255,255,0.2)" />
+                    <Text style={styles.emptyViewersText}>No views yet</Text>
+                  </View>
+                )}
+              </View>
+            </Animated.View>
+          </>
+        )}
 
       </View>
     </Modal>
@@ -307,8 +480,8 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingTop: 110,
-    paddingBottom: 220,
+    paddingTop: 60,
+    paddingBottom: 100,
     paddingHorizontal: 0,
     overflow: 'hidden',
   },
@@ -364,47 +537,107 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
+    zIndex: 20,
   },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 4,
   },
   userInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
+  },
+  userTextInfo: {
+    justifyContent: 'center',
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  metaDivider: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
+  },
+  musicText: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 13,
+    fontWeight: '600',
+    marginLeft: 4,
+    maxWidth: width * 0.4,
   },
   avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.3)',
   },
   userName: {
     color: '#fff',
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '700',
   },
   timestamp: {
     color: 'rgba(255,255,255,0.6)',
     fontSize: 13,
   },
+  floatingMusicContainer: {
+    position: 'absolute',
+    top: 100,
+    right: 20,
+    width: 64,
+    height: 64,
+    zIndex: 20,
+  },
+  floatingMusicArt: {
+    width: 54,
+    height: 54,
+    borderRadius: 4,
+    position: 'absolute',
+    top: 0,
+    right: 8,
+    zIndex: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+  },
+  musicVinyl: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#111',
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    zIndex: 1,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  musicVinylCenter: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#333',
+    position: 'absolute',
+    top: 17,
+    left: 17,
+  },
   iconButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.35)',
   },
   touchOverlay: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    bottom: 190,
+    bottom: 120,
     flexDirection: 'row',
     zIndex: 5,
   },
@@ -418,63 +651,164 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 22,
+    bottom: 0,
     paddingHorizontal: 16,
-    paddingBottom: 28,
     zIndex: 12,
+  },
+  captionContainer: {
+    marginBottom: 16,
+    alignItems: 'center',
   },
   captionText: {
     color: '#fff',
-    fontSize: 14,
+    fontSize: 18,
+    fontWeight: '600',
     textAlign: 'center',
-    marginBottom: 10,
+    marginBottom: 16,
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
-  reactionRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 10,
-    marginBottom: 8,
+  captionDivider: {
+    width: '100%',
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.2)',
   },
-  emojiChip: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
-  },
-  emojiText: {
-    fontSize: 21,
-  },
-  replyRow: {
+  bottomActionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
+    marginBottom: 12,
   },
   replyInputWrap: {
     flex: 1,
     borderRadius: 28,
     overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.18)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
+    borderColor: 'rgba(255,255,255,0.2)',
+    height: 54,
+    justifyContent: 'center',
   },
   replyInput: {
     color: '#fff',
-    fontSize: 15,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    fontSize: 16,
+    paddingHorizontal: 20,
   },
-  sendButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  heartButton: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.18)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.24)',
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  viewsIndicator: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'center',
+  },
+  viewsCountText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  viewersDrawer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: height * 0.45,
+    backgroundColor: '#1a1a1a',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    zIndex: 100,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 20,
+  },
+  drawerHeader: {
+    paddingTop: 12,
+    paddingBottom: 8,
+    alignItems: 'center',
+  },
+  drawerHandle: {
+    width: 36,
+    height: 4,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 2,
+    marginBottom: 16,
+  },
+  drawerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    paddingHorizontal: 20,
+    marginBottom: 12,
+  },
+  drawerTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  viewersList: {
+    flex: 1,
+    paddingHorizontal: 20,
+  },
+  viewerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
+  },
+  viewerAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  viewerAvatarSmall: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  viewerInfo: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  viewerName: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  viewerTime: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 13,
+    marginTop: 2,
+  },
+  emptyViewers: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingBottom: 40,
+    gap: 12,
+  },
+  emptyViewersText: {
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: 16,
+    fontWeight: '500',
   },
 });

@@ -1,24 +1,22 @@
-import React from 'react';
-import { View } from 'react-native';
+import { View, Platform, StyleSheet } from 'react-native';
 import { BlurView } from 'expo-blur';
 
 interface ProgressiveBlurProps {
     position?: 'top' | 'bottom';
     height?: number;
     intensity?: number;
-    steps?: number;
 }
+
+import { LinearGradient } from 'expo-linear-gradient';
 
 const ProgressiveBlur = ({
     position = 'top',
     height = 180,
     intensity = 300,
-    steps = 90,
 }: ProgressiveBlurProps) => {
-    // Progressive blur optimization:
-    // rendering dozens of BlurView layers is extremely expensive on the GPU.
-    // We reduce steps to 6-8 for a similar effect with 4x less overhead.
-    const blurSteps = Math.min(steps, 8); 
+    // 8 Layers of overlapping blur with feathered heights and low opacities
+    const blurLayers = 8; 
+    
     return (
         <View
             style={{
@@ -27,21 +25,31 @@ const ProgressiveBlur = ({
                 left: 0,
                 right: 0,
                 height,
-                zIndex: position === 'top' ? 90 : 50,
+                zIndex: 2,
                 overflow: 'hidden',
             }}
             pointerEvents="none"
         >
-            {Array.from({ length: blurSteps }).map((_, i) => {
-                const ratio = (i + 1) / blurSteps;
-                const layerHeight = height * ratio;
-                const fade = Math.pow(1 - ratio, 1.2);
-                const opacity = Math.max(0, Math.min(1, fade));
+            {/* 1. Base Gradient Smoothing (10 stops for professional transition) */}
+            <LinearGradient
+                colors={position === 'top' 
+                    ? ['rgba(0,0,0,0.8)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.2)', 'transparent'] 
+                    : ['transparent', 'rgba(0,0,0,0.2)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.8)']
+                }
+                locations={[0, 0.3, 0.6, 1]}
+                style={StyleSheet.absoluteFill}
+            />
+
+            {/* 2. Feathered Overlapping Blur Layers (The "Secret Sauce") */}
+            {Array.from({ length: blurLayers }).map((_, i) => {
+                const ratio = (i + 1) / blurLayers;
+                // We add a +20px "feather" to each layer's height to prevent sharp boundaries
+                const layerHeight = (height * ratio) + 20;
 
                 return (
                     <BlurView
                         key={i}
-                        intensity={intensity / 4} // Adjusted for fewer layers
+                        intensity={100} // Higher intensity but lower opacity for quality
                         tint="dark"
                         style={{
                             position: 'absolute',
@@ -49,11 +57,22 @@ const ProgressiveBlur = ({
                             left: 0,
                             right: 0,
                             height: layerHeight,
-                            opacity,
+                            opacity: (1 - ratio) * 0.15, // Gradually fading out as we move away from edge
                         }}
+                        experimentalBlurMethod="dimezisBlurView"
                     />
                 );
             })}
+
+            {/* 3. Final Multi-Stop Blend Pass */}
+            <LinearGradient
+                colors={position === 'top' 
+                    ? ['rgba(0,0,0,0.6)', 'rgba(0,0,0,0.3)', 'rgba(0,0,0,0.1)', 'transparent'] 
+                    : ['transparent', 'rgba(0,0,0,0.1)', 'rgba(0,0,0,0.3)', 'rgba(0,0,0,0.6)']
+                }
+                locations={[0, 0.2, 0.5, 1]}
+                style={StyleSheet.absoluteFill}
+            />
         </View>
     );
 };

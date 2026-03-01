@@ -161,13 +161,34 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
     const currentDisplayPosition = isSeeking ? seekPosition : position;
     const progressPercent = duration > 0 ? (currentDisplayPosition / duration) * 100 : 0;
 
+    const backdropOpacity = slideAnim.interpolate({
+        inputRange: [0, height * 0.5, height],
+        outputRange: [1, 0.5, 0],
+        extrapolate: 'clamp'
+    });
+
 
     if (!isOpen) return null;
 
     return (
         <Modal transparent visible={isOpen} animationType="none" onRequestClose={onClose}>
-            {/* Backdrop */}
-            <Pressable style={styles.backdrop} onPress={onClose} />
+            {/* Backdrop with Dynamic Transparency */}
+            <Animated.View style={[StyleSheet.absoluteFill, { opacity: backdropOpacity }]}>
+                {Platform.OS === 'ios' && (
+                    <BlurView 
+                        intensity={25} 
+                        tint="dark" 
+                        style={StyleSheet.absoluteFill}
+                    />
+                )}
+                <Pressable 
+                    style={[
+                        styles.backdrop, 
+                        Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.4)' }
+                    ]} 
+                    onPress={onClose} 
+                />
+            </Animated.View>
 
             {/* Overlay Panel (82% Height) */}
             <Animated.View style={[
@@ -175,7 +196,12 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                 { transform: [{ translateY: slideAnim }] },
                 keyboardVisible && { height: '100%', top: 100 } // Push to top when keyboard is open
             ]}>
-                <BlurView intensity={90} tint="dark" style={styles.glassContainer}>
+                <BlurView 
+                    intensity={Platform.OS === 'android' ? 95 : 90} 
+                    tint="dark" 
+                    style={styles.glassContainer} 
+                    experimentalBlurMethod="dimezisBlurView"
+                >
                     <KeyboardAvoidingView
                         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                         style={{ flex: 1 }}
@@ -248,7 +274,12 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
 
                             {/* Search Bar - Always Visible */}
                             <View style={[styles.searchContainer, keyboardVisible && { marginTop: 40 }]}>
-                                <BlurView intensity={30} tint="light" style={styles.searchInputWrapper}>
+                                <BlurView 
+                                    intensity={Platform.OS === 'android' ? 60 : 30} 
+                                    tint="light" 
+                                    style={styles.searchInputWrapper} 
+                                    experimentalBlurMethod="dimezisBlurView"
+                                >
                                     <MaterialIcons name="search" size={20} color="rgba(255,255,255,0.5)" style={{ marginRight: 10 }} />
                                     <TextInput
                                         style={styles.searchInput}
@@ -305,22 +336,31 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                             {/* Floating Tab Bar - Hide when typing */}
                             {!keyboardVisible && (
                                 <View style={styles.floatingTabsContainer}>
-                                    <BlurView intensity={40} tint="dark" style={styles.floatingTabs}>
-                                        <Pressable
-                                            style={[styles.tabItem, activeTab === 'favorites' && styles.tabItemActive]}
-                                            onPress={() => setActiveTab('favorites')}
-                                        >
-                                            <MaterialIcons name="favorite" size={18} color={activeTab === 'favorites' ? "#f43f5e" : "rgba(255,255,255,0.4)"} />
-                                            <Text style={[styles.tabText, activeTab === 'favorites' && styles.tabTextActive]}>Favorites</Text>
-                                        </Pressable>
-                                        <Pressable
-                                            style={[styles.tabItem, activeTab === 'music' && styles.tabItemActive]}
-                                            onPress={() => setActiveTab('music')}
-                                        >
-                                            <MaterialIcons name="library-music" size={18} color={activeTab === 'music' ? "#f43f5e" : "rgba(255,255,255,0.4)"} />
-                                            <Text style={[styles.tabText, activeTab === 'music' && styles.tabTextActive]}>Music</Text>
-                                        </Pressable>
-                                    </BlurView>
+                                    <View style={styles.floatingTabsWrapper}>
+                                        <BlurView 
+                                            intensity={Platform.OS === 'android' ? 80 : 40} 
+                                            tint="dark" 
+                                            style={StyleSheet.absoluteFill} 
+                                            experimentalBlurMethod="dimezisBlurView" 
+                                        />
+                                        <View style={styles.floatingTabsOverlay} />
+                                        <View style={styles.floatingTabsInner}>
+                                            <Pressable
+                                                style={[styles.tabItem, activeTab === 'favorites' && styles.tabItemActive]}
+                                                onPress={() => setActiveTab('favorites')}
+                                            >
+                                                <MaterialIcons name="favorite" size={18} color={activeTab === 'favorites' ? "#f43f5e" : "rgba(255,255,255,0.4)"} />
+                                                <Text style={[styles.tabText, activeTab === 'favorites' && styles.tabTextActive]}>Favorites</Text>
+                                            </Pressable>
+                                            <Pressable
+                                                style={[styles.tabItem, activeTab === 'music' && styles.tabItemActive]}
+                                                onPress={() => setActiveTab('music')}
+                                            >
+                                                <MaterialIcons name="library-music" size={18} color={activeTab === 'music' ? "#f43f5e" : "rgba(255,255,255,0.4)"} />
+                                                <Text style={[styles.tabText, activeTab === 'music' && styles.tabTextActive]}>Music</Text>
+                                            </Pressable>
+                                        </View>
+                                    </View>
                                 </View>
                             )}
 
@@ -354,7 +394,8 @@ const styles = StyleSheet.create({
     },
     glassContainer: {
         flex: 1,
-        backgroundColor: 'rgba(15, 15, 15, 0.92)', // Darker background as per HTML
+        // Both platforms: dark frosted glass backing
+        backgroundColor: Platform.OS === 'android' ? 'rgba(12, 12, 14, 0.75)' : 'rgba(15, 15, 15, 0.92)',
     },
     dragHandleContainer: {
         alignItems: 'center',
@@ -488,11 +529,11 @@ const styles = StyleSheet.create({
     searchInputWrapper: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: 'rgba(255, 255, 255, 0.1)', // Slightly more visible background
-        borderRadius: 12, // Less rounded, matching artwork style
+        backgroundColor: Platform.OS === 'android' ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.1)',
+        borderRadius: 12,
         paddingHorizontal: 16,
         paddingVertical: 12,
-        overflow: 'hidden', // Ensure blur is contained
+        overflow: 'hidden',
     },
     searchInput: {
         flex: 1,
@@ -567,15 +608,22 @@ const styles = StyleSheet.create({
         right: 0,
         alignItems: 'center',
     },
-    floatingTabs: {
-        flexDirection: 'row',
+    floatingTabsWrapper: {
+        width: '85%',
         borderRadius: 50,
-        padding: 5,
         overflow: 'hidden',
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.08)',
-        backgroundColor: 'rgba(20, 20, 20, 0.6)',
-        width: '85%',
+        borderColor: Platform.OS === 'android' ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.08)',
+        backgroundColor: Platform.OS === 'android' ? 'rgba(22, 22, 26, 0.5)' : 'transparent',
+    },
+    floatingTabsOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        // iOS: tint over real blur; Android: handled by wrapper backgroundColor
+        backgroundColor: Platform.OS === 'android' ? 'transparent' : 'rgba(20, 20, 20, 0.6)',
+    },
+    floatingTabsInner: {
+        flexDirection: 'row',
+        padding: 5,
     },
     tabItem: {
         flex: 1,

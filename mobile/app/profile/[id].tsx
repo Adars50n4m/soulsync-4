@@ -122,9 +122,13 @@ export default function ProfileScreen() {
         transform: [{ translateY: interpolate(morphProgress.value, [0, 1], [20, 0]) }]
     }));
 
-    const chatMessages = useMemo(() => 
-        (messages[id as string] || []).filter(m => m.media),
+    const allChatMessages = useMemo(() =>
+        (messages[id as string] || []),
     [messages, id]);
+
+    const chatMessages = useMemo(() =>
+        allChatMessages.filter(m => m.media),
+    [allChatMessages]);
 
     const categorizedMedia = useMemo(() => ({
         photos: chatMessages.filter(m => m.media?.type === 'image').map(m => m.media!),
@@ -306,9 +310,9 @@ export default function ProfileScreen() {
 
                     {/* Glassmorphism Stats Card */}
                     <View style={styles.glassStatsCard}>
-                        <BlurView intensity={20} tint="dark" style={styles.glassEffect}>
+                        <BlurView intensity={20} tint="dark" style={styles.glassEffect} experimentalBlurMethod="dimezisBlurView">
                             <View style={styles.statItem}>
-                                <Text style={styles.statValue}>{chatMessages.length}</Text>
+                                <Text style={styles.statValue}>{allChatMessages.length}</Text>
                                 <Text style={styles.statLabel}>MESSAGES</Text>
                             </View>
                             <View style={styles.statDivider} />
@@ -329,22 +333,22 @@ export default function ProfileScreen() {
                         <View style={styles.actionRow}>
                             <Pressable 
                                 style={styles.primaryGlassAction}
-                                onPress={() => router.push(`/chat/${profileUser.id}`)}
+                                onPress={handleClearChat}
                             >
-                                <BlurView intensity={30} tint="dark" style={styles.actionGlassEffect}>
-                                    <Ionicons name="chatbubble" size={20} color="#fff" />
-                                    <Text style={styles.actionText}>MESSAGE</Text>
+                                <BlurView intensity={30} tint="dark" style={styles.actionGlassEffect} experimentalBlurMethod="dimezisBlurView">
+                                    <MaterialIcons name="delete-sweep" size={20} color="#ff4444" />
+                                    <Text style={[styles.actionText, { color: '#ff4444' }]}>CLEAR ALL CHAT</Text>
                                 </BlurView>
                             </Pressable>
 
                             <Pressable style={styles.secondaryGlassAction}>
-                                <BlurView intensity={20} tint="dark" style={styles.actionGlassEffect}>
+                                <BlurView intensity={20} tint="dark" style={styles.actionGlassEffect} experimentalBlurMethod="dimezisBlurView">
                                     <Ionicons name="call" size={20} color="#fff" />
                                 </BlurView>
                             </Pressable>
 
                             <Pressable style={styles.secondaryGlassAction}>
-                                <BlurView intensity={20} tint="dark" style={styles.actionGlassEffect}>
+                                <BlurView intensity={20} tint="dark" style={styles.actionGlassEffect} experimentalBlurMethod="dimezisBlurView">
                                     <Ionicons name="videocam" size={20} color="#fff" />
                                 </BlurView>
                             </Pressable>
@@ -366,7 +370,7 @@ export default function ProfileScreen() {
                     
                     {/* Category Tabs */}
                     <View style={styles.tabContainer}>
-                        <BlurView intensity={20} tint="dark" style={styles.tabGlass}>
+                        <BlurView intensity={20} tint="dark" style={styles.tabGlass} experimentalBlurMethod="dimezisBlurView">
                             {(['photos', 'videos', 'audio', 'docs'] as const).map((cat) => (
                                 <Pressable
                                     key={cat}
@@ -418,7 +422,7 @@ export default function ProfileScreen() {
                                     } else {
                                         return (
                                             <Pressable key={index} style={styles.listItemGlass} onPress={() => handleDownload(item)}>
-                                                <BlurView intensity={10} tint="dark" style={styles.listItemContent}>
+                                                <BlurView intensity={10} tint="dark" style={styles.listItemContent} experimentalBlurMethod="dimezisBlurView">
                                                     <View style={[styles.listIconContainer, { backgroundColor: activeCategory === 'audio' ? 'rgba(168, 85, 247, 0.1)' : 'rgba(59, 130, 246, 0.1)' }]}>
                                                         <Ionicons 
                                                             name={activeCategory === 'audio' ? 'musical-notes' : 'document-text'} 
@@ -458,7 +462,7 @@ export default function ProfileScreen() {
                 </Animated.View>
 
                 {/* Connection Info */}
-                <BlurView intensity={30} tint="dark" style={styles.infoCard}>
+                <BlurView intensity={30} tint="dark" style={styles.infoCard} experimentalBlurMethod="dimezisBlurView">
                     <View style={styles.infoRow}>
                         <MaterialIcons name="access-time" size={18} color="rgba(255,255,255,0.4)" />
                         <Text style={styles.infoText}>Connected since the beginning</Text>
@@ -468,17 +472,6 @@ export default function ProfileScreen() {
                         <Text style={styles.infoText}>Synced forever</Text>
                     </View>
 
-                    {!isOwnProfile && (
-                        <Pressable 
-                            style={styles.clearChatBtn}
-                            onPress={handleClearChat}
-                        >
-                            <BlurView intensity={20} tint="dark" style={styles.clearChatContent}>
-                                <MaterialIcons name="delete-sweep" size={20} color="#ff4444" />
-                                <Text style={styles.clearChatText}>CLEAR ALL CHAT</Text>
-                            </BlurView>
-                        </Pressable>
-                    )}
                 </BlurView>
             </ScrollView>
 
@@ -491,7 +484,7 @@ export default function ProfileScreen() {
             >
                 <View style={[styles.viewerContainer, { backgroundColor: 'transparent' }]}>
                     <Animated2.View style={[StyleSheet.absoluteFill, bgMorphStyle]}>
-                        <BlurView intensity={90} tint="dark" style={StyleSheet.absoluteFill} />
+                        <BlurView intensity={90} tint="dark" style={StyleSheet.absoluteFill} experimentalBlurMethod="dimezisBlurView" />
                     </Animated2.View>
                     
                     {/* Integrated Gallery & Transition Layer */}
@@ -743,6 +736,8 @@ const styles = StyleSheet.create({
     tabGlass: {
         flexDirection: 'row',
         padding: 4,
+        borderRadius: 20,
+        overflow: 'hidden',
         backgroundColor: 'rgba(255,255,255,0.02)',
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.05)',
@@ -841,6 +836,7 @@ const styles = StyleSheet.create({
         marginHorizontal: 20,
         marginTop: 32,
         borderRadius: 30,
+        overflow: 'hidden',
         padding: 24,
         backgroundColor: 'rgba(255,255,255,0.02)',
         borderWidth: 1,
@@ -856,27 +852,6 @@ const styles = StyleSheet.create({
         color: 'rgba(255,255,255,0.6)',
         fontSize: 14,
         fontWeight: '500',
-    },
-    clearChatBtn: {
-        marginTop: 24,
-        width: '100%',
-        borderRadius: 16,
-        overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: 'rgba(255,68,68,0.2)',
-    },
-    clearChatContent: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 14,
-        gap: 8,
-    },
-    clearChatText: {
-        color: '#ff4444',
-        fontSize: 13,
-        fontWeight: '900',
-        letterSpacing: 2,
     },
     errorText: {
         color: '#ef4444',

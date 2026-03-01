@@ -1,0 +1,6 @@
+name = "soulsync-supabase-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[vars]
+SUPABASE_HOST = "xuipxbyvsawhuldopvjn.supabase.co"

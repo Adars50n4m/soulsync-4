@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { View, Text, Image, Pressable, StyleSheet, StatusBar, Dimensions, Alert, FlatList } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 
@@ -25,6 +25,7 @@ import { storageService } from '../../services/StorageService';
 import { useApp } from '../../context/AppContext';
 import { SoulSyncLogo } from '../../components/SoulSyncLogo';
 import { StatusViewerModal } from '../../components/StatusViewerModal';
+import { MediaPreviewModal } from '../../components/MediaPreviewModal';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { Contact, Story } from '../../types';
 import { NoteBubble } from '../../components/NoteBubble';
@@ -131,7 +132,6 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }
         
         {/* The solid flying morph background. Isolated with NO CHILDREN to avoid Reanimated capture bugs. */}
         <Animated.View
-            {...{ sharedTransitionTag: `chat-pill-${item.id}` } as any}
             style={[StyleSheet.absoluteFill, { borderRadius: 36, backgroundColor: '#151515', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.08)' }]}
         />
             
@@ -139,7 +139,6 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }
         <View style={[styles.pillContent, { position: 'absolute', width: '100%', height: '100%', paddingHorizontal: 16 }]} pointerEvents="box-none">
           <View style={styles.avatarContainer}>
             <Animated.Image
-              {...{ sharedTransitionTag: `chat-avatar-${item.id}` } as any}
               source={{ uri: item.avatar || DEFAULT_AVATAR }}
               style={styles.avatar}
             />
@@ -204,6 +203,15 @@ export default function HomeScreen() {
   const [isViewerVisible, setIsViewerVisible] = useState(false);
   const [isMediaPickerVisible, setIsMediaPickerVisible] = useState(false);
   const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
+  const [statusMediaPreview, setStatusMediaPreview] = useState<{ uri: string; type: 'image' | 'video' | 'audio' } | null>(null);
+  const [isUploadingStatus, setIsUploadingStatus] = useState(false);
+
+  // Hide tab bar when media picker is open
+  useEffect(() => {
+    navigation.setOptions({
+      tabBarStyle: { display: isMediaPickerVisible ? 'none' : 'flex' }
+    });
+  }, [isMediaPickerVisible, navigation]);
 
   const contactStoriesMap = useMemo(() => {
     const map = new Map<string, Story[]>();
@@ -218,6 +226,7 @@ export default function HomeScreen() {
         userId: s.userId,
         likes: s.likes,
         views: s.views,
+        music: s.music,
       };
       if (!map.has(s.userId)) map.set(s.userId, []);
       map.get(s.userId)?.push(story);
@@ -283,7 +292,7 @@ export default function HomeScreen() {
         status: 'online',
         stories: myStories,
       });
-      setIsViewerVisible(true);
+      router.push('/my-status');
       return;
     }
 
@@ -294,31 +303,49 @@ export default function HomeScreen() {
     }
   };
 
+  const handleSendStatus = async (mediaList: { uri: string; type: 'image' | 'video' | 'audio' }[], caption?: string) => {
+    if (!currentUser || mediaList.length === 0) return;
+    setIsUploadingStatus(true);
+    
+    try {
+      // For now we just process the first item, but we could loop for multiple
+      const item = mediaList[0];
+      const safeUri = item.uri;
+      let mediaUrl = safeUri;
+
+      if (safeUri.startsWith('file://')) {
+        const uploadedUrl = await storageService.uploadImage(safeUri, 'status-media', currentUser.id);
+        if (uploadedUrl) mediaUrl = uploadedUrl;
+      }
+
+      const expiresAt = new Date();
+      expiresAt.setHours(expiresAt.getHours() + 24);
+      
+      addStatus({
+        userId: currentUser.id,
+        mediaUrl,
+        mediaType: item.type === 'video' ? 'video' : 'image',
+        timestamp: new Date().toISOString(),
+        expiresAt: expiresAt.toISOString(),
+        caption: caption || '',
+      });
+      
+      setStatusMediaPreview(null);
+    } catch (error) {
+      console.error('Failed to upload status:', error);
+      Alert.alert('Error', 'Failed to upload status. Please try again.');
+    } finally {
+      setIsUploadingStatus(false);
+      setIsMediaPickerVisible(false);
+    }
+  };
+
   const createStatus = async (result: ImagePicker.ImagePickerResult) => {
       if (!result.canceled && result.assets?.[0] && currentUser) {
           const asset = result.assets[0];
-          const safeMediaUri = await resolveStatusAssetUri(asset);
-          let mediaUrl = safeMediaUri;
-
-          // Persist status media to cloud URL so it renders reliably in viewer and home preview.
-          if (safeMediaUri.startsWith('file://')) {
-            try {
-              const uploadedUrl = await storageService.uploadImage(safeMediaUri, 'status-media', currentUser.id);
-              if (uploadedUrl) mediaUrl = uploadedUrl;
-            } catch (error: any) {
-              console.warn('Status upload failed, keeping local URI fallback:', error?.message || error);
-            }
-          }
-
-          const expiresAt = new Date();
-          expiresAt.setHours(expiresAt.getHours() + 24);
-          addStatus({
-              userId: currentUser.id,
-              mediaUrl,
-              mediaType: asset.type === 'video' ? 'video' : 'image',
-              timestamp: new Date().toISOString(),
-              expiresAt: expiresAt.toISOString(),
-              caption: ''
+          setStatusMediaPreview({
+            uri: asset.uri,
+            type: asset.type === 'video' ? 'video' : 'image'
           });
       }
       setIsMediaPickerVisible(false);
@@ -327,14 +354,42 @@ export default function HomeScreen() {
   const handleSelectCamera = async () => {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
       if (!permission.granted) return Alert.alert('Permission needed', 'Camera permission required.');
-      const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 0.8,
+        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        allowsEditing: true,
+        videoMaxDuration: 60,
+      });
       await createStatus(result);
   };
 
-  const handleSelectGallery = async () => {
+  const handleSelectGallery = async (providedAsset?: MediaLibrary.Asset) => {
+      if (providedAsset) {
+          // Wrap the MediaLibrary asset into an ImagePicker-like result for createStatus
+          const result: ImagePicker.ImagePickerResult = {
+              canceled: false,
+              assets: [{
+                  uri: providedAsset.uri,
+                  width: providedAsset.width,
+                  height: providedAsset.height,
+                  type: providedAsset.mediaType === 'video' ? 'video' : 'image',
+                  assetId: providedAsset.id,
+                  fileName: providedAsset.filename,
+                  fileSize: 0, // Not strictly needed for createStatus
+              }]
+          };
+          await createStatus(result);
+          return;
+      }
+
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) return Alert.alert('Permission needed', 'Gallery permission required.');
-      const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.8 });
+      const result = await ImagePicker.launchImageLibraryAsync({
+        quality: 0.8,
+        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        allowsEditing: true,
+        videoMaxDuration: 60,
+      });
       await createStatus(result);
   };
 
@@ -369,7 +424,7 @@ export default function HomeScreen() {
           item={item} 
           lastMsg={lastMsg} 
           onSelect={handleUserSelect} 
-          isTyping={isTyping} 
+          isTyping={isTyping}
       />
     );
   }, [lastMessagesMap, typingUsers, handleUserSelect]);
@@ -380,8 +435,6 @@ export default function HomeScreen() {
   return (
     <Animated.View 
         style={styles.container} 
-        exiting={FadeOut.duration(200)}
-        layout={LinearTransition.springify().damping(20)}
     >
       <StatusBar barStyle="light-content" />
       
@@ -389,7 +442,6 @@ export default function HomeScreen() {
         data={visibleContacts}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
-        estimatedItemSize={80}
         ListHeaderComponent={() => (
 
           <View style={styles.statusRail}>
@@ -404,23 +456,31 @@ export default function HomeScreen() {
                   const myStoryPreviewUrl = myStories[0]?.url;
                   return (
                     <Pressable style={styles.statusCard} onPress={handleMyStatusPress}>
-                      <View style={styles.myStatusBackground}>
-                        {!!myStoryPreviewUrl && (
-                          <Image source={{ uri: myStoryPreviewUrl }} style={styles.myStatusPreviewBg} />
+                      <View style={[styles.myStatusBackground, myStories.length > 0 && { justifyContent: 'flex-start', alignItems: 'flex-start' }]}>
+                        {!!myStoryPreviewUrl ? (
+                          <>
+                            <Image source={{ uri: myStoryPreviewUrl }} style={styles.myStatusPreviewBgFull} />
+                            <View style={styles.myStatusAvatarBadgeCorner}>
+                              <Image source={{ uri: currentUser?.avatar || '' }} style={styles.myStatusAvatarSmall} />
+                              <View style={styles.myStatusAddBadgeGreen}>
+                                <MaterialIcons name="add" size={14} color="#000" />
+                              </View>
+                            </View>
+                            <Text style={[styles.startStoryText, styles.myStatusTextBottom]}>My status</Text>
+                          </>
+                        ) : (
+                          <>
+                            <View style={styles.myStatusAvatarContainer}>
+                              <Image source={{ uri: currentUser?.avatar || '' }} style={styles.myStatusAvatar} />
+                              <View style={styles.myStatusAddBadge}><MaterialIcons name="add" size={16} color="#fff" /></View>
+                            </View>
+                            <Text style={styles.startStoryText}>
+                              {currentUser?.note && isNoteValid(currentUser.noteTimestamp)
+                                ? 'Your Note'
+                                : 'Start a story'}
+                            </Text>
+                          </>
                         )}
-                        <View style={styles.myStatusAvatarContainer}>
-                          <Image source={{ uri: currentUser?.avatar || '' }} style={styles.myStatusAvatar} />
-                          {myStories.length === 0 && (
-                            <View style={styles.myStatusAddBadge}><MaterialIcons name="add" size={16} color="#fff" /></View>
-                          )}
-                        </View>
-                        <Text style={styles.startStoryText}>
-                          {myStories.length > 0
-                            ? 'My story'
-                            : currentUser?.note && isNoteValid(currentUser.noteTimestamp)
-                              ? 'Your Note'
-                              : 'Start a story'}
-                        </Text>
                       </View>
                       {currentUser?.note && isNoteValid(currentUser.noteTimestamp) && (
                         <View style={styles.notePositioner}>
@@ -441,9 +501,15 @@ export default function HomeScreen() {
                         <View style={[styles.statusMediaBackground, styles.statusPlaceholder]} />
                     )}
                     <View style={styles.statusOverlay}>
-                      <View style={[styles.contactAvatarBadge, { borderColor: hasUnseen ? '#3b82f6' : 'rgba(255,255,255,0.2)' }]}>
+                      <View style={[styles.contactAvatarBadge, { borderColor: hasUnseen ? '#3b82f6' : 'rgba(255,255,255,0.4)' }]}>
                         <Image source={{ uri: contact.avatar || DEFAULT_AVATAR }} style={styles.smallStatusAvatar} />
                       </View>
+                      <LinearGradient
+                        colors={['transparent', 'rgba(0,0,0,0.8)']}
+                        style={styles.statusNameGradient}
+                      >
+                        <Text style={styles.statusNameText}>{contact.name}</Text>
+                      </LinearGradient>
                     </View>
                     {contact.note && isNoteValid(contact.noteTimestamp) && (
                         <View style={styles.notePositioner}>
@@ -496,11 +562,22 @@ export default function HomeScreen() {
         onComplete={() => setIsViewerVisible(false)}
       />
 
+      <MediaPreviewModal
+        visible={!!statusMediaPreview}
+        mediaUri={statusMediaPreview?.uri || ''}
+        mediaType={statusMediaPreview?.type || 'image'}
+        onClose={() => setStatusMediaPreview(null)}
+        onSend={handleSendStatus}
+        isUploading={isUploadingStatus}
+        mode="status"
+      />
+
       <MediaPickerSheet
         visible={isMediaPickerVisible}
         onClose={() => setIsMediaPickerVisible(false)}
         onSelectCamera={handleSelectCamera}
-        onSelectGallery={handleSelectGallery}
+        onSelectGallery={() => handleSelectGallery()}
+        onSelectAsset={handleSelectGallery}
         onSelectAudio={() => Alert.alert("Audio Status", "Coming soon!")}
         onSelectNote={() => {
             setIsMediaPickerVisible(false);
@@ -520,18 +597,40 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   statusRail: { marginTop: 60, marginBottom: 0, overflow: 'visible' },
   statusContent: { paddingHorizontal: 20, paddingVertical: 12, paddingTop: 8, gap: 12, overflow: 'visible' },
-  statusCard: { width: 110, height: 140, borderRadius: 28, backgroundColor: '#1a1a1a', zIndex: 10 },
-  myStatusBackground: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#262626', padding: 12, borderRadius: 28, overflow: 'hidden' },
+  statusCard: { width: 140, height: 200, borderRadius: 28, backgroundColor: '#1a1a1a', zIndex: 10, overflow: 'hidden' },
+  myStatusBackground: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#262626', borderRadius: 28, overflow: 'hidden' },
   myStatusPreviewBg: { ...StyleSheet.absoluteFillObject, opacity: 0.42 },
-  myStatusAvatarContainer: { position: 'relative', marginBottom: 12 },
-  myStatusAvatar: { width: 56, height: 56, borderRadius: 28, borderWidth: 2, borderColor: '#3b82f6' },
-  myStatusAddBadge: { position: 'absolute', bottom: -2, right: -2, width: 22, height: 22, borderRadius: 11, backgroundColor: '#1a1a1a', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#262626' },
-  startStoryText: { color: 'rgba(255,255,255,0.8)', fontSize: 12, fontWeight: '600', textAlign: 'center' },
+  myStatusPreviewBgFull: { ...StyleSheet.absoluteFillObject, opacity: 1 },
+  myStatusAvatarContainer: { position: 'relative', marginBottom: 16 },
+  myStatusAvatar: { width: 64, height: 64, borderRadius: 32, borderWidth: 2, borderColor: '#3b82f6' },
+  myStatusAvatarSmall: { width: 48, height: 48, borderRadius: 24, borderWidth: 2, borderColor: '#fff' },
+  myStatusAvatarBadgeCorner: { position: 'absolute', top: 12, left: 12, zIndex: 5 },
+  myStatusAddBadge: { position: 'absolute', bottom: -2, right: -2, width: 24, height: 24, borderRadius: 12, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#262626' },
+  myStatusAddBadgeGreen: { position: 'absolute', bottom: -2, right: -2, width: 20, height: 20, borderRadius: 10, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#000' },
+  startStoryText: { color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  myStatusTextBottom: { position: 'absolute', bottom: 16, width: '100%', textAlign: 'center', color: '#fff', fontSize: 15, fontWeight: '700' },
   statusMediaBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: '#1a1a1a', borderRadius: 28 },
   statusPlaceholder: { backgroundColor: 'rgba(255,255,255,0.08)' },
-  statusOverlay: { ...StyleSheet.absoluteFillObject, padding: 10 },
-  contactAvatarBadge: { width: 36, height: 36, borderRadius: 18, borderWidth: 2, padding: 2, backgroundColor: 'rgba(0,0,0,0.5)' },
-  smallStatusAvatar: { width: '100%', height: '100%', borderRadius: 15 },
+  statusOverlay: { ...StyleSheet.absoluteFillObject },
+  contactAvatarBadge: { position: 'absolute', top: 12, left: 12, width: 52, height: 52, borderRadius: 26, borderWidth: 2.5, padding: 3, backgroundColor: 'rgba(0,0,0,0.4)' },
+  smallStatusAvatar: { width: '100%', height: '100%', borderRadius: 22 },
+  statusNameGradient: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 60,
+    justifyContent: 'flex-end',
+    padding: 12,
+  },
+  statusNameText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
   listContent: { paddingBottom: 100, paddingHorizontal: 4 },
   chatItem: { marginBottom: 8, marginHorizontal: 16, borderRadius: 36, height: 72 },
   notePositioner: {

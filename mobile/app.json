@@ -7,7 +7,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "mobile",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "appleTeamId": "NSQLLV82SH",
       "supportsTablet": true,
@@ -68,6 +68,11 @@
           "ios": {
             "useFrameworks": "static",
             "buildReactNativeFromSource": true
+          },
+          "android": {
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
+            "buildToolsVersion": "35.0.0"
           }
         }
       ],
@@ -98,11 +103,13 @@
           "minimumInterval": 900
         }
       ],
-      "./plugins/withCallKit"
+      "./plugins/withCallKit",
+      "./plugins/withAndroidCalling",
+      "./plugins/withWebSocketFix"
     ],
     "experiments": {
       "typedRoutes": true,
-      "reactCompiler": true
+      "reactCompiler": false
     },
     "extra": {
       "router": {},
