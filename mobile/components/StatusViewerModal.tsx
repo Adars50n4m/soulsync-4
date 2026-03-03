@@ -128,6 +128,11 @@ export const StatusViewerModal = ({
     if (visible) {
       viewersTranslateY.value = height;
       backdropOpacity.value = 0;
+      // On Android, hiding the status bar inside a modal can cause layout shifts
+      if (Platform.OS === 'android') {
+        RNStatusBar.setTranslucent(true);
+        RNStatusBar.setBackgroundColor('transparent');
+      }
     }
   }, [visible, height]);
 
@@ -255,11 +260,22 @@ export const StatusViewerModal = ({
   if (!visible || !currentStory) return null;
 
   return (
-    <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
+    <Modal 
+      visible={visible} 
+      animationType="fade" 
+      transparent 
+      statusBarTranslucent
+      onRequestClose={onClose}
+    >
       <View style={styles.container}>
-        <RNStatusBar hidden />
+        <RNStatusBar barStyle="light-content" translucent backgroundColor="transparent" />
         
-        <BlurView intensity={24} tint="dark" style={StyleSheet.absoluteFill} experimentalBlurMethod="dimezisBlurView" />
+        {/* Background Backdrop */}
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }]} />
+        
+        {Platform.OS === 'ios' && (
+          <BlurView intensity={24} tint="dark" style={StyleSheet.absoluteFill} />
+        )}
         
         {isUIVisible && (
           <>
@@ -323,7 +339,7 @@ export const StatusViewerModal = ({
         </View>
 
         {/* Overlay UI */}
-        <SafeAreaView style={[styles.overlay, { opacity: isUIVisible ? 1 : 0 }]} pointerEvents={isUIVisible ? 'auto' : 'none'}>
+        <View style={[styles.overlay, { paddingTop: Platform.OS === 'android' ? insets.top + 10 : insets.top, opacity: isUIVisible ? 1 : 0 }]} pointerEvents={isUIVisible ? 'auto' : 'none'}>
              {/* Progress Bars */}
              <View style={styles.progressContainer}>
                 {stories.map((story, index) => (
@@ -339,7 +355,7 @@ export const StatusViewerModal = ({
             </View>
 
             {/* Header */}
-            <View style={[styles.header, { paddingTop: Math.max(0, insets.top - 160) }]}>
+            <View style={styles.header}>
                 <View style={styles.userInfo}>
                     <Image source={{ uri: contactAvatar }} style={styles.avatar} />
                     <View style={styles.userTextInfo}>
@@ -358,7 +374,7 @@ export const StatusViewerModal = ({
                   </Pressable>
                 </View>
             </View>
-        </SafeAreaView>
+        </View>
 
         {/* Touch Navigation Overlay */}
         <View style={[styles.touchOverlay, { bottom: insets.bottom + 188 }]}>
@@ -507,6 +523,7 @@ const styles = StyleSheet.create({
     paddingBottom: 100,
     paddingHorizontal: 0,
     overflow: 'hidden',
+    backgroundColor: '#000',
   },
   mediaBackdrop: {
     ...StyleSheet.absoluteFillObject,

@@ -169,7 +169,7 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
     if (mediaStatus === 'downloading' || isDownloading) {
       return (
         <View style={[styles.placeholder, { width: mediaWidth, height: mediaHeight }]}>
-          <BlurView intensity={80} style={styles.blurOverlay} experimentalBlurMethod="dimezisBlurView">
+          <BlurView intensity={80} style={styles.blurOverlay} >
             <ActivityIndicator size="large" color={theme.primary} />
             <Text style={styles.downloadingText}>
               {downloadProgress > 0 ? `${downloadProgress}%` : 'Downloading...'}
@@ -183,7 +183,7 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
     if (mediaStatus === 'download_failed') {
       return (
         <Pressable onPress={handleDownload} style={[styles.placeholder, { width: mediaWidth, height: mediaHeight }]}>
-          <BlurView intensity={80} style={styles.blurOverlay} experimentalBlurMethod="dimezisBlurView">
+          <BlurView intensity={80} style={styles.blurOverlay} >
             <MaterialIcons name="error-outline" size={40} color="#FF3B30" />
             <Text style={styles.errorText}>{error || 'Download failed'}</Text>
             <Text style={styles.retryText}>Tap to retry</Text>
@@ -195,7 +195,7 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
     // Media not downloaded yet - show download button
     return (
       <Pressable onPress={handleDownload} style={[styles.placeholder, { width: mediaWidth, height: mediaHeight }]}>
-        <BlurView intensity={80} style={styles.blurOverlay} experimentalBlurMethod="dimezisBlurView">
+        <BlurView intensity={80} style={styles.blurOverlay} >
           {message.thumbnailUri ? (
             <Image
               source={{ uri: message.thumbnailUri }}

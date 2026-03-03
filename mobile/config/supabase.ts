@@ -36,15 +36,19 @@ export const checkRealtimeConnectivity = async (): Promise<{ ok: boolean; error?
             ws.onopen = () => {
                 clearTimeout(timeout);
                 ws.close();
-                console.log('[Supabase] ✅ Realtime endpoint is reachable');
+                console.log(`[Supabase] ✅ Realtime endpoint (${realtimeUrl}) is reachable`);
                 resolve({ ok: true });
             };
 
-            ws.onerror = (e) => {
+            ws.onerror = (e: any) => {
                 clearTimeout(timeout);
                 try { ws.close(); } catch (err) {}
-                console.warn('[Supabase] ❌ Realtime endpoint unreachable:', e);
-                resolve({ ok: false, error: 'WebSocket connection failed' });
+                console.warn(`[Supabase] ❌ Realtime endpoint (${realtimeUrl}) unreachable:`, {
+                    message: e?.message,
+                    type: e?.type,
+                    url: realtimeUrl
+                });
+                resolve({ ok: false, error: `WebSocket connection failed: ${e?.message || 'unknown error'}` });
             };
         } catch (e) {
             console.warn('[Supabase] ❌ WebSocket initialization failed:', e);

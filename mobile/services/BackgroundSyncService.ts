@@ -5,6 +5,7 @@
  * Uses expo-background-fetch and expo-task-manager to fetch messages silently.
  */
 
+import { Platform } from 'react-native';
 import * as BackgroundFetch from 'expo-background-fetch';
 import * as TaskManager from 'expo-task-manager';
 // import * as Notifications from 'expo-notifications';
@@ -21,42 +22,49 @@ let isTaskRegistered = false;
  * Background sync task definition
  * This runs when the app is in background or terminated
  */
+// Silent task registration
 try {
-  if (TaskManager.isTaskDefined(BACKGROUND_SYNC_TASK)) {
-    console.log(`[BackgroundSync] Task ${BACKGROUND_SYNC_TASK} already defined`);
-  } else {
-    TaskManager.defineTask(BACKGROUND_SYNC_TASK, async () => {
-      try {
-        console.log('[BackgroundSync] Starting background sync...');
-        
-        // Get current user
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          console.log('[BackgroundSync] No authenticated user, skipping');
+  // Only register background tasks on Android for now as iOS needs native capability.
+  // TaskManager.defineTask MUST be top-level.
+  if (Platform.OS === 'android') {
+    const isDefined = TaskManager.isTaskDefined && TaskManager.isTaskDefined(BACKGROUND_SYNC_TASK);
+    if (isDefined) {
+      console.log(`[BackgroundSync] Task ${BACKGROUND_SYNC_TASK} already defined`);
+    } else {
+      console.log(`[BackgroundSync] Defining task: ${BACKGROUND_SYNC_TASK}`);
+      TaskManager.defineTask(BACKGROUND_SYNC_TASK, async () => {
+        try {
+          console.log('[BackgroundSync] Starting background sync...');
+          
+          // Get current user
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) {
+            console.log('[BackgroundSync] No authenticated user, skipping');
+            return BackgroundFetch.BackgroundFetchResult.NoData;
+          }
+          
+          // Fetch unread messages from Supabase
+          const syncedCount = await syncMessagesFromServer(user.id);
+          
+          console.log(`[BackgroundSync] Synced ${syncedCount} messages`);
+          
+          if (syncedCount > 0) {
+            // Show local notification for new messages
+            await showSyncNotification(syncedCount);
+            return BackgroundFetch.BackgroundFetchResult.NewData;
+          }
+          
           return BackgroundFetch.BackgroundFetchResult.NoData;
+        } catch (error) {
+          console.error('[BackgroundSync] Error in task execution:', error);
+          return BackgroundFetch.BackgroundFetchResult.Failed;
         }
-        
-        // Fetch unread messages from Supabase
-        const syncedCount = await syncMessagesFromServer(user.id);
-        
-        console.log(`[BackgroundSync] Synced ${syncedCount} messages`);
-        
-        if (syncedCount > 0) {
-          // Show local notification for new messages
-          await showSyncNotification(syncedCount);
-          return BackgroundFetch.BackgroundFetchResult.NewData;
-        }
-        
-        return BackgroundFetch.BackgroundFetchResult.NoData;
-      } catch (error) {
-        console.error('[BackgroundSync] Error in task execution:', error);
-        return BackgroundFetch.BackgroundFetchResult.Failed;
-      }
-    });
-    console.log(`[BackgroundSync] Task ${BACKGROUND_SYNC_TASK} defined successfully`);
+      });
+      console.log(`[BackgroundSync] Task ${BACKGROUND_SYNC_TASK} defined successfully`);
+    }
   }
 } catch (error) {
-  console.warn('[BackgroundSync] Failed to define task (native module might be missing):', error);
+  console.warn('[BackgroundSync] Failed to check/define task:', error);
 }
 
 /**

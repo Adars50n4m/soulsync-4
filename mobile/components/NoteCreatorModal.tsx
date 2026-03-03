@@ -69,7 +69,7 @@ export const NoteCreatorModal = ({ visible, onClose, onSave }: NoteCreatorModalP
             onRequestClose={onClose}
         >
             <View style={styles.container}>
-                <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} experimentalBlurMethod="dimezisBlurView" />
+                <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
                 
                 <KeyboardAvoidingView 
                     behavior={Platform.OS === 'ios' ? 'padding' : 'height'}

@@ -344,7 +344,7 @@ export default function StorageManagementScreen() {
                 {/* Section 1: Device Storage Overview */}
                 {storageInfo && (
                     <View style={styles.section}>
-                        <BlurView intensity={10} tint="dark" style={styles.glassContainer} experimentalBlurMethod="dimezisBlurView">
+                        <BlurView intensity={10} tint="dark" style={styles.glassContainer} >
                             <View style={styles.storageHeaderRow}>
                                 <Text style={styles.storageUsedLabel}>Used</Text>
                                 <Text style={styles.storageFreeLabel}>
@@ -395,7 +395,7 @@ export default function StorageManagementScreen() {
                 {/* Section 2: SoulSync App Storage */}
                 <View style={styles.section}>
                     <Text style={styles.sectionHeader}>SoulSync Storage</Text>
-                    <BlurView intensity={10} tint="dark" style={styles.glassContainer} experimentalBlurMethod="dimezisBlurView">
+                    <BlurView intensity={10} tint="dark" style={styles.glassContainer} >
                         <View style={styles.appStorageHeader}>
                             <View style={[styles.appIconContainer, { backgroundColor: `${activeTheme.primary}20` }]}>
                                 <Ionicons name="infinite" size={24} color={activeTheme.primary} />
@@ -542,7 +542,7 @@ export default function StorageManagementScreen() {
                 {/* Section 4: Per-Chat Storage */}
                 <View style={styles.section}>
                     <Text style={styles.sectionHeader}>Chat Storage</Text>
-                    <BlurView intensity={10} tint="dark" style={styles.glassContainer} experimentalBlurMethod="dimezisBlurView">
+                    <BlurView intensity={10} tint="dark" style={styles.glassContainer} >
                         {chatStorageData.length > 0 ? (
                             chatStorageData.map((chat, index) => (
                                 <ChatStorageItem 
@@ -565,7 +565,7 @@ export default function StorageManagementScreen() {
                 {/* Section 5: Actions */}
                 <View style={styles.section}>
                     <Text style={styles.sectionHeader}>Actions</Text>
-                    <BlurView intensity={10} tint="dark" style={styles.glassContainer} experimentalBlurMethod="dimezisBlurView">
+                    <BlurView intensity={10} tint="dark" style={styles.glassContainer} >
                         <Pressable style={styles.actionItem} onPress={handleClearCache}>
                             <View style={[styles.actionIcon, { backgroundColor: 'rgba(245,158,11,0.15)' }]}>
                                 <MaterialIcons name="cleaning-services" size={22} color="#f59e0b" />

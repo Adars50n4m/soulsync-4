@@ -76,7 +76,7 @@ export const LiquidGlassCard: React.FC<LiquidGlassCardProps> = ({
                 intensity={blurIntensity}
                 tint="dark"
                 style={[styles.blur, { borderRadius }]}
-                experimentalBlurMethod="dimezisBlurView"
+                
             >
                 {/* Inner Glow Gradient */}
                 <LinearGradient
@@ -118,7 +118,7 @@ export const LiquidGlassView: React.FC<{
                 intensity={blurIntensity}
                 tint="dark"
                 style={[styles.glassView, style]}
-                experimentalBlurMethod="dimezisBlurView"
+                
             >
                 {children}
             </BlurView>

@@ -76,22 +76,25 @@ app.post('/api/messages/send', async (req, res) => {
     if (!recipientId || !message) return res.status(400).json({ error: 'Missing recipientId or message' });
 
     try {
-        await supabase.from('messages').insert({
-            id: message.id,
-            sender: message.sender_id,
-            receiver: recipientId,
-            text: message.text,
-            media_type: message.media?.type || null,
-            media_url: message.media?.url || null,
-            media_caption: message.media?.caption || null,
-            reply_to_id: message.reply_to || null,
-            created_at: message.timestamp || new Date().toISOString(),
-            status: 'sent'
-        });
+        if (supabase) {
+            await supabase.from('messages').insert({
+                id: message.id,
+                sender: message.sender_id,
+                receiver: recipientId,
+                text: message.text,
+                media_type: message.media?.type || null,
+                media_url: message.media?.url || null,
+                media_caption: message.media?.caption || null,
+                reply_to_id: message.reply_to || null,
+                created_at: message.timestamp || new Date().toISOString(),
+                status: 'sent'
+            });
+        }
         
         io.to(recipientId).emit('message:receive', message);
         res.json({ success: true, localMessageId: message.id });
     } catch (err) {
+        console.error('Error in /api/messages/send:', err);
         res.status(500).json({ error: 'Failed to send message' });
     }
 });
@@ -101,10 +104,13 @@ app.post('/api/messages/status', async (req, res) => {
     if (!senderId || !messageId || !status) return res.status(400).json({ error: 'Missing required fields' });
     
     try {
-        await supabase.from('messages').update({ status }).eq('id', messageId);
+        if (supabase) {
+            await supabase.from('messages').update({ status }).eq('id', messageId);
+        }
         io.to(senderId).emit('message:status_update', { senderId, messageId, status });
         res.json({ success: true });
     } catch (err) {
+        console.error('Error in /api/messages/status:', err);
         res.status(500).json({ error: 'Failed to update status' });
     }
 });
@@ -114,6 +120,8 @@ app.get('/api/messages/sync', async (req, res) => {
     if (!userId) return res.status(400).json({ error: 'userId required' });
 
     try {
+        if (!supabase) return res.json({ success: true, messages: [] });
+
         let query = supabase.from('messages').select('*').eq('receiver', userId);
         if (lastSyncAt) {
             query = query.gt('created_at', lastSyncAt);
@@ -134,6 +142,7 @@ app.get('/api/messages/sync', async (req, res) => {
         
         res.json({ success: true, messages });
     } catch (err) {
+        console.error('Error in /api/messages/sync:', err);
         res.status(500).json({ error: 'Sync failed' });
     }
 });
@@ -261,10 +270,12 @@ io.on('connection', (socket) => {
         // Data format: { senderId, messageId, status: 'delivered' | 'read' }
         if (data.senderId) {
             // Update temporary DB reference
-            try {
-                await supabase.from('messages').update({ status: data.status }).eq('id', data.messageId);
-            } catch (err) {
-                console.error('Failed to update status in Supabase:', err);
+            if (supabase) {
+                try {
+                    await supabase.from('messages').update({ status: data.status }).eq('id', data.messageId);
+                } catch (err) {
+                    console.error('Failed to update status in Supabase:', err.message);
+                }
             }
 
             io.to(data.senderId).emit('message:status_update', data);

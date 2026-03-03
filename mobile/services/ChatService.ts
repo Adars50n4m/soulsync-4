@@ -105,6 +105,15 @@ class ChatService {
                 this.stopQueueProcessing();
             });
 
+            this.socket.on('connect_error', (err) => {
+                console.error(`[ChatService] Socket connection error to ${SERVER_URL}:`, err.message);
+                this.updateNetworkStatus(false);
+            });
+
+            this.socket.on('reconnect_attempt', (attempt) => {
+                console.log(`[ChatService] Socket reconnect attempt ${attempt} to ${SERVER_URL}`);
+            });
+
             this.socket.on('message:receive', (msg: any) => {
                 if (msg.receiver_id === this.userId && msg.sender_id === this.partnerId) {
                     console.log('[ChatService] Received new message for current chat:', msg);

@@ -217,25 +217,25 @@ export default function HomeScreen() {
 
   // Hide tab bar when fullscreen overlays are open
   useEffect(() => {
-    const shouldHideTabBar = isMediaPickerVisible || !!statusMediaPreview || isNoteModalVisible;
+    const shouldHideTabBar = isViewerVisible || isMediaPickerVisible || !!statusMediaPreview || isNoteModalVisible;
     navigation.setOptions({
       tabBarStyle: { display: shouldHideTabBar ? 'none' : 'flex' }
     });
-  }, [isMediaPickerVisible, statusMediaPreview, isNoteModalVisible, navigation]);
+  }, [isViewerVisible, isMediaPickerVisible, statusMediaPreview, isNoteModalVisible, navigation]);
 
   const contactStoriesMap = useMemo(() => {
     const map = new Map<string, Story[]>();
     statuses.forEach(s => {
       const story: Story = {
         id: s.id,
-        url: s.mediaUrl,
+        url: proxySupabaseUrl(s.mediaUrl), // Proxy the story URL too
         type: s.mediaType,
         timestamp: s.timestamp,
         seen: false,
-        caption: s.caption,
+        caption: s.caption || '',
         userId: s.userId,
-        likes: s.likes,
-        views: s.views,
+        likes: s.likes || [],
+        views: s.views || [],
         music: s.music,
       };
       if (!map.has(s.userId)) map.set(s.userId, []);

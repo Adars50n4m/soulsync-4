@@ -125,7 +125,7 @@ export default function LoginScreen() {
                     </View>
 
                     {/* Login Form */}
-                    <BlurView intensity={40} tint="dark" style={styles.formCard} experimentalBlurMethod="dimezisBlurView">
+                    <BlurView intensity={40} tint="dark" style={styles.formCard} >
                         <View style={styles.inputContainer}>
                             <MaterialIcons name="person" size={20} color="rgba(255,255,255,0.4)" />
                             <TextInput

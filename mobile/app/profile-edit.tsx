@@ -7,6 +7,7 @@ import {
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { useApp } from '../context/AppContext';
 import { storageService } from '../services/StorageService';
 import Animated, {
@@ -43,7 +44,8 @@ export default function ProfileEditScreen() {
     const [birthdate, setBirthdate] = useState(currentUser?.birthdate || '');
     const [showImageModal, setShowImageModal] = useState(false);
     const [showFullImage, setShowFullImage] = useState(false);
-    const [isEditing, setIsEditing] = useState<'name' | 'bio' | 'birthdate' | null>(null);
+    const [isEditing, setIsEditing] = useState<'name' | 'bio' | null>(null);
+    const [showDatePicker, setShowDatePicker] = useState(false);
 
     const slideAnim = useRef(new RNAnimated.Value(0)).current;
     const heroProgress = useSharedValue(0);
@@ -200,9 +202,16 @@ export default function ProfileEditScreen() {
         setIsEditing(null);
     };
 
-    const handleSaveBirthdate = () => {
-        updateProfile({ birthdate: birthdate.trim() });
-        setIsEditing(null);
+    const handleDateChange = (event: any, selectedDate?: Date) => {
+        if (Platform.OS === 'android') {
+            setShowDatePicker(false);
+        }
+        
+        if (selectedDate) {
+            const formatted = selectedDate.toISOString().split('T')[0];
+            setBirthdate(formatted);
+            updateProfile({ birthdate: formatted });
+        }
     };
 
 
@@ -322,32 +331,31 @@ export default function ProfileEditScreen() {
                     <View style={styles.section}>
                         <Text style={styles.sectionLabel}>Birthdate</Text>
                         <View style={styles.settingsGroup}>
-                            {isEditing === 'birthdate' ? (
-                                <View style={styles.editRow}>
-                                    <TextInput
-                                        style={styles.editInput}
-                                        value={birthdate}
-                                        onChangeText={setBirthdate}
-                                        placeholder="YYYY-MM-DD"
-                                        placeholderTextColor="rgba(255,255,255,0.3)"
-                                        maxLength={10}
-                                    />
-                                    <View style={styles.editActions}>
-                                        <Pressable onPress={() => setIsEditing(null)} style={styles.cancelBtn}>
-                                            <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
-                                        </Pressable>
-                                        <Pressable onPress={handleSaveBirthdate} style={[styles.saveBtn, { backgroundColor: activeTheme.primary }]}>
-                                            <MaterialIcons name="check" size={20} color="#ffffff" />
-                                        </Pressable>
-                                    </View>
-                                </View>
-                            ) : (
-                                <SettingRow
-                                    label=""
-                                    value={birthdate}
-                                    icon="cake"
-                                    onPress={() => setIsEditing('birthdate')}
+                            <SettingRow
+                                label=""
+                                value={birthdate}
+                                icon="cake"
+                                onPress={() => setShowDatePicker(true)}
+                            />
+                            
+                            {showDatePicker && (
+                                <DateTimePicker
+                                    value={birthdate ? new Date(birthdate) : new Date()}
+                                    mode="date"
+                                    display={Platform.OS === 'ios' ? 'inline' : 'default'}
+                                    onChange={handleDateChange}
+                                    maximumDate={new Date()}
+                                    themeVariant="dark"
                                 />
+                            )}
+                            
+                            {Platform.OS === 'ios' && showDatePicker && (
+                                <Pressable 
+                                    onPress={() => setShowDatePicker(false)}
+                                    style={{ padding: 10, alignItems: 'center', borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)' }}
+                                >
+                                    <Text style={{ color: activeTheme.primary, fontWeight: '600' }}>Done</Text>
+                                </Pressable>
                             )}
                         </View>
                     </View>

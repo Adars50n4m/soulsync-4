@@ -545,7 +545,7 @@ export default function MusicScreen() {
                 <View 
                     style={[
                         StyleSheet.absoluteFill, 
-                        Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.4)' }
+                        Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.7)' }
                     ]} 
                 />
             </Animated.View>
@@ -555,10 +555,9 @@ export default function MusicScreen() {
 
             <Animated.View style={[styles.musicOverlay, overlayStyle]}>
                 <BlurView 
-                    intensity={Platform.OS === 'android' ? 100 : 95} 
+                    intensity={Platform.OS === 'android' ? 85 : 95} 
                     tint="dark" 
                     style={styles.overlayGlass} 
-                    experimentalBlurMethod="dimezisBlurView"
                 >
                     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
                         <View style={styles.dragHandle} />
@@ -569,7 +568,6 @@ export default function MusicScreen() {
                                 renderItem={renderSongItem}
                                 // @ts-ignore - TS incorrectly complains about missing estimatedItemSize in FlashListProps
                                 estimatedItemSize={80}
-                                initialNumToRender={10}
                                 keyExtractor={(item) => item.id}
                                 ListHeaderComponent={memoizedHeader}
                                 contentContainerStyle={styles.listContent}
@@ -597,7 +595,6 @@ export default function MusicScreen() {
                                     intensity={Platform.OS === 'android' ? 80 : 40} 
                                     tint="dark" 
                                     style={styles.tabPill} 
-                                    experimentalBlurMethod="dimezisBlurView"
                                 >
                                     <Pressable 
                                         onPress={() => setActiveTab('favorites')}

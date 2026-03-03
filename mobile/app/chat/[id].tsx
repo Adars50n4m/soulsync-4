@@ -1093,7 +1093,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             }
                             
                             return (
-                                <BlurView intensity={60} tint="dark" style={styles.replyPreview} experimentalBlurMethod="dimezisBlurView">
+                                <BlurView intensity={60} tint="dark" style={styles.replyPreview} >
                                     <View style={styles.replyContent}>
                                         <View style={[ChatStyles.quoteBar, { backgroundColor: activeTheme.primary }]} />
                                         <View style={styles.replyTextContainer}>
@@ -1114,7 +1114,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                         })()}
                         {/* Unified Pill Container */}
                         <View style={styles.unifiedPillContainer}>
-                            <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} experimentalBlurMethod="dimezisBlurView" />
+                            <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill}  />
                             
                             {/* Expandable Options Menu - Now above inputWrapper to open upwards */}
                             <Animated.View style={[styles.optionsMenu, animatedOptionsStyle]}>
@@ -1263,7 +1263,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                     pointerEvents="none"
                     style={[styles.headerGlass, { position: 'absolute', top: HEADER_PILL_TOP, left: 16, right: 16, height: HEADER_PILL_HEIGHT, borderRadius: HEADER_PILL_RADIUS, zIndex: 1 }]}
                 >
-                    <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} experimentalBlurMethod="dimezisBlurView" />
+                    <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill}  />
                 </View>
 
                     {/* Original Header Content - Rendered exactly over the morph bounds as an absolute overlay */}
@@ -1387,7 +1387,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             }
                         ]}
                     >
-                        <BlurView intensity={100} tint="dark" style={styles.callDropdownBlur} experimentalBlurMethod="dimezisBlurView">
+                        <BlurView intensity={100} tint="dark" style={styles.callDropdownBlur} >
                             <Pressable style={styles.callDropdownItem} onPress={() => handleCall('audio')}>
                                 <View style={[styles.callDropdownIcon, { backgroundColor: 'rgba(34, 197, 94, 0.15)' }]}>
                                     <MaterialIcons name="call" size={20} color="#22c55e" />

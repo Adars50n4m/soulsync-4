@@ -36,8 +36,6 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false,
       "package": "com.soulsync4.mobile",
       "permissions": [
         "android.permission.POST_NOTIFICATIONS",
@@ -106,7 +104,9 @@
       "./plugins/withCallKit",
       "./plugins/withAndroidCalling",
       "./plugins/withWebSocketFix",
-      "expo-local-authentication"
+      "expo-local-authentication",
+      "expo-font",
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true,

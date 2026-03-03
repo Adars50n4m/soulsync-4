@@ -54,7 +54,7 @@ const ProgressiveBlur = ({
                         key={key}
                         intensity={intensity / steps}
                         tint="dark"
-                        experimentalBlurMethod="dimezisBlurView"
+                        
                         style={{
                             position: 'absolute',
                             [position]: 0,

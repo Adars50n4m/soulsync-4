@@ -106,7 +106,7 @@ const MessageContextMenu = ({
         <Modal visible={visible} transparent animationType="none" onRequestClose={handleClose}>
             <View style={StyleSheet.absoluteFill}>
                 <Animated.View style={[StyleSheet.absoluteFill, backdropStyle]}>
-                    <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} experimentalBlurMethod="dimezisBlurView" />
+                    <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill}  />
                     <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
                 </Animated.View>
 
@@ -128,8 +128,8 @@ const MessageContextMenu = ({
                             shadowRadius: 15,
                             elevation: 10,
                         }}>
-                            <BlurView intensity={80} tint="dark" style={[ChatStyles.contextEmojiTail, { [isMe ? 'right' : 'left']: 20 }]} experimentalBlurMethod="dimezisBlurView" />
-                            <BlurView intensity={80} tint="dark" style={{ flex: 1, borderRadius: 27, overflow: 'hidden', backgroundColor: 'rgba(30,30,30,0.5)' }} experimentalBlurMethod="dimezisBlurView">
+                            <BlurView intensity={80} tint="dark" style={[ChatStyles.contextEmojiTail, { [isMe ? 'right' : 'left']: 20 }]}  />
+                            <BlurView intensity={80} tint="dark" style={{ flex: 1, borderRadius: 27, overflow: 'hidden', backgroundColor: 'rgba(30,30,30,0.5)' }} >
                                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: 'center', paddingHorizontal: 16, gap: 14 }}>
                                     {emojis.map(e => (
                                         <Pressable key={e} onPress={() => { onReaction(e); handleClose(); }} style={{ paddingVertical: 10 }}>
@@ -165,7 +165,7 @@ const MessageContextMenu = ({
                             shadowRadius: 15,
                             elevation: 10,
                         }}>
-                            <BlurView intensity={80} tint="dark" style={{ borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(30,30,30,0.5)' }} experimentalBlurMethod="dimezisBlurView">
+                            <BlurView intensity={80} tint="dark" style={{ borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(30,30,30,0.5)' }} >
                                 <Pressable style={ChatStyles.contextActionBtn} onPress={() => { onAction('reply'); handleClose(); }}>
                                     <MaterialIcons name="reply" size={20} color="#fff" />
                                     <Text style={ChatStyles.contextActionText}>Reply</Text>

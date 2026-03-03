@@ -101,7 +101,7 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
                         ) : (
                             // Neutral Glass with subtle Rose tint
                             <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(255, 255, 255, 0.08)' }]}>
-                                <BlurView intensity={20} tint="light" style={StyleSheet.absoluteFill} experimentalBlurMethod="dimezisBlurView" />
+                                <BlurView intensity={20} tint="light" style={StyleSheet.absoluteFill}  />
                             </View>
                         )}
                         
@@ -155,7 +155,7 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
                     {msg.reactions && msg.reactions.length > 0 && (
                         <View style={[styles.reactionsRow, isMe ? styles.reactionsRight : styles.reactionsLeft]}>
                             {msg.reactions.map((r: string, idx: number) => (
-                                <BlurView key={idx} intensity={40} tint="dark" style={styles.reactionPill} experimentalBlurMethod="dimezisBlurView">
+                                <BlurView key={idx} intensity={40} tint="dark" style={styles.reactionPill} >
                                     <Text style={styles.reactionEmoji}>{r}</Text>
                                 </BlurView>
                             ))}
@@ -174,7 +174,7 @@ const ReactionModal = ({ visible, onClose, onSelect }: any) => {
     return (
         <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
             <Pressable style={styles.reactionModalOverlay} onPress={onClose}>
-                <BlurView intensity={80} tint="dark" style={styles.reactionModalContent} experimentalBlurMethod="dimezisBlurView">
+                <BlurView intensity={80} tint="dark" style={styles.reactionModalContent} >
                     <View style={styles.emojiBar}>
                         {emojis.map(emoji => (
                             <Pressable key={emoji} onPress={() => onSelect(emoji)} style={styles.emojiButton}>
@@ -303,7 +303,7 @@ export default function RemoteChat() {
             <StatusBar barStyle="light-content" />
 
             {/* Header */}
-            <BlurView intensity={100} tint="dark" style={styles.header} experimentalBlurMethod="dimezisBlurView">
+            <BlurView intensity={100} tint="dark" style={styles.header} >
                 <Pressable 
                     onPress={() => {
                         if (navigation.canGoBack()) navigation.goBack();
@@ -374,7 +374,7 @@ export default function RemoteChat() {
 
             {/* Reply Preview */}
             {replyingTo && (
-                <BlurView intensity={60} tint="dark" style={styles.replyPreview} experimentalBlurMethod="dimezisBlurView">
+                <BlurView intensity={60} tint="dark" style={styles.replyPreview} >
                     <View style={styles.replyContent}>
                         <View style={styles.quoteBar} />
                         <View style={styles.replyTextContainer}>
@@ -389,7 +389,7 @@ export default function RemoteChat() {
             )}
 
             {/* Input Area */}
-            <BlurView intensity={100} tint="dark" style={styles.inputArea} experimentalBlurMethod="dimezisBlurView">
+            <BlurView intensity={100} tint="dark" style={styles.inputArea} >
                 <Pressable style={styles.attachButton}>
                     <MaterialIcons name="add" size={24} color="rgba(255,255,255,0.5)" />
                 </Pressable>
@@ -448,7 +448,7 @@ export default function RemoteChat() {
                             }
                         ]}
                     >
-                        <BlurView intensity={100} tint="dark" style={styles.callDropdownBlur} experimentalBlurMethod="dimezisBlurView">
+                        <BlurView intensity={100} tint="dark" style={styles.callDropdownBlur} >
                             <Pressable style={styles.callDropdownItem} onPress={() => handleCall('audio')}>
                                 <View style={[styles.callDropdownIcon, { backgroundColor: 'rgba(34, 197, 94, 0.15)' }]}>
                                     <MaterialIcons name="call" size={20} color="#22c55e" />

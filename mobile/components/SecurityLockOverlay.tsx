@@ -59,7 +59,7 @@ export const SecurityLockOverlay = () => {
 
     return (
         <Modal visible={isLocked} animationType="fade" transparent>
-            <BlurView intensity={100} tint="dark" style={styles.container} experimentalBlurMethod="dimezisBlurView">
+            <BlurView intensity={100} tint="dark" style={styles.container} >
                 <View style={styles.content}>
                     <View style={[styles.iconContainer, { backgroundColor: `${activeTheme.primary}20` }]}>
                         <MaterialIcons name="lock" size={48} color={activeTheme.primary} />

@@ -308,7 +308,7 @@ const MessageBubble = React.memo(({
                 {msg.reactions && msg.reactions.length > 0 && (
                     <View style={[ChatStyles.reactionsRow, isMe ? ChatStyles.reactionsRight : ChatStyles.reactionsLeft]}>
                         {msg.reactions.map((r, idx) => (
-                            <BlurView key={idx} intensity={40} tint="dark" style={ChatStyles.reactionPill} experimentalBlurMethod="dimezisBlurView">
+                            <BlurView key={idx} intensity={40} tint="dark" style={ChatStyles.reactionPill} >
                                 <Text style={ChatStyles.reactionEmoji}>{r}</Text>
                             </BlurView>
                         ))}
@@ -407,7 +407,7 @@ const MessageBubble = React.memo(({
                         {msg.reactions && msg.reactions.length > 0 && (
                             <View style={[ChatStyles.reactionsRow, isMe ? ChatStyles.reactionsRight : ChatStyles.reactionsLeft]}>
                                 {msg.reactions.map((r, idx) => (
-                                    <BlurView key={idx} intensity={40} tint="dark" style={ChatStyles.reactionPill} experimentalBlurMethod="dimezisBlurView">
+                                    <BlurView key={idx} intensity={40} tint="dark" style={ChatStyles.reactionPill} >
                                         <Text style={ChatStyles.reactionEmoji}>{r}</Text>
                                     </BlurView>
                                 ))}

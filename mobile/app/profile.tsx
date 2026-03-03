@@ -168,7 +168,7 @@ export default function ProfileScreen() {
 
                 {/* Glassmorphism Menu Cards */}
                 <View style={styles.menuContainer}>
-                    <BlurView intensity={20} tint="dark" style={styles.glassCard} experimentalBlurMethod="dimezisBlurView">
+                    <BlurView intensity={20} tint="dark" style={styles.glassCard} >
                         <MenuItem 
                             icon="person-outline" 
                             title="Profile Status" 

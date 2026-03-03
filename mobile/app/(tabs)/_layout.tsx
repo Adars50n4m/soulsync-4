@@ -87,7 +87,6 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
           intensity={Platform.OS === 'android' ? 80 : 30}
           tint="dark"
           style={[StyleSheet.absoluteFill, { backgroundColor: 'transparent' }]}
-          experimentalBlurMethod="dimezisBlurView"
         />
         <Animated.View style={[
         StyleSheet.absoluteFill, // Keep it filling the container

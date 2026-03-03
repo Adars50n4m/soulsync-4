@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import * as React from 'react';
+import { useState, useEffect, useRef, createContext, useContext, useCallback, useMemo } from 'react';
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
@@ -125,28 +126,30 @@ interface AppContextType {
     typingUsers: string[];
 
     // Actions
-    addMessage: (chatId: string, text: string, sender: 'me' | 'them', media?: Message['media']) => string;
-    updateMessage: (chatId: string, messageId: string, text: string) => void;
-    updateMessageStatus: (chatId: string, messageId: string, status: 'sent' | 'delivered' | 'read') => void;
-    deleteMessage: (chatId: string, messageId: string) => void;
-    addReaction: (chatId: string, messageId: string, emoji: string) => void;
-    addCall: (call: Omit<CallLog, 'id'>) => void;
-    addStatus: (status: Omit<StatusUpdate, 'id' | 'likes' | 'views'> & { localUri?: string }) => void;
-    deleteStatus: (id: string) => void;
+    addMessage: (chatId: string, text: string, media?: Message['media'], replyTo?: string) => Promise<void>;
+    updateMessage: (chatId: string, messageId: string, updates: Partial<Message>) => Promise<void>;
+    updateMessageStatus: (chatId: string, messageId: string, status: Message['status']) => Promise<void>;
+    deleteMessage: (chatId: string, messageId: string) => Promise<void>;
+    addReaction: (chatId: string, messageId: string, emoji: string) => Promise<void>;
+    addCall: (call: Omit<CallLog, 'id'>) => Promise<void>;
+    deleteCall: (id: string) => Promise<void>;
+    clearCalls: () => Promise<void>;
+    addStatus: (status: Omit<StatusUpdate, 'id' | 'likes' | 'views'> & { localUri?: string }) => Promise<void>;
+    deleteStatus: (id: string) => Promise<void>;
     toggleStatusLike: (statusId: string) => Promise<void>;
     setTheme: (theme: ThemeName) => void;
-    startCall: (contactId: string, type: 'audio' | 'video') => void;
+    startCall: (contactId: string, type: 'audio' | 'video') => Promise<void>;
     acceptCall: () => Promise<void>;
-    endCall: () => void;
+    endCall: () => Promise<void>;
     toggleMinimizeCall: (val: boolean) => void;
     toggleMute: () => void;
-    playSong: (song: Song) => void;
-    togglePlayMusic: () => void;
-    toggleFavoriteSong: (song: Song) => void;
-    seekTo: (position: number) => void;
+    playSong: (song: Song) => Promise<void>;
+    togglePlayMusic: () => Promise<void>;
+    toggleFavoriteSong: (song: Song) => Promise<void>;
+    seekTo: (position: number) => Promise<void>;
     getPlaybackPosition: () => Promise<number>;
-    sendChatMessage: (chatId: string, text: string, media?: Message['media'], replyTo?: string) => void;
-    updateProfile: (updates: { name?: string; bio?: string; avatar?: string; birthdate?: string; note?: string; noteTimestamp?: string }) => void;
+    sendChatMessage: (chatId: string, text: string, media?: Message['media'], replyTo?: string) => Promise<void>;
+    updateProfile: (updates: { name?: string; bio?: string; avatar?: string; birthdate?: string; note?: string; noteTimestamp?: string }) => Promise<void>;
     addStatusView: (statusId: string) => Promise<void>;
     sendTyping: (isTyping: boolean) => void;
     saveNote: (text: string) => Promise<void>;
@@ -170,7 +173,11 @@ interface AppContextType {
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);
 
-export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+interface AppProviderProps {
+    children: React.ReactNode;
+}
+
+export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     // Auth State
     const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [otherUser, setOtherUser] = useState<User | null>(null);
@@ -204,12 +211,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const [privacySettings, setPrivacySettings] = useState<PrivacySettings>(DEFAULT_PRIVACY);
 
     const [sound, setSound] = useState<Audio.Sound | null>(null);
+
     const soundRef = useRef<Audio.Sound | null>(null);
     const musicStateRef = useRef(musicState);
     const isSeekingRef = useRef(false);
+    const pendingViewUpdatesRef = useRef<Set<string>>(new Set());
+    
+    const messagesRef = useRef(messages);
+    const statusesRef = useRef(statuses);
+    const themeRef = useRef(theme);
+    const biometricEnabledRef = useRef(biometricEnabled);
+    const pinEnabledRef = useRef(pinEnabled);
+    const pinRef = useRef(pin);
+    const privacySettingsRef = useRef(privacySettings);
+    const contactsRef = useRef(contacts);
+    const currentUserRef = useRef<User | null>(null);
+    const otherUserRef = useRef<User | null>(null);
+    const activeCallRef = useRef<ActiveCall | null>(activeCall);
 
     useEffect(() => { soundRef.current = sound; }, [sound]);
     useEffect(() => { musicStateRef.current = musicState; }, [musicState]);
+    useEffect(() => { messagesRef.current = messages; }, [messages]);
+    useEffect(() => { statusesRef.current = statuses; }, [statuses]);
+    useEffect(() => { themeRef.current = theme; }, [theme]);
+    useEffect(() => { biometricEnabledRef.current = biometricEnabled; }, [biometricEnabled]);
+    useEffect(() => { pinEnabledRef.current = pinEnabled; }, [pinEnabled]);
+    useEffect(() => { pinRef.current = pin; }, [pin]);
+    useEffect(() => { privacySettingsRef.current = privacySettings; }, [privacySettings]);
+    useEffect(() => { contactsRef.current = contacts; }, [contacts]);
+    useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
+    useEffect(() => { otherUserRef.current = otherUser; }, [otherUser]);
+    useEffect(() => { activeCallRef.current = activeCall; }, [activeCall]);
 
     // Configure Audio mode for proper playback
     useEffect(() => {
@@ -692,26 +724,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // --- REFINED DATA FETCHING ---
 
-    /** Resolve R2 keys → local file URIs for all statuses (background, non-blocking) */
-    const resolveStatusMediaUrls = async (statusList: StatusUpdate[]) => {
-        try {
-            const resolved = await Promise.all(
-                statusList.map(async (s) => {
-                    // Skip if already a displayable URI
-                    if (!s.mediaUrl || s.mediaUrl.startsWith('file://') || s.mediaUrl.startsWith('data:') || s.mediaUrl.startsWith('http')) {
-                        return s;
-                    }
-                    // s.mediaUrl is an R2 key — resolve to local/presigned URL
-                    const localUrl = await storageService.getMediaUrl(s.mediaUrl);
-                    return localUrl ? { ...s, mediaUrl: localUrl } : s;
-                })
-            );
-            setStatuses(resolved);
-        } catch (e) {
-            console.warn('[AppContext] resolveStatusMediaUrls failed (non-fatal):', e);
-        }
-    };
-
     const fetchStatusesFromSupabase = async (userId: string, otherId: string) => {
         try {
             console.log("Fetching statuses from Supabase to sync...");
@@ -739,13 +751,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     }
                 }
 
-                // Map Supabase rows directly to StatusUpdate for UI
-                // (SQLite loses user_name, user_avatar, likes — so use Supabase data as source of truth)
+                // Map Supabase rows and resolve R2 keys in one pass (single setStatuses call)
                 const mapped = data.map(mapStatusFromDB);
-                setStatuses(mapped);
+                const resolved = await Promise.all(
+                    mapped.map(async (s) => {
+                        // Resolve owner info if missing
+                        if (s.contactName === 'Unknown' || !s.avatar) {
+                            const owner = USERS[s.userId] || contactsRef.current.find(c => c.id === s.userId);
+                            if (owner) {
+                                s.contactName = owner.name;
+                                s.avatar = owner.avatar;
+                            }
+                        }
 
-                // Resolve R2 keys to local/presigned URLs in background (non-blocking)
-                resolveStatusMediaUrls(mapped);
+                        if (!s.mediaUrl || s.mediaUrl.startsWith('file://') || s.mediaUrl.startsWith('data:') || s.mediaUrl.startsWith('http')) return s;
+                        try {
+                            const localUrl = await storageService.getMediaUrl(s.mediaUrl);
+                            return localUrl ? { ...s, mediaUrl: localUrl } : s;
+                        } catch { return s; }
+                    })
+                );
+                setStatuses(resolved);
             }
         } catch (e) { console.warn('Fetch statuses error (Non-fatal):', e); }
     };
@@ -841,81 +867,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             })
             .subscribe();
 
-        // Listen for new STATUSES (Sync)
+        // Listen for new STATUSES (Sync - UPDATE/DELETE only to avoid duplication with socket sync)
         const statusSub = supabase
             .channel('public:statuses')
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'statuses' }, async (payload) => {
-                if (payload.eventType === 'INSERT') {
-                    const newStatus = payload.new;
-                    // Verify if active
-                    if (new Date(newStatus.expires_at) > new Date()) {
-                        // Ensure the status owner exists in the contact list so Home can render it
-                        // next to "My status" immediately.
-                        const statusOwnerId = newStatus.user_id as string | undefined;
-                        if (statusOwnerId && currentUser?.id && statusOwnerId !== currentUser.id) {
-                            setContacts(prev => {
-                                if (prev.some(c => c.id === statusOwnerId)) return prev;
-                                return [
-                                    ...prev,
-                                    {
-                                        id: statusOwnerId,
-                                        name: 'Unknown',
-                                        avatar: '',
-                                        status: 'offline',
-                                        lastMessage: 'Start a conversation',
-                                        unreadCount: 0,
-                                    },
-                                ];
-                            });
+            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'statuses' }, async (payload) => {
+                const updated = payload.new;
+                const updatedId = updated.id?.toString();
 
-                            // Backfill profile info (non-blocking).
-                            try {
-                                const { data } = await supabase
-                                    .from('profiles')
-                                    .select('*')
-                                    .eq('id', statusOwnerId)
-                                    .single();
-                                if (data) {
-                                    setContacts(prev => prev.map(c => c.id === statusOwnerId ? {
-                                        ...c,
-                                        name: data.name || c.name,
-                                        avatar: data.avatar_url || c.avatar,
-                                        about: data.bio || c.about,
-                                        status: data.is_online ? 'online' : c.status,
-                                        lastSeen: data.last_seen || c.lastSeen,
-                                    } : c));
-                                }
-                            } catch (e) {
-                                // Non-fatal: rail can still render with placeholder.
-                            }
-                        }
-                        const mappedNew = mapStatusFromDB(newStatus);
-                        setStatuses(prev => {
-                            if (prev.find(s => s.id === mappedNew.id)) return prev;
-                            return [mappedNew, ...prev];
+                // Skip echo from our own addStatusView / toggleStatusLike optimistic updates
+                if (updatedId && pendingViewUpdatesRef.current.has(updatedId)) {
+                    return;
+                }
+
+                setStatuses(prev => prev.map(s => {
+                    if (s.id === updatedId) {
+                        // Merge existing state with new DB fields to avoid dropping data
+                        const mappedUpdated = mapStatusFromDB({
+                            id: s.id,
+                            user_id: s.userId,
+                            user_name: s.contactName,
+                            user_avatar: s.avatar,
+                            media_url: s.mediaUrl, 
+                            media_type: s.mediaType,
+                            caption: s.caption,
+                            created_at: s.timestamp,
+                            expires_at: s.expiresAt,
+                            views: s.views,
+                            likes: s.likes,
+                            music: s.music,
+                            ...updated // Overwrite with Supabase Realtime payload
                         });
-                        // Resolve R2 key in background
-                        if (mappedNew.mediaUrl && !mappedNew.mediaUrl.startsWith('file://') && !mappedNew.mediaUrl.startsWith('data:') && !mappedNew.mediaUrl.startsWith('http')) {
-                            storageService.getMediaUrl(mappedNew.mediaUrl).then(url => {
-                                if (url) setStatuses(prev => prev.map(s => s.id === mappedNew.id ? { ...s, mediaUrl: url } : s));
+
+                        // Preserve local file:// URL if the server only has the R2 key
+                        const finalMediaUrl = (s.mediaUrl?.startsWith('file://') && !mappedUpdated.mediaUrl?.startsWith('http')) 
+                            ? s.mediaUrl 
+                            : mappedUpdated.mediaUrl;
+                            
+                        const finalStatus = { ...mappedUpdated, mediaUrl: finalMediaUrl };
+
+                        // Resolve R2 key in background ONLY if we don't already have a valid URL
+                        if (finalMediaUrl && !finalMediaUrl.startsWith('file://') && !finalMediaUrl.startsWith('data:') && !finalMediaUrl.startsWith('http')) {
+                            storageService.getMediaUrl(finalMediaUrl).then(url => {
+                                if (url) setStatuses(curr => curr.map(currS => currS.id === finalStatus.id ? { ...currS, mediaUrl: url } : currS));
                             }).catch(() => {});
                         }
+
+                        return finalStatus;
                     }
-                } else if (payload.eventType === 'UPDATE') {
-                    const updated = payload.new;
-                    const mappedUpdated = mapStatusFromDB(updated);
-                    setStatuses(prev => prev.map(s =>
-                        s.id === mappedUpdated.id ? mappedUpdated : s
-                    ));
-                    // Resolve R2 key in background
-                    if (mappedUpdated.mediaUrl && !mappedUpdated.mediaUrl.startsWith('file://') && !mappedUpdated.mediaUrl.startsWith('data:') && !mappedUpdated.mediaUrl.startsWith('http')) {
-                        storageService.getMediaUrl(mappedUpdated.mediaUrl).then(url => {
-                            if (url) setStatuses(prev => prev.map(s => s.id === mappedUpdated.id ? { ...s, mediaUrl: url } : s));
-                        }).catch(() => {});
-                    }
-                } else if (payload.eventType === 'DELETE') {
-                    setStatuses(prev => prev.filter(s => s.id !== payload.old.id.toString()));
-                }
+                    return s;
+                }));
+            })
+            .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'statuses' }, async (payload) => {
+                setStatuses(prev => prev.filter(s => s.id !== payload.old.id.toString()));
             })
             .subscribe();
 
@@ -1092,7 +1095,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await chatService.sendMessage(text, media, replyTo);
     }, []);
 
-    const login = async (username: string, password: string): Promise<boolean> => {
+    const login = useCallback(async (username: string, password: string): Promise<boolean> => {
         const normalizedUser = username.toLowerCase();
         const normalizedPass = password.toLowerCase();
 
@@ -1108,13 +1111,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 id: other.id,
                 name: other.name,
                 avatar: other.avatar,
-                status: 'offline', // Default to offline, let socket update it
+                status: 'offline',
                 about: other.bio || '',
                 lastMessage: 'Start a conversation',
                 unreadCount: 0,
             }]);
 
-            // Force fetch immediately upon login (non-blocking)
+            // Sync with local DB
+            if (offlineService) {
+                offlineService.saveContact({
+                    id: other.id,
+                    name: other.name,
+                    avatar: other.avatar,
+                    status: 'offline',
+                    lastMessage: 'Start a conversation',
+                    unreadCount: 0,
+                    about: other.bio || '',
+                }).catch(() => {});
+            }
+
             fetchProfileFromSupabase(normalizedUser);
             fetchCallsFromSupabase(normalizedUser);
             fetchOtherUserProfile(other.id);
@@ -1123,7 +1138,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return true;
         }
         return false;
-    };
+    }, []);
+
+    const logout = useCallback(async () => {
+        const authId = currentUserRef.current?.id;
+        const cleanup = [];
+        if (authId) {
+            cleanup.push(updatePresenceInSupabase(authId, false));
+        }
+        if (presenceChannelRef.current) {
+            cleanup.push(presenceChannelRef.current.untrack());
+            supabase.removeChannel(presenceChannelRef.current);
+            presenceChannelRef.current = null;
+        }
+        
+        await Promise.all(cleanup);
+        setCurrentUser(null);
+        setOtherUser(null);
+        setContacts([]);
+        await AsyncStorage.removeItem('ss_current_user');
+    }, [updatePresenceInSupabase]);
 
     // ... (Keep existing profile fetchers) ...
      const fetchProfileFromSupabase = async (userId: string) => {
@@ -1188,23 +1222,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
     };
 
-    const logout = async () => {
-        const cleanup = [];
-        if (currentUser) {
-            cleanup.push(updatePresenceInSupabase(currentUser.id, false));
-        }
-        if (presenceChannelRef.current) {
-            cleanup.push(presenceChannelRef.current.untrack());
-            supabase.removeChannel(presenceChannelRef.current);
-            presenceChannelRef.current = null;
-        }
-        
-        await Promise.all(cleanup);
-        setCurrentUser(null);
-        setOtherUser(null);
-        setContacts([]);
-        await AsyncStorage.removeItem('ss_current_user');
-    };
 
     // ... (Keep Music Functions) ...
     const sendTyping = useCallback((isTyping: boolean) => {
@@ -1216,11 +1233,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
     }, [currentUser, otherUser]);
 
-    const playSong = async (song: Song, broadcast = true) => {
+    const playSong = useCallback(async (song: Song, broadcast = true) => {
         try {
             if (!song.url || song.url.trim() === '') return;
 
-            // Ensure audio session is in media playback mode (not call/recording mode).
             await Audio.setAudioModeAsync({
                 allowsRecordingIOS: false,
                 playsInSilentModeIOS: true,
@@ -1237,17 +1253,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 { shouldPlay: true, volume: 1.0, progressUpdateIntervalMillis: 500 },
                 (playbackStatus) => {
                     if (!playbackStatus.isLoaded) return;
-
-                    // Keep UI in sync with actual player state.
                     setMusicState(prev => ({ ...prev, isPlaying: playbackStatus.isPlaying }));
-
                     if (playbackStatus.didJustFinish) {
                         setMusicState(prev => ({ ...prev, isPlaying: false }));
                         if (broadcast) {
                             musicSyncService.broadcastUpdate({
                                 currentSong: song,
                                 isPlaying: false,
-                                updatedBy: currentUser?.id || ''
+                                updatedBy: currentUserRef.current?.id || ''
                             });
                         }
                     }
@@ -1255,7 +1268,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             );
             if (!status.isLoaded) return;
 
-            // Explicit play to avoid edge cases where shouldPlay state is stale.
             await Promise.all([
                 newSound.setIsMutedAsync(false),
                 newSound.setVolumeAsync(1.0),
@@ -1265,9 +1277,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setSound(newSound);
             setMusicState(prev => ({ ...prev, currentSong: song, isPlaying: true }));
 
-            // Save last played song
-            if (currentUser) {
-                AsyncStorage.setItem(`ss_last_song_${currentUser.id}`, JSON.stringify(song));
+            if (currentUserRef.current) {
+                AsyncStorage.setItem(`ss_last_song_${currentUserRef.current.id}`, JSON.stringify(song));
             }
 
             if (broadcast) {
@@ -1275,24 +1286,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     currentSong: song,
                     isPlaying: true,
                     position: 0,
-                    updatedBy: currentUser?.id || ''
+                    updatedBy: currentUserRef.current?.id || ''
                 });
             }
         } catch (e) {
             console.error('[Music] playSong failed:', e);
             setMusicState(prev => ({ ...prev, isPlaying: false }));
         }
-    };
+    }, []);
 
-    const togglePlayMusic = async () => {
-        // Recover player if state says we have a song but sound instance was lost.
+    const togglePlayMusic = useCallback(async () => {
         if (!soundRef.current) {
-            if (musicState.currentSong) {
-                await playSong(musicState.currentSong, false);
+            if (musicStateRef.current.currentSong) {
+                await playSong(musicStateRef.current.currentSong, false);
             }
             return;
         }
-        // Keep output on normal media route (avoid stale call/recording route).
         await Audio.setAudioModeAsync({
             allowsRecordingIOS: false,
             playsInSilentModeIOS: true,
@@ -1300,7 +1309,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             shouldDuckAndroid: true,
             playThroughEarpieceAndroid: false,
         });
-        const newIsPlaying = !musicState.isPlaying;
+        const newIsPlaying = !musicStateRef.current.isPlaying;
         let currentPos = 0;
         try {
             const status = await soundRef.current.getStatusAsync();
@@ -1318,36 +1327,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         setMusicState(prev => ({ ...prev, isPlaying: newIsPlaying }));
 
-        if (musicState.currentSong) {
+        if (musicStateRef.current.currentSong) {
             musicSyncService.broadcastUpdate({
-                currentSong: musicState.currentSong,
+                currentSong: musicStateRef.current.currentSong,
                 isPlaying: newIsPlaying,
                 position: currentPos,
-                updatedBy: currentUser?.id || ''
+                updatedBy: currentUserRef.current?.id || ''
             });
         }
-    };
+    }, [playSong]);
 
-    const toggleFavoriteSong = async (song: Song) => {
-        if (!currentUser) return;
+    const toggleFavoriteSong = useCallback(async (song: Song) => {
+        if (!currentUserRef.current) return;
+        const currentRef = currentUserRef.current;
         setMusicState(prev => {
             const isFav = prev.favorites.some(s => s.id === song.id);
             const newFavs = isFav ? prev.favorites.filter(s => s.id !== song.id) : [...prev.favorites, song];
-            const syncDb = async () => {
+            
+            (async () => {
                 try {
                     if (isFav) {
-                        await supabase.from('favorites').delete().eq('user_id', currentUser.id).eq('song_id', song.id);
+                        await supabase.from('favorites').delete().eq('user_id', currentRef.id).eq('song_id', song.id);
                     } else {
-                        await supabase.from('favorites').insert({ user_id: currentUser.id, song_id: song.id, song_data: song });
+                        await supabase.from('favorites').insert({ user_id: currentRef.id, song_id: song.id, song_data: song });
                     }
                 } catch (e) {}
-            };
-            syncDb();
+            })();
+            
             return { ...prev, favorites: newFavs };
         });
-    };
+    }, []);
 
-    const seekTo = async (position: number) => {
+    const seekTo = useCallback(async (position: number) => {
         if (!soundRef.current || isSeekingRef.current) return;
         try {
             isSeekingRef.current = true;
@@ -1356,12 +1367,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             await soundRef.current.setPositionAsync(Math.max(0, position));
 
-            if (musicState.currentSong) {
+            if (musicStateRef.current.currentSong) {
                 musicSyncService.broadcastUpdate({
-                    currentSong: musicState.currentSong,
-                    isPlaying: musicState.isPlaying,
+                    currentSong: musicStateRef.current.currentSong,
+                    isPlaying: musicStateRef.current.isPlaying,
                     position: Math.max(0, position),
-                    updatedBy: currentUser?.id || ''
+                    updatedBy: currentUserRef.current?.id || ''
                 });
             }
         } catch (e: any) {
@@ -1371,167 +1382,157 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
         }
         isSeekingRef.current = false;
-    };
+    }, []);
 
-    const getPlaybackPosition = async (): Promise<number> => {
+    const getPlaybackPosition = useCallback(async (): Promise<number> => {
         try {
             if (soundRef.current) {
                 const status = await soundRef.current.getStatusAsync();
                 if (status.isLoaded) return status.positionMillis;
             }
-        } catch (e) {
-            // Ignore transient player state errors during rapid song switch/seek.
-        }
+        } catch (e) {}
         return 0;
-    };
+    }, []);
 
-    // ... (Keep existing message helpers) ...
-    const addMessage = (chatId: string, text: string, sender: 'me' | 'them', media?: Message['media']) => {
-        const messageId = Date.now().toString();
+    const addMessage = useCallback(async (chatId: string, text: string, media?: Message['media'], replyTo?: string) => {
         const newMessage: Message = {
-            id: messageId,
-            sender,
+            id: Date.now().toString(),
+            sender: 'me',
             text,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            status: sender === 'me' ? 'sent' : undefined,
+            timestamp: new Date().toISOString(),
+            status: 'sent',
             media,
+            replyTo
         };
-        setMessages((prev) => {
-            const newChatMessages = [...(prev[chatId] || []), newMessage];
-            setContacts(prevContacts => prevContacts.map(c =>
-                c.id === chatId ? {
-                    ...c,
-                    lastMessage: media ? (media.type === 'image' ? '胴 Photo' : `梼 ${media.name}`) : text,
-                    unreadCount: sender === 'them' ? (c.unreadCount || 0) + 1 : 0
-                } : c
-            ));
-            return { ...prev, [chatId]: newChatMessages };
-        });
-        return messageId;
-    };
 
-    const updateMessage = (chatId: string, messageId: string, text: string) => {
-        setMessages((prev) => {
-            const chatMessages = prev[chatId] || [];
-            return { ...prev, [chatId]: chatMessages.map((msg) => msg.id === messageId ? { ...msg, text } : msg) };
-        });
-    };
+        addMessageSafely(chatId, newMessage);
 
-    const updateMessageStatus = (chatId: string, messageId: string, status: 'sent' | 'delivered' | 'read') => {
-        setMessages((prev) => {
-            const chatMessages = prev[chatId] || [];
-            return { ...prev, [chatId]: chatMessages.map((msg) => msg.id === messageId ? { ...msg, status } : msg) };
-        });
-    };
+        setContacts(prev => prev.map(c => 
+            c.id === chatId ? { ...c, lastMessage: media ? '📎 Attachment' : text } : c
+        ));
 
-    const deleteMessage = async (chatId: string, messageId: string) => {
-        setMessages((prev) => {
-            const chatMessages = prev[chatId] || [];
-            const filteredMessages = chatMessages.filter(m => m.id !== messageId);
-            const lastMsg = filteredMessages[filteredMessages.length - 1];
-            setContacts(prevContacts => prevContacts.map(c =>
-                c.id === chatId ? {
-                    ...c,
-                    lastMessage: lastMsg ? (lastMsg.media ? '📎 Attachment' : lastMsg.text) : ''
-                } : c
-            ));
-            return { ...prev, [chatId]: filteredMessages };
+        if (offlineService) {
+            await offlineService.saveMessage(chatId, newMessage);
+        }
+
+        await chatService.sendMessage(text, media, replyTo);
+    }, [addMessageSafely]);
+
+    const updateMessage = useCallback(async (chatId: string, messageId: string, updates: Partial<Message>) => {
+        setMessages(prev => {
+            const chatMsgs = prev[chatId] || [];
+            if (!chatMsgs.find(m => m.id === messageId)) return prev;
+            return {
+                ...prev,
+                [chatId]: chatMsgs.map(m => m.id === messageId ? { ...m, ...updates } : m)
+            };
+        });
+
+        if (offlineService) {
+            const msg = messagesRef.current[chatId]?.find(m => m.id === messageId);
+            if (msg) await offlineService.saveMessage(chatId, { ...msg, ...updates });
+        }
+    }, []);
+
+    const updateMessageStatus = useCallback(async (chatId: string, messageId: string, status: Message['status']) => {
+        setMessages(prev => {
+            const chatMsgs = prev[chatId] || [];
+            if (!chatMsgs.find(m => m.id === messageId)) return prev;
+            return {
+                ...prev,
+                [chatId]: chatMsgs.map(m => m.id === messageId ? { ...m, status } : m)
+            };
+        });
+
+        if (offlineService) {
+            const msg = messagesRef.current[chatId]?.find(m => m.id === messageId);
+            if (msg) await offlineService.saveMessage(chatId, { ...msg, status });
+        }
+    }, []);
+
+    const deleteMessage = useCallback(async (chatId: string, messageId: string) => {
+        setMessages(prev => {
+            const next = { ...prev };
+            next[chatId] = (next[chatId] || []).filter(m => m.id !== messageId);
+            return next;
         });
 
         if (offlineService) {
             await offlineService.deleteMessage(messageId);
         }
 
+        setContacts(prev => prev.map(c => {
+            if (c.id === chatId) {
+                const chatMsgs = (messagesRef.current[chatId] || []).filter(m => m.id !== messageId);
+                const lastMsg = chatMsgs[chatMsgs.length - 1];
+                return { ...c, lastMessage: lastMsg ? (lastMsg.media ? '📎 Attachment' : lastMsg.text) : '' };
+            }
+            return c;
+        }));
+
         try {
             await supabase.from('messages').delete().eq('id', messageId);
-        } catch (error) {
-            console.error('Error deleting message from server:', error);
-        }
-    };
+        } catch {}
+    }, []);
 
-    const addReaction = (chatId: string, messageId: string, emoji: string) => {
-        let nextReactionValue: string | null = null;
-
-        setMessages((prev) => {
-            const chatMessages = prev[chatId] || [];
+    const addReaction = useCallback(async (chatId: string, messageId: string, emoji: string) => {
+        setMessages(prev => {
+            const chatMsgs = prev[chatId] || [];
             return {
                 ...prev,
-                [chatId]: chatMessages.map((msg) => {
-                    if (msg.id === messageId) {
-                        const reactions = msg.reactions || [];
-                        const isSame = reactions.includes(emoji);
-                        const newReactions = isSame ? [] : [emoji];
-                        nextReactionValue = newReactions[0] ?? null;
-                        return { ...msg, reactions: newReactions };
-                    }
-                    return msg;
-                })
+                [chatId]: chatMsgs.map(m => m.id === messageId ? { ...m, reactions: [emoji] } : m)
             };
         });
 
-        (async () => {
-            if (offlineService) {
-                try {
-                    await offlineService.updateReaction(messageId, nextReactionValue);
-                } catch (e) {
-                    console.warn('[AppContext] Local reaction persistence error:', e);
-                }
-            }
+        if (offlineService) {
+            const msg = messagesRef.current[chatId]?.find(m => m.id === messageId);
+            if (msg) await offlineService.saveMessage(chatId, { ...msg, reactions: [emoji] });
+        }
 
-            try {
-                const { error } = await supabase
-                    .from('messages')
-                    .update({ reaction: nextReactionValue })
-                    .eq('id', messageId);
-                if (error) {
-                    console.warn('[AppContext] Failed to persist reaction:', error);
-                }
-            } catch (e) {
-                console.warn('[AppContext] Reaction persistence error:', e);
-            }
-        })();
-    };
+        try {
+            const { error } = await supabase.from('messages').update({ reaction: emoji }).eq('id', messageId);
+            if (error) throw error;
+        } catch (e) { console.warn('Reaction sync error:', e); }
+    }, []);
 
     // --- CALL LOGIC ---
-    const addCall = async (call: Omit<CallLog, 'id'>) => {
-        if (currentUser) {
+    const addCall = useCallback(async (call: Omit<CallLog, 'id'>) => {
+        const authUser = currentUserRef.current;
+        if (authUser) {
             try {
                 const isOutgoing = call.type === 'outgoing';
-                const callerId = isOutgoing ? currentUser.id : call.contactId;
-                const calleeId = isOutgoing ? call.contactId : currentUser.id;
+                const callerId = isOutgoing ? authUser.id : call.contactId;
+                const calleeId = isOutgoing ? call.contactId : authUser.id;
                 
-                // Add to Local state immediately for speed
                 const tempId = Date.now().toString();
                 const newLog: CallLog = { ...call, id: tempId };
                 setCalls(prev => [newLog, ...prev]);
 
-                const insertPayload = {
+                const { error } = await supabase.from('call_logs').insert({
                     caller_id: callerId,
                     callee_id: calleeId,
                     call_type: call.callType,
                     status: call.status || 'completed',
                     duration: call.duration || 0,
                     created_at: new Date().toISOString()
-                };
-                console.log("[AppContext] Inserting call log:", insertPayload);
-
-                const { error } = await supabase.from('call_logs').insert(insertPayload);
-                
+                });
                 if (error) console.warn("Supabase insert call log error:", error);
-                else console.log("Call log inserted successfully");
-            } catch (e) { console.warn('Failed to save call to DB (Non-fatal):', e); }
+            } catch (e) { console.warn('Failed to save call to DB:', e); }
         }
-    };
+    }, []);
 
-    const activeCallRef = useRef<ActiveCall | null>(null);
-    const contactsRef = useRef<Contact[]>([]);
-    const currentUserRef = useRef<User | null>(null);
-    const otherUserRef = useRef<User | null>(null);
+    const deleteCall = useCallback(async (callId: string) => {
+        setCalls(prev => prev.filter(c => c.id !== callId));
+        await supabase.from('call_logs').delete().eq('id', callId);
+    }, []);
 
-    useEffect(() => { activeCallRef.current = activeCall; }, [activeCall]);
-    useEffect(() => { contactsRef.current = contacts; }, [contacts]);
-    useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
-    useEffect(() => { otherUserRef.current = otherUser; }, [otherUser]);
+    const clearCalls = useCallback(async () => {
+        const authId = currentUserRef.current?.id;
+        if (!authId) return;
+        setCalls([]);
+        await supabase.from('call_logs').delete().or(`caller_id.eq.${authId},callee_id.eq.${authId}`);
+    }, []);
+
 
     // Outgoing Call Timeout (1 Minute) - WhatsApp style
     useEffect(() => {
@@ -1781,8 +1782,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
     }, [currentUser]);
 
-    const startCall = async (contactId: string, type: 'audio' | 'video') => {
-        const contact = contacts.find(c => c.id === contactId);
+    const rejectCall = useCallback(async () => {
+        const active = activeCallRef.current;
+        if (active && active.isIncoming && active.callId) {
+            const signal: CallSignal = {
+                type: 'call-reject',
+                callId: active.callId,
+                callerId: active.contactId,
+                calleeId: currentUserRef.current?.id || '',
+                callType: active.type,
+                timestamp: new Date().toISOString(),
+                roomId: active.callId
+            };
+            callService.rejectCall(signal).catch(console.warn);
+            notificationService.dismissCallNotification(active.callId).catch(console.warn);
+            
+            const contact = contactsRef.current.find(c => c.id === active.contactId);
+            addCall({
+                contactId: active.contactId,
+                contactName: contact?.name || 'Unknown',
+                avatar: contact?.avatar || '',
+                type: 'incoming',
+                status: 'rejected',
+                callType: active.type,
+                time: 'Just now'
+            });
+
+            soundService.stopAll();
+            try {
+                const { webRTCService } = require('../services/WebRTCService');
+                webRTCService.endCall();
+            } catch (e) {}
+            soundService.playCallEnd();
+            setActiveCall(null);
+        }
+    }, [addCall]);
+
+    const startCall = useCallback(async (contactId: string, type: 'audio' | 'video') => {
+        const contact = contactsRef.current.find(c => c.id === contactId);
         const callId = await callService.initiateCall(contactId, type);
 
         setActiveCall({
@@ -1799,367 +1836,210 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
 
         if (callId) {
-            // ── Push Poke to Callee ──
             nativeCallBridge.sendCallPush(
                 contactId, 
                 callId, 
-                currentUser?.name || "Someone", 
+                currentUserRef.current?.name || "Someone", 
                 type
             ).catch(e => console.warn('[AppContext] startCall: Push trigger failed:', e));
 
-            // Play dialing sound
             soundService.playDialing();
 
-            // Report outgoing call to native system
             if (Platform.OS !== 'ios' || !__DEV__) { 
-                // In iOS Simulator, CallKit can be flaky for outgoing calls
                 nativeCallBridge.reportOutgoingCall(callId, contact?.name || 'Unknown', type);
-            } else {
-                console.log('[AppContext] Skipping native outgoing call report for Simulator/Dev mode');
             }
         }
 
-        // PREFETCH AVATAR FOR SMOOTH TRANSITION
         if (contact?.avatar) {
             try { (Image as any).prefetch(contact.avatar); } catch (e) {}
         }
-
         router.push('/call');
-    };
+    }, []);
 
-    const acceptCall = async () => {
-        if (activeCall && activeCall.isIncoming && activeCall.callId) {
+    const acceptCall = useCallback(async () => {
+        const active = activeCallRef.current;
+        if (active && active.isIncoming && active.callId) {
             setActiveCall(prev => prev ? { ...prev, isAccepted: true, isRinging: false, startTime: Date.now() } : null);
             const signal: CallSignal = {
                 type: 'call-accept',
-                callId: activeCall.callId || '',
-                callerId: activeCall.contactId,
-                calleeId: currentUser!.id,
-                callType: activeCall.type,
+                callId: active.callId,
+                callerId: active.contactId,
+                calleeId: currentUserRef.current?.id || '',
+                callType: active.type,
                 timestamp: new Date().toISOString(),
-                roomId: activeCall.callId
+                roomId: active.callId
             };
             await callService.acceptCall(signal);
-            await notificationService.dismissCallNotification(activeCall.callId);
-            // Stop sound when accepting
+            await notificationService.dismissCallNotification(active.callId);
             soundService.stopAll();
         }
-    };
+    }, []);
 
-    const rejectCall = async () => {
-        if (activeCall && activeCall.isIncoming && activeCall.callId) {
-            const signal: CallSignal = {
-                type: 'call-reject',
-                callId: activeCall.callId || '',
-                callerId: activeCall.contactId,
-                calleeId: currentUser!.id,
-                callType: activeCall.type,
-                timestamp: new Date().toISOString(),
-                roomId: activeCall.callId
-            };
-            callService.rejectCall(signal).catch(console.warn);
-            notificationService.dismissCallNotification(activeCall.callId).catch(console.warn);
-            
-            // Log rejection
-            const contact = contacts.find(c => c.id === activeCall.contactId);
-            addCall({
-                contactId: activeCall.contactId,
-                contactName: contact?.name || 'Unknown',
-                avatar: contact?.avatar || '',
-                type: 'incoming',
-                status: 'rejected',
-                callType: activeCall.type,
-                time: 'Just now'
-            });
-
-            // Stop sound
-            soundService.stopAll();
-
-            try {
-                const { webRTCService } = require('../services/WebRTCService');
-                webRTCService.endCall();
-            } catch (e) {}
-            // Play call end sound
-            soundService.playCallEnd();
-            setActiveCall(null);
-        }
-    };
-
-    const endCall = async () => {
-        if (activeCall) {
-            if (activeCall.isIncoming && !activeCall.isAccepted) {
-                rejectCall().catch(console.warn);
+    const endCall = useCallback(async () => {
+        const active = activeCallRef.current;
+        if (active) {
+            if (active.isIncoming && !active.isAccepted) {
+                await rejectCall();
                 return;
             }
-            if (currentUser && activeCall.contactId) {
-                // Don't await network call so UI updates instantly
+            if (currentUserRef.current && active.contactId) {
                 callService.endCall().catch(console.warn);
             }
             
-            // Log completion
-            const contact = contacts.find(c => c.id === activeCall.contactId);
+            const contact = contactsRef.current.find(c => c.id === active.contactId);
             addCall({
-                contactId: activeCall.contactId,
+                contactId: active.contactId,
                 contactName: contact?.name || 'Unknown',
                 avatar: contact?.avatar || '',
-                type: activeCall.isIncoming ? 'incoming' : 'outgoing',
+                type: active.isIncoming ? 'incoming' : 'outgoing',
                 status: 'completed',
-                callType: activeCall.type,
+                callType: active.type,
                 time: 'Just now',
             });
 
             const { webRTCService } = require('../services/WebRTCService');
-            // Cleanup webRTC locally
             webRTCService.endCall();
             
-            // Set active call to null immediately to trigger UI unmount smoothly
             setActiveCall(null);
             
-            // End native call UI
-            if (activeCall.callId) {
-                nativeCallBridge.reportCallEnded(activeCall.callId);
-                notificationService.dismissCallNotification(activeCall.callId).catch(console.warn);
+            if (active.callId) {
+                nativeCallBridge.reportCallEnded(active.callId);
+                notificationService.dismissCallNotification(active.callId).catch(console.warn);
             }
         }
-    };
+    }, [addCall, rejectCall]);
 
-    const toggleMinimizeCall = (val: boolean) => {
+    const toggleMinimizeCall = useCallback((val: boolean) => {
         setActiveCall(prev => prev ? { ...prev, isMinimized: val } : null);
-    };
+    }, []);
 
-    const toggleMute = () => {
+    const toggleMute = useCallback(() => {
+        const { webRTCService } = require('../services/WebRTCService');
         const isMuted = webRTCService.toggleMute();
         setActiveCall(prev => prev ? { ...prev, isMuted } : null);
-    };
+    }, []);
 
     // --- STATUS LOGIC ---
-    const addStatus = async (status: Omit<StatusUpdate, 'id' | 'likes' | 'views'> & { localUri?: string }) => {
+    const addStatus = useCallback(async (status: Omit<StatusUpdate, 'id' | 'likes' | 'views'> & { localUri?: string }) => {
+        const authId = currentUserRef.current?.id;
+        const authName = currentUserRef.current?.name;
+        const authAvatar = currentUserRef.current?.avatar;
+        if (!authId) return;
+
         const tempId = Date.now().toString();
-        const newStatus = {
-            ...status,
-            id: tempId,
-            // Use local file URI for immediate display on poster's device
-            mediaUrl: status.localUri || status.mediaUrl,
-            likes: [],
-            views: []
-        } as StatusUpdate;
+        const newStatus = { ...status, id: tempId, mediaUrl: status.localUri || status.mediaUrl, likes: [], views: [] } as StatusUpdate;
         setStatuses((prev) => [newStatus, ...prev]);
 
-        if (!currentUser) {
-            console.error('No current user found when adding status');
-            return;
-        }
-        
         try {
-            // 1. Save immediately to Local SQLite DB
             await offlineService.saveStatus({
-                id: tempId,
-                userId: currentUser.id,
-                type: (status.mediaType === 'video' ? 'video' : 'image') as any,
-                localPath: status.localUri || status.mediaUrl,
-                textContent: status.caption,
-                createdAt: Date.now(),
-                expiresAt: new Date(status.expiresAt).getTime(),
-                isMine: true
+                id: tempId, userId: authId, type: (status.mediaType === 'video' ? 'video' : 'image') as any,
+                localPath: status.localUri || status.mediaUrl, textContent: status.caption,
+                createdAt: Date.now(), expiresAt: new Date(status.expiresAt).getTime(), isMine: true
             });
 
-            // 2. Upload Media (Fallback until R2 Service is fully built in Task 2)
             let finalMediaUrl = status.mediaUrl;
-            if (status.localUri && status.localUri.startsWith('file://')) {
-                // Track in pending_sync queue
-                await offlineService.addSyncAction('UPLOAD_STATUS_MEDIA', {
-                    id: Date.now().toString(),
-                    messageId: `status_${tempId}`,
-                    localPath: status.localUri
-                });
-                
-                const uploaded = await storageService.uploadImage(status.localUri, 'status-media', currentUser.id);
-                if (uploaded) {
-                    finalMediaUrl = uploaded;
-                    // Update Local SQLite with remote URL
-                    await offlineService.saveStatus({
-                        id: tempId,
-                        userId: currentUser.id,
-                        type: (status.mediaType === 'video' ? 'video' : 'image') as any,
-                        localPath: status.localUri,
-                        r2Key: finalMediaUrl, // Treat Supabase URL as r2_key for now until migration
-                        textContent: status.caption,
-                        createdAt: Date.now(),
-                        expiresAt: new Date(status.expiresAt).getTime(),
-                        isMine: true
-                    });
-                }
+            if (status.localUri?.startsWith('file://')) {
+                const uploaded = await storageService.uploadImage(status.localUri, 'status-media', authId);
+                if (uploaded) finalMediaUrl = uploaded;
             }
 
-            // 3. Save metadata to ephemeral Supabase statuses table via Node Server (for real-time broadcast)
-            const statusPayload = {
-                id: tempId,
-                userId: currentUser.id,
-                userName: currentUser.name,
-                userAvatar: currentUser.avatar,
-                mediaUrl: finalMediaUrl,
-                mediaType: status.mediaType,
-                caption: status.caption,
-                expiresAt: status.expiresAt,
-                createdAt: new Date().toISOString(),
-                likes: [],
-                views: [],
-                music: status.music || null
-            };
-
-            const response = await fetch(`${SERVER_URL}/api/status/create`, {
+            await fetch(`${SERVER_URL}/api/status/create`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ status: statusPayload })
+                body: JSON.stringify({ status: { 
+                    id: tempId, userId: authId, userName: authName, userAvatar: authAvatar,
+                    mediaUrl: finalMediaUrl, mediaType: status.mediaType, caption: status.caption, 
+                    expiresAt: status.expiresAt, createdAt: new Date().toISOString(), likes: [], views: [], music: status.music || null
+                }})
             });
-            
-            if (!response.ok) {
-                console.warn('Node server status create failed, falling back to direct Supabase');
-                // Fallback to direct Supabase if Node server is down
-                const { error: fallbackError } = await supabase.from('statuses').insert({
-                    id: tempId,
-                    user_id: currentUser.id,
-                    user_name: currentUser.name,
-                    user_avatar: currentUser.avatar,
-                    media_url: finalMediaUrl,
-                    media_type: status.mediaType,
-                    caption: status.caption,
-                    likes: [],
-                    views: [],
-                    music: statusPayload.music,
-                    created_at: statusPayload.createdAt,
-                    expires_at: status.expiresAt,
-                });
-                
-                if (fallbackError) {
-                    throw new Error(`Fallback insert failed: ${fallbackError.message}`);
-                }
-            }
-            
-            // Note: error was from a removed line, so we remove the check
-            
-        } catch (e) { 
-            console.warn('Failed to save status to DB:', e);
+        } catch (e) {
+            console.warn('Failed to save status:', e);
             Alert.alert('Offline Mode', 'Status saved locally. Will sync when online.');
         }
-    };
+    }, []);
 
-    const deleteStatus = async (statusId: string) => {
+    const deleteStatus = useCallback(async (statusId: string) => {
         setStatuses((prev) => prev.filter((s) => s.id !== statusId));
+        const authId = currentUserRef.current?.id;
         try {
             await offlineService.deleteStatus(statusId);
-        } catch (e) {
-            console.warn('Local status delete error:', e);
-        }
-        if (currentUser) {
-            try {
-                await supabase.from('statuses').delete().eq('id', statusId).eq('user_id', currentUser.id);
-            } catch (e) { console.warn('Failed to delete status from DB (Non-fatal):', e); }
-        }
-    };
+            if (authId) {
+                await supabase.from('statuses').delete().eq('id', statusId).eq('user_id', authId);
+            }
+        } catch (e) { console.warn('Delete status error:', e); }
+    }, []);
 
-    const setTheme = (newTheme: ThemeName) => setThemeState(newTheme);
+    const setTheme = useCallback((newTheme: ThemeName) => setThemeState(newTheme), []);
 
-    const addStatusView = async (statusId: string) => {
-        if (!currentUser) return;
-        const status = statuses.find(s => s.id === statusId);
-        if (!status || status.views?.includes(currentUser.id)) return;
+    const addStatusView = useCallback(async (statusId: string) => {
+        const authId = currentUserRef.current?.id;
+        if (!authId) return;
+        const status = statusesRef.current.find(s => s.id === statusId);
+        if (!status || (status.views || []).includes(authId)) return;
 
-        const ownerId = status.userId;
-        const updatedViews = [...(status.views || []), currentUser.id];
-        
-        // 1. Optimistic update
-        setStatuses(prev => prev.map(s =>
-            s.id === statusId ? { ...s, views: updatedViews } : s
-        ));
+        const updatedViews = [...(status.views || []), authId];
+        setStatuses(prev => prev.map(s => s.id === statusId ? { ...s, views: updatedViews } : s));
 
-        // 2. Server broadcast
+        pendingViewUpdatesRef.current.add(statusId);
+        setTimeout(() => pendingViewUpdatesRef.current.delete(statusId), 5000);
+
         try {
             await fetch(`${SERVER_URL}/api/status/view`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ statusId, viewerId: currentUser.id, ownerId })
+                body: JSON.stringify({ statusId, viewerId: authId, ownerId: status.userId })
             });
-        } catch (e) {
-            console.warn('Failed to broadcast status view:', e);
-        }
-
-        // 3. Local DB update
-        try {
             await offlineService.markStatusAsSeen(statusId);
-        } catch (e) { console.warn('Failed to update status views locally:', e); }
-
-        // 4. Supabase fallback update if online
-        if (isCloudConnected && supabase) {
-            try {
-                // Ensure we use the correct array append logic if supported or just update the whole array
+            if (isCloudConnected && supabase) {
                 await supabase.from('statuses').update({ views: updatedViews }).eq('id', statusId);
-            } catch (e) { console.warn('Failed to update Supabase status views:', e); }
-        }
-    };
+            }
+        } catch (e) { console.warn('Status view error:', e); }
+    }, [isCloudConnected]);
 
-    const toggleStatusLike = async (statusId: string) => {
-        if (!currentUser) return;
-        const status = statuses.find(s => s.id === statusId);
+    const toggleStatusLike = useCallback(async (statusId: string) => {
+        const authId = currentUserRef.current?.id;
+        if (!authId) return;
+        const status = statusesRef.current.find(s => s.id === statusId);
         if (!status) return;
 
-        let updatedLikes;
-        if (status.likes?.includes(currentUser.id)) {
-            updatedLikes = status.likes.filter(id => id !== currentUser.id);
-        } else {
-            updatedLikes = [...(status.likes || []), currentUser.id];
-        }
+        const updatedLikes = (status.likes || []).includes(authId)
+            ? status.likes!.filter(id => id !== authId)
+            : [...(status.likes || []), authId];
 
-        // Optimistic update
-        setStatuses(prev => prev.map(s =>
-            s.id === statusId ? { ...s, likes: updatedLikes } : s
-        ));
+        setStatuses(prev => prev.map(s => s.id === statusId ? { ...s, likes: updatedLikes } : s));
 
-        // DB update
         try {
             await supabase.from('statuses').update({ likes: updatedLikes }).eq('id', statusId);
-        } catch (e) { console.warn('Failed to toggle status like (Non-fatal):', e); }
-    };
+        } catch (e) { console.warn('Toggle status like error:', e); }
+    }, []);
 
-    const updateProfile = async (updates: { name?: string; bio?: string; avatar?: string; birthdate?: string; note?: string; noteTimestamp?: string }) => {
-        if (!currentUser) return;
-        const updatedUser = {
-            ...currentUser,
-            name: updates.name ?? currentUser.name,
-            bio: updates.bio ?? currentUser.bio,
-            avatar: updates.avatar ?? currentUser.avatar,
-            birthdate: updates.birthdate ?? currentUser.birthdate,
-            note: updates.note !== undefined ? updates.note : currentUser.note,
-            noteTimestamp: updates.noteTimestamp !== undefined ? updates.noteTimestamp : currentUser.noteTimestamp,
-        };
+    const updateProfile = useCallback(async (updates: { name?: string; bio?: string; avatar?: string; birthdate?: string; note?: string; noteTimestamp?: string }) => {
+        const authUser = currentUserRef.current;
+        if (!authUser) return;
+        const updatedUser = { ...authUser, ...updates };
         setCurrentUser(updatedUser);
-        const updatedAt = new Date().toISOString();
         try {
             const { error } = await supabase.from('profiles').upsert({
-                id: currentUser.id,
+                id: authUser.id,
                 name: updatedUser.name,
                 avatar_url: updatedUser.avatar,
                 bio: updatedUser.bio,
                 birthdate: updatedUser.birthdate,
                 note: updatedUser.note,
                 note_timestamp: updatedUser.noteTimestamp,
-                updated_at: updatedAt,
+                updated_at: new Date().toISOString(),
             });
-            if (error) {
-                console.warn('Failed to sync profile (DB):', error);
-            } else {
-                await AsyncStorage.setItem(`@profile_${currentUser.id}`, JSON.stringify(updatedUser));
-            }
-        } catch (e) { console.warn('Failed to sync profile (Exception):', e); }
-    };
+            if (!error) await AsyncStorage.setItem(`@profile_${authUser.id}`, JSON.stringify(updatedUser));
+        } catch (e) { console.warn('Update profile error:', e); }
+    }, []);
 
-    const saveNote = async (text: string) => {
+    const saveNote = useCallback(async (text: string) => {
         await updateProfile({ note: text, noteTimestamp: new Date().toISOString() });
-    };
+    }, [updateProfile]);
 
-    const deleteNote = async () => {
+    const deleteNote = useCallback(async () => {
         await updateProfile({ note: '', noteTimestamp: undefined });
-    };
+    }, [updateProfile]);
 
     useEffect(() => {
         const profileSubscription = supabase
@@ -2186,45 +2066,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return () => { supabase.removeChannel(profileSubscription); };
     }, []);
 
-    const setBiometricEnabled = async (val: boolean) => {
-        setBiometricEnabledState(val);
-    };
+    const setBiometricEnabled = useCallback(async (val: boolean) => setBiometricEnabledState(val), []);
+    const setPinEnabled = useCallback(async (val: boolean) => setPinEnabledState(val), []);
+    const setPin = useCallback(async (val: string | null) => setPinState(val), []);
+    const unlockApp = useCallback(() => setIsLocked(false), []);
 
-    const setPinEnabled = async (val: boolean) => {
-        setPinEnabledState(val);
-    };
-
-    const setPin = async (val: string | null) => {
-        setPinState(val);
-    };
-
-    const unlockApp = () => {
-        setIsLocked(false);
-    };
-
-    const updatePrivacy = async (updates: Partial<PrivacySettings>) => {
-        if (!currentUser) return;
-        
-        const newSettings = { ...privacySettings, ...updates };
+    const updatePrivacy = useCallback(async (updates: Partial<PrivacySettings>) => {
+        const authId = currentUserRef.current?.id;
+        if (!authId) return;
+        const newSettings = { ...privacySettingsRef.current, ...updates };
         setPrivacySettings(newSettings);
-        
         try {
-            await AsyncStorage.setItem(`ss_privacy_${currentUser.id}`, JSON.stringify(newSettings));
-            
-            // Sync with Supabase profiles table
-            const { error } = await supabase
-                .from('profiles')
-                .update({ 
-                    privacy_settings: newSettings,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('id', currentUser.id);
-                
-            if (error) throw error;
-        } catch (e) {
-            console.error('[AppContext] Failed to update privacy settings:', e);
-        }
-    };
+            await AsyncStorage.setItem(`ss_privacy_${authId}`, JSON.stringify(newSettings));
+            await supabase.from('profiles').update({ 
+                privacy_settings: newSettings,
+                updated_at: new Date().toISOString()
+            }).eq('id', authId);
+        } catch (e) { console.error('Update privacy error:', e); }
+    }, []);
 
     // Auto-lock logic
     useEffect(() => {
@@ -2242,36 +2101,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return () => subscription.remove();
     }, [biometricEnabled, pinEnabled]);
 
-    const clearChatMessages = async (partnerId: string) => {
-        if (!currentUser) return;
+    const clearChatMessages = useCallback(async (partnerId: string) => {
+        const authUser = currentUserRef.current;
+        if (!authUser) return;
 
         try {
-            // 1. Identify media to delete
-            const chatMsgs = messages[partnerId] || [];
-            const mediaUrls = chatMsgs
-                .filter(m => m.media?.url)
-                .map(m => m.media!.url);
+            const chatMsgs = (messagesRef.current[partnerId] || []);
+            const mediaUrls = chatMsgs.filter(m => m.media?.url).map(m => m.media!.url);
 
-            // 2. Delete from Supabase Storage
             if (mediaUrls.length > 0) {
-                // Delete from both likely buckets
                 await Promise.all([
                     storageService.deleteMedia(mediaUrls, 'status-media'),
                     storageService.deleteMedia(mediaUrls, 'chat-media')
                 ]);
             }
 
-            // 3. Delete from Supabase Database
-            await chatService.clearServerMessages(currentUser.id, partnerId);
-
-            // 4. Delete from Local DB
+            await chatService.clearServerMessages(authUser.id, partnerId);
             await offlineService.clearChat(partnerId);
 
-            // 5. Update State
             setMessages(prev => {
-                const newMessages = { ...prev };
-                delete newMessages[partnerId];
-                return newMessages;
+                const next = { ...prev };
+                delete next[partnerId];
+                return next;
             });
 
             setContacts(prev => prev.map(c => 
@@ -2281,31 +2132,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             Alert.alert('Success', 'Chat history cleared successfully');
         } catch (e) {
             console.error('[AppContext] Clear chat failed:', e);
-            Alert.alert('Error', 'Failed to clear chat history. Please try again.');
+            Alert.alert('Error', 'Failed to clear chat history.');
         }
-    };
+    }, []);
+
+    const contextValue = useMemo(() => ({
+        currentUser, otherUser, isLoggedIn: !!currentUser, login, logout,
+        contacts, messages, calls, statuses, theme, activeTheme: THEMES[theme], activeCall, musicState, isReady, isCloudConnected, onlineUsers,
+        addMessage, updateMessage, updateMessageStatus, deleteMessage, addReaction, addCall, deleteCall, clearCalls, addStatus, deleteStatus, setTheme,
+        startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, playSong, togglePlayMusic, toggleFavoriteSong,
+        seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView, toggleStatusLike,
+        typingUsers, sendTyping, saveNote, deleteNote, clearChatMessages,
+        biometricEnabled, pinEnabled, pin, isLocked, setBiometricEnabled, setPinEnabled, setPin, unlockApp,
+        privacySettings, updatePrivacy,
+    }), [
+        currentUser, otherUser, contacts, messages, calls, statuses, theme, activeCall, musicState, isReady, isCloudConnected, onlineUsers,
+        login, logout, addMessage, updateMessage, updateMessageStatus, deleteMessage, addReaction, addCall, deleteCall, clearCalls, addStatus, deleteStatus, setTheme,
+        startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, playSong, togglePlayMusic, toggleFavoriteSong,
+        seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView, toggleStatusLike,
+        typingUsers, sendTyping, saveNote, deleteNote, clearChatMessages,
+        biometricEnabled, pinEnabled, pin, isLocked, setBiometricEnabled, setPinEnabled, setPin, unlockApp,
+        privacySettings, updatePrivacy
+    ]);
 
     return (
-        <AppContext.Provider value={{
-            currentUser, otherUser, isLoggedIn: !!currentUser, login, logout,
-            contacts, messages, calls, statuses, theme, activeTheme: THEMES[theme], activeCall, musicState, isReady, isCloudConnected, onlineUsers,
-            addMessage, updateMessage, updateMessageStatus, deleteMessage, addReaction, addCall, addStatus, deleteStatus, setTheme,
-            startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, playSong, togglePlayMusic, toggleFavoriteSong,
-            seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView, toggleStatusLike,
-            typingUsers, sendTyping,
-            saveNote, deleteNote,
-            clearChatMessages,
-            biometricEnabled,
-            pinEnabled,
-            pin,
-            isLocked,
-            setBiometricEnabled,
-            setPinEnabled,
-            setPin,
-            unlockApp,
-            privacySettings,
-            updatePrivacy,
-        }}>
+        <AppContext.Provider value={contextValue}>
             {children}
         </AppContext.Provider >
     );

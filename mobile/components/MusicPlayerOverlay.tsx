@@ -43,6 +43,7 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
 
     // Animations
     const slideAnim = useRef(new Animated.Value(height)).current;
+    const [renderModal, setRenderModal] = useState(isOpen);
 
     // Keyboard State
     const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -58,22 +59,31 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
 
     useEffect(() => {
         if (isOpen) {
-            Animated.spring(slideAnim, {
-                toValue: 0,
-                damping: 20,
-                stiffness: 90,
-                mass: 1,
-                useNativeDriver: true,
-            }).start();
+            slideAnim.setValue(height);
+            setRenderModal(true);
+            
+            // Wait for Modal to fully mount natively before animating
+            setTimeout(() => {
+                Animated.spring(slideAnim, {
+                    toValue: 0,
+                    damping: 22,
+                    stiffness: 120,
+                    mass: 1,
+                    useNativeDriver: true,
+                }).start();
+            }, 50);
+            
             if (searchResults.length === 0) fetchSongs();
         } else {
             Animated.timing(slideAnim, {
                 toValue: height,
-                duration: 300,
+                duration: 250,
                 useNativeDriver: true,
-            }).start();
+            }).start(() => {
+                setRenderModal(false);
+            });
         }
-    }, [isOpen]);
+    }, [isOpen, height]);
 
     // Polling for Playback Position
     useEffect(() => {
@@ -169,7 +179,12 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
 
 
     return (
-        <Modal transparent visible={!!isOpen} animationType="none" onRequestClose={onClose}>
+        <Modal 
+            transparent 
+            visible={renderModal} 
+            animationType="none" 
+            onRequestClose={onClose}
+        >
             {/* Backdrop with Dynamic Transparency */}
             <Animated.View style={[StyleSheet.absoluteFill, { opacity: backdropOpacity }]}>
                 {Platform.OS === 'ios' && (
@@ -182,7 +197,7 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                 <Pressable 
                     style={[
                         styles.backdrop, 
-                        Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.4)' }
+                        Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.7)' }
                     ]} 
                     onPress={onClose} 
                 />
@@ -195,10 +210,9 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                 keyboardVisible && { height: '100%', top: 100 } // Push to top when keyboard is open
             ]}>
                 <BlurView 
-                    intensity={Platform.OS === 'android' ? 95 : 90} 
+                    intensity={Platform.OS === 'android' ? 60 : 90} 
                     tint="dark" 
                     style={styles.glassContainer} 
-                    experimentalBlurMethod="dimezisBlurView"
                 >
                     <KeyboardAvoidingView
                         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -276,7 +290,6 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                                     intensity={Platform.OS === 'android' ? 60 : 30} 
                                     tint="light" 
                                     style={styles.searchInputWrapper} 
-                                    experimentalBlurMethod="dimezisBlurView"
                                 >
                                     <MaterialIcons name="search" size={20} color="rgba(255,255,255,0.5)" style={{ marginRight: 10 }} />
                                     <TextInput
@@ -339,7 +352,6 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                                             intensity={Platform.OS === 'android' ? 80 : 40} 
                                             tint="dark" 
                                             style={StyleSheet.absoluteFill} 
-                                            experimentalBlurMethod="dimezisBlurView" 
                                         />
                                         <View style={styles.floatingTabsOverlay} />
                                         <View style={styles.floatingTabsInner}>

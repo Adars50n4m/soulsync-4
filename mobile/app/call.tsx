@@ -509,7 +509,7 @@ export default function CallScreen() {
                     </View>
 
                     {/* Controls Footer */}
-                    <BlurView intensity={80} tint="systemThinMaterialDark" style={styles.controlsBar} experimentalBlurMethod="dimezisBlurView">
+                    <BlurView intensity={80} tint="systemThinMaterialDark" style={styles.controlsBar} >
                         <View style={styles.controlsRow}>
                             <Pressable
                                 style={[styles.controlBtn, activeCall?.isMuted && styles.controlBtnActive]}

@@ -25,18 +25,24 @@ function RootContent() {
 
     // --- AUTH GUARD ---
     useEffect(() => {
-        if (!context || !isReady || !segments) return;
+        // Wait for everything to be ready before attempting any navigation
+        if (!context || !isReady || !segments || segments.length === 0) return;
 
         const inAuthGroup = segments[0] === 'login';
 
-        if (!currentUser && !inAuthGroup) {
-            // Redirect to login if user is not authenticated
-            router.replace('/login');
-        } else if (currentUser && inAuthGroup) {
-            // Redirect to home if user is authenticated and tries to access login
-            router.replace('/(tabs)');
-        }
-    }, [currentUser, isReady, segments]);
+        // Use a small timeout to let the navigation state settle on Android
+        const timer = setTimeout(() => {
+            if (!currentUser && !inAuthGroup) {
+                console.log('[RootLayout] Redirecting to login');
+                router.replace('/login');
+            } else if (currentUser && inAuthGroup) {
+                console.log('[RootLayout] Redirecting to (tabs)');
+                router.replace('/(tabs)');
+            }
+        }, 100);
+
+        return () => clearTimeout(timer);
+    }, [currentUser, isReady, segments, router]);
 
     // --- TRAFFIC CONTROLLER FOR CALLS ---
     useEffect(() => {

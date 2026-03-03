@@ -219,7 +219,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
         >
             <View style={StyleSheet.absoluteFill} pointerEvents="auto">
                 <Animated.View style={[StyleSheet.absoluteFill, animatedContainerStyle]}>
-                    <BlurView intensity={95} tint="dark" style={StyleSheet.absoluteFill} experimentalBlurMethod="dimezisBlurView" />
+                    <BlurView intensity={95} tint="dark" style={StyleSheet.absoluteFill}  />
                     <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.15)' }]} />
                     <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
                 </Animated.View>
@@ -298,7 +298,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                         menuProgress.value = withTiming(0, { duration: 150 }, () => runOnJS(setShowMenu)(false));
                     }} />
                     <Animated.View style={[styles.menuContainer, menuStyle]}>
-                        <BlurView intensity={95} tint="dark" style={styles.menuBlur} experimentalBlurMethod="dimezisBlurView">
+                        <BlurView intensity={95} tint="dark" style={styles.menuBlur} >
                             <View style={styles.reactionRow}>
                                 {['❤️', '🔥', '😂', '😮', '😢'].map(emoji => (
                                     <Pressable key={emoji} onPress={() => handleReaction(emoji)} style={styles.reactionItem}>

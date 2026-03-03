@@ -88,7 +88,7 @@ export const IncomingCallModal = () => {
     return (
         <Modal visible={isVisible} transparent animationType="fade">
             <View style={styles.container}>
-                <BlurView intensity={90} tint="systemThinMaterialDark" style={styles.blurContainer} experimentalBlurMethod="dimezisBlurView">
+                <BlurView intensity={90} tint="systemThinMaterialDark" style={styles.blurContainer} >
                     <Image
                         source={{ uri: contact.avatar || 'https://via.placeholder.com/150' }}
                         style={[StyleSheet.absoluteFillObject, { opacity: 0.3 }]}

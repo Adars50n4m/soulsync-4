@@ -191,7 +191,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
             {/* Video Controls Overlay */}
             {showControls && (
-              <BlurView intensity={60} tint="dark" style={styles.controlsOverlay} experimentalBlurMethod="dimezisBlurView">
+              <BlurView intensity={60} tint="dark" style={styles.controlsOverlay} >
                 <View style={styles.playButtonCenter}>
                   <Pressable onPress={togglePlayPause} style={styles.largePlayButton}>
                     <MaterialIcons
@@ -242,7 +242,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
         )}
 
         {mediaType === 'audio' && (
-          <BlurView intensity={100} tint="dark" style={styles.audioContainer} experimentalBlurMethod="dimezisBlurView">
+          <BlurView intensity={100} tint="dark" style={styles.audioContainer} >
             <MaterialIcons name="graphic-eq" size={120} color="#BC002A" />
 
             {/* Play Button */}
@@ -293,7 +293,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
       {/* Caption Display */}
       {caption && (
-        <BlurView intensity={90} tint="dark" style={styles.captionContainer} experimentalBlurMethod="dimezisBlurView">
+        <BlurView intensity={90} tint="dark" style={styles.captionContainer} >
           <Text style={styles.captionText}>{caption}</Text>
         </BlurView>
       )}

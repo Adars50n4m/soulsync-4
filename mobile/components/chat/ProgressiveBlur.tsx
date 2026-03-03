@@ -59,7 +59,7 @@ const ProgressiveBlur = ({
                             height: layerHeight,
                             opacity: (1 - ratio) * 0.15, // Gradually fading out as we move away from edge
                         }}
-                        experimentalBlurMethod="dimezisBlurView"
+                        
                     />
                 );
             })}

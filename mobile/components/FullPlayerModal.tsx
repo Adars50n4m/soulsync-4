@@ -46,7 +46,7 @@ const FullPlayerModal: React.FC<FullPlayerModalProps> = ({ visible, onClose }) =
 
     return (
         <Modal visible={visible} animationType="slide" transparent>
-            <BlurView intensity={Platform.OS === 'android' ? 150 : 100} tint="dark" style={styles.fullPlayerContainer} experimentalBlurMethod="dimezisBlurView">
+            <BlurView intensity={Platform.OS === 'android' ? 150 : 100} tint="dark" style={styles.fullPlayerContainer} >
                 <View style={styles.fullPlayerHeader}>
                     <Pressable onPress={onClose} style={styles.chevronDown}>
                         <MaterialIcons name="keyboard-arrow-down" size={32} color="#fff" />

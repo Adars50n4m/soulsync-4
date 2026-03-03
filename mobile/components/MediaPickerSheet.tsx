@@ -255,7 +255,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
         ]}
         {...panResponder.panHandlers}
       >
-        <BlurView intensity={90} tint="dark" style={styles.container} experimentalBlurMethod="dimezisBlurView">
+        <BlurView intensity={90} tint="dark" style={styles.container}>
           
           {/* Header */}
           <View style={styles.header}>

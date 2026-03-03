@@ -78,7 +78,7 @@ export const SwiftUIButton: React.FC<SwiftUIButtonProps> = ({
             >
                 {type === 'glass' ? (
                     <View style={Platform.OS === 'android' ? styles.androidGlassBacking : undefined}>
-                        <BlurView intensity={Platform.OS === 'android' ? 100 : 80} tint="dark" style={styles.glassContainer} experimentalBlurMethod="dimezisBlurView">
+                        <BlurView intensity={Platform.OS === 'android' ? 100 : 80} tint="dark" style={styles.glassContainer} >
                             {renderContent()}
                         </BlurView>
                     </View>

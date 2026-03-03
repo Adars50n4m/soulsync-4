@@ -111,7 +111,7 @@ export default function PipOverlay() {
                         )
                     ) : (
                         // Audio Call Look
-                        <BlurView intensity={80} tint="dark" style={styles.blur} experimentalBlurMethod="dimezisBlurView">
+                        <BlurView intensity={80} tint="dark" style={styles.blur} >
                             <View style={styles.audioContent}>
                                 <View style={styles.avatarContainer}>
                                     <Image source={{ uri: contact.avatar }} style={styles.avatar} />

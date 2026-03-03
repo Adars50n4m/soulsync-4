@@ -139,7 +139,7 @@ export default function HelpCenterScreen() {
 
                 {/* Search Bar */}
                 <View style={styles.searchContainer}>
-                    <BlurView intensity={20} tint="light" style={styles.searchBlur} experimentalBlurMethod="dimezisBlurView">
+                    <BlurView intensity={20} tint="light" style={styles.searchBlur} >
                         <MaterialIcons name="search" size={22} color="rgba(255,255,255,0.5)" />
                         <TextInput
                             style={styles.searchInput}
@@ -155,7 +155,7 @@ export default function HelpCenterScreen() {
                 {filteredTopics.length > 0 && (
                     <View style={styles.section}>
                         <Text style={styles.sectionHeader}>Help Topics</Text>
-                        <BlurView intensity={10} tint="dark" style={styles.glassContainer} experimentalBlurMethod="dimezisBlurView">
+                        <BlurView intensity={10} tint="dark" style={styles.glassContainer} >
                             {filteredTopics.map((topic, index) => (
                                 <View key={topic.id}>
                                     <TopicItem topic={topic} onOpen={openArticle} />
@@ -170,7 +170,7 @@ export default function HelpCenterScreen() {
                 {filteredArticles.length > 0 && (
                     <View style={styles.section}>
                         <Text style={styles.sectionHeader}>Popular Articles</Text>
-                        <BlurView intensity={10} tint="dark" style={styles.glassContainer} experimentalBlurMethod="dimezisBlurView">
+                        <BlurView intensity={10} tint="dark" style={styles.glassContainer} >
                             {filteredArticles.map((article, index) => (
                                 <View key={article.id}>
                                     <ArticleItem article={article} onOpen={openArticle} primaryColor={activeTheme.primary} />
@@ -204,7 +204,7 @@ export default function HelpCenterScreen() {
                 onRequestClose={() => setSelectedArticle(null)}
             >
                 <View style={styles.modalOverlay}>
-                    <BlurView intensity={80} tint="dark" style={styles.modalContent} experimentalBlurMethod="dimezisBlurView">
+                    <BlurView intensity={80} tint="dark" style={styles.modalContent} >
                         <View style={styles.modalHeader}>
                             <Pressable onPress={() => setSelectedArticle(null)} style={styles.closeBtn}>
                                 <MaterialIcons name="close" size={24} color="white" />

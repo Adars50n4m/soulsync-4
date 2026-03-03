@@ -21,6 +21,7 @@ const { withAndroidManifest, withMainActivity, withProjectBuildGradle, withAppBu
 function withAndroidCallingPlugin(config) {
   // Step 1: Add permissions and services to AndroidManifest.xml
   config = withAndroidManifest(config, (config) => {
+    console.log('[withAndroidCalling] Modifying AndroidManifest.xml');
     const manifest = config.modResults.manifest;
     
     // ── Add Required Permissions ──
@@ -109,6 +110,7 @@ function withAndroidCallingPlugin(config) {
 
   // Step 2: Add Firebase dependencies to project-level build.gradle
   config = withProjectBuildGradle(config, (config) => {
+    console.log('[withAndroidCalling] Modifying project build.gradle');
     const contents = config.modResults.contents;
     
     // Add Google services classpath if not present
@@ -125,6 +127,7 @@ function withAndroidCallingPlugin(config) {
 
   // Step 3: Add Firebase plugin to app-level build.gradle
   config = withAppBuildGradle(config, (config) => {
+    console.log('[withAndroidCalling] Modifying app build.gradle');
     const contents = config.modResults.contents;
     
     // Add Google services plugin if not present

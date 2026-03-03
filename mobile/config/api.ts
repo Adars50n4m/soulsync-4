@@ -14,9 +14,12 @@ export function getSupabaseUrl(): string {
     return SUPABASE_ENDPOINT;
 }
 
+import { Platform } from 'react-native';
+
 // Node.js sync server (for R2 and real-time Socket.io)
-// Defaults to localhost for iOS simulator, adjust if running on physical device
-export const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || 'http://localhost:3000';
+// Defaults to localhost for iOS simulator, 10.0.2.2 for Android emulator
+const DEFAULT_SERVER_URL = Platform.OS === 'android' ? 'http://10.0.2.2:3000' : 'http://localhost:3000';
+export const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || DEFAULT_SERVER_URL;
 
 // JioSaavn API (Fallback to public instance as Supabase function is inactive)
 export const SAAVN_BASE_URL = 'https://saavn.sumit.co';

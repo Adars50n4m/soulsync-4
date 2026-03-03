@@ -325,7 +325,7 @@ export default function ProfileScreen() {
 
                     {/* Glassmorphism Stats Card */}
                     <View style={styles.glassStatsCard}>
-                        <BlurView intensity={20} tint="dark" style={styles.glassEffect} experimentalBlurMethod="dimezisBlurView">
+                        <BlurView intensity={20} tint="dark" style={styles.glassEffect} >
                             <View style={styles.statItem}>
                                 <Text style={styles.statValue}>{allChatMessages.length}</Text>
                                 <Text style={styles.statLabel}>MESSAGES</Text>
@@ -350,20 +350,20 @@ export default function ProfileScreen() {
                                 style={styles.primaryGlassAction}
                                 onPress={handleClearChat}
                             >
-                                <BlurView intensity={30} tint="dark" style={styles.actionGlassEffect} experimentalBlurMethod="dimezisBlurView">
+                                <BlurView intensity={30} tint="dark" style={styles.actionGlassEffect} >
                                     <MaterialIcons name="delete-sweep" size={20} color="#ff4444" />
                                     <Text style={[styles.actionText, { color: '#ff4444' }]}>CLEAR ALL CHAT</Text>
                                 </BlurView>
                             </Pressable>
 
                             <Pressable style={styles.secondaryGlassAction}>
-                                <BlurView intensity={20} tint="dark" style={styles.actionGlassEffect} experimentalBlurMethod="dimezisBlurView">
+                                <BlurView intensity={20} tint="dark" style={styles.actionGlassEffect} >
                                     <Ionicons name="call" size={20} color="#fff" />
                                 </BlurView>
                             </Pressable>
 
                             <Pressable style={styles.secondaryGlassAction}>
-                                <BlurView intensity={20} tint="dark" style={styles.actionGlassEffect} experimentalBlurMethod="dimezisBlurView">
+                                <BlurView intensity={20} tint="dark" style={styles.actionGlassEffect} >
                                     <Ionicons name="videocam" size={20} color="#fff" />
                                 </BlurView>
                             </Pressable>
@@ -385,7 +385,7 @@ export default function ProfileScreen() {
                     
                     {/* Category Tabs */}
                     <View style={styles.tabContainer}>
-                        <BlurView intensity={20} tint="dark" style={styles.tabGlass} experimentalBlurMethod="dimezisBlurView">
+                        <BlurView intensity={20} tint="dark" style={styles.tabGlass} >
                             {(['photos', 'videos', 'audio', 'docs'] as const).map((cat) => (
                                 <Pressable
                                     key={cat}
@@ -437,7 +437,7 @@ export default function ProfileScreen() {
                                     } else {
                                         return (
                                             <Pressable key={index} style={styles.listItemGlass} onPress={() => handleDownload(item)}>
-                                                <BlurView intensity={10} tint="dark" style={styles.listItemContent} experimentalBlurMethod="dimezisBlurView">
+                                                <BlurView intensity={10} tint="dark" style={styles.listItemContent} >
                                                     <View style={[styles.listIconContainer, { backgroundColor: activeCategory === 'audio' ? 'rgba(168, 85, 247, 0.1)' : 'rgba(59, 130, 246, 0.1)' }]}>
                                                         <Ionicons 
                                                             name={activeCategory === 'audio' ? 'musical-notes' : 'document-text'} 
@@ -477,7 +477,7 @@ export default function ProfileScreen() {
                 </Animated.View>
 
                 {/* Connection Info */}
-                <BlurView intensity={30} tint="dark" style={styles.infoCard} experimentalBlurMethod="dimezisBlurView">
+                <BlurView intensity={30} tint="dark" style={styles.infoCard} >
                     <View style={styles.infoRow}>
                         <MaterialIcons name="access-time" size={18} color="rgba(255,255,255,0.4)" />
                         <Text style={styles.infoText}>Connected since the beginning</Text>
@@ -499,7 +499,7 @@ export default function ProfileScreen() {
             >
                 <View style={[styles.viewerContainer, { backgroundColor: 'transparent' }]}>
                     <Animated2.View style={[StyleSheet.absoluteFill, bgMorphStyle]}>
-                        <BlurView intensity={90} tint="dark" style={StyleSheet.absoluteFill} experimentalBlurMethod="dimezisBlurView" />
+                        <BlurView intensity={90} tint="dark" style={StyleSheet.absoluteFill}  />
                     </Animated2.View>
                     
                     {/* Integrated Gallery & Transition Layer */}
