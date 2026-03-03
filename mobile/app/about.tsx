@@ -5,7 +5,7 @@ import {
 
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { BlurView } from 'expo-blur';
+import GlassView from '../components/ui/GlassView';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 
@@ -50,13 +50,13 @@ export default function AboutScreen() {
 
                 {/* Info Groups */}
                 <View style={styles.groupContainer}>
-                    <BlurView intensity={10} tint="dark" style={styles.glassGroup} >
+                    <GlassView intensity={10} tint="dark" style={styles.glassGroup} >
                         <AboutItem icon="description" title="Terms of Service" />
                         <View style={styles.separator} />
                         <AboutItem icon="privacy-tip" title="Privacy Policy" />
                         <View style={styles.separator} />
                         <AboutItem icon="assignment" title="Licenses" />
-                    </BlurView>
+                    </GlassView>
                 </View>
 
                 {/* Developer Credit */}

@@ -13,11 +13,9 @@ import {
   Platform,
   BackHandler,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { BlurView } from 'expo-blur';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import GlassView from './ui/GlassView';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
 import ProgressiveBlur from './chat/ProgressiveBlur';
 import Animated, { 
   useSharedValue, 
@@ -285,29 +283,14 @@ export const StatusViewerModal = ({
         <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }]} />
         
         {Platform.OS === 'ios' && (
-          <BlurView intensity={24} tint="dark" style={StyleSheet.absoluteFill} />
+          <GlassView intensity={24} tint="dark" style={StyleSheet.absoluteFill} />
         )}
         
         {isUIVisible && (
-          Platform.OS === 'android' ? (
-            <>
-              <LinearGradient
-                  colors={['rgba(0,0,0,0.8)', 'transparent']}
-                  style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 180, zIndex: 2 }}
-                  pointerEvents="none"
-              />
-              <LinearGradient
-                  colors={['transparent', 'rgba(0,0,0,0.8)']}
-                  style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 280, zIndex: 2 }}
-                  pointerEvents="none"
-              />
-            </>
-          ) : (
-            <>
-              <ProgressiveBlur position="top" height={220} intensity={400} />
-              <ProgressiveBlur position="bottom" height={350} intensity={400} />
-            </>
-          )
+          <>
+            <ProgressiveBlur position="top" height={220} intensity={40} />
+            <ProgressiveBlur position="bottom" height={350} intensity={40} />
+          </>
         )}
 
         {/* Main Content */}

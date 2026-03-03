@@ -1,7 +1,7 @@
 import React, { useRef, useMemo } from 'react';
 import { View, Image, Pressable, Text, StyleSheet, Animated, PanResponder, Platform, useWindowDimensions } from 'react-native';
 import { useRouter } from 'expo-router';
-import { BlurView } from 'expo-blur';
+import GlassView from './ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 
@@ -111,7 +111,7 @@ export default function PipOverlay() {
                         )
                     ) : (
                         // Audio Call Look
-                        <BlurView intensity={80} tint="dark" style={styles.blur} >
+                        <GlassView intensity={80} tint="dark" style={styles.blur} >
                             <View style={styles.audioContent}>
                                 <View style={styles.avatarContainer}>
                                     <Image source={{ uri: contact.avatar }} style={styles.avatar} />
@@ -122,7 +122,7 @@ export default function PipOverlay() {
                                     <View style={styles.pulseDot} />
                                 </View>
                             </View>
-                        </BlurView>
+                        </GlassView>
                     )}
 
                     {/* Controls Overlay */}
@@ -171,7 +171,7 @@ const styles = StyleSheet.create({
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.6)',
+        backgroundColor: 'transparent',
     },
     videoImage: {
         width: '100%',

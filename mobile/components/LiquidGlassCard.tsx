@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, StyleSheet, ViewStyle, StyleProp, Platform } from 'react-native';
-import { BlurView } from 'expo-blur';
+import GlassView from './ui/GlassView';
 import { LinearGradient } from 'expo-linear-gradient';
 
 const isAndroid = Platform.OS === 'android';
@@ -39,12 +39,12 @@ export const LiquidGlassCard: React.FC<LiquidGlassCardProps> = ({
                 };
             case 'subtle':
                 return {
-                    borderColor: 'rgba(255, 255, 255, 0.05)',
+                    borderColor: 'rgba(255, 255, 255, 0.22)',
                     shadowOpacity: 0.1,
                 };
             default:
                 return {
-                    borderColor: 'rgba(255, 255, 255, 0.1)',
+                    borderColor: 'rgba(255, 255, 255, 0.22)',
                     shadowOpacity: 0.25,
                 };
         }
@@ -72,7 +72,7 @@ export const LiquidGlassCard: React.FC<LiquidGlassCardProps> = ({
             )}
 
             {/* Glass Background */}
-            <BlurView
+            <GlassView
                 intensity={blurIntensity}
                 tint="dark"
                 style={[styles.blur, { borderRadius }]}
@@ -97,7 +97,7 @@ export const LiquidGlassCard: React.FC<LiquidGlassCardProps> = ({
                 <View style={styles.content}>
                     {children}
                 </View>
-            </BlurView>
+            </GlassView>
         </View>
     );
 };
@@ -114,14 +114,14 @@ export const LiquidGlassView: React.FC<{
     return (
         <View style={[styles.glassViewWrapper, style]}>
             {isAndroid && <View style={styles.androidBackingFull} />}
-            <BlurView
+            <GlassView
                 intensity={blurIntensity}
                 tint="dark"
                 style={[styles.glassView, style]}
                 
             >
                 {children}
-            </BlurView>
+            </GlassView>
         </View>
     );
 };
@@ -149,7 +149,7 @@ export const GlassButton: React.FC<{
             case 'ghost':
                 return {
                     bg: 'transparent',
-                    border: 'rgba(255, 255, 255, 0.1)',
+                    border: 'rgba(255, 255, 255, 0.22)',
                 };
         }
     };

@@ -1,7 +1,7 @@
 import React, { useRef, useMemo } from 'react';
 import { Animated, Pressable, Text, StyleSheet, ViewStyle, TextStyle, Platform, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { BlurView } from 'expo-blur';
+import GlassView from './ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 
 interface SwiftUIButtonProps {
@@ -78,9 +78,9 @@ export const SwiftUIButton: React.FC<SwiftUIButtonProps> = ({
             >
                 {type === 'glass' ? (
                     <View style={Platform.OS === 'android' ? styles.androidGlassBacking : undefined}>
-                        <BlurView intensity={Platform.OS === 'android' ? 100 : 80} tint="dark" style={styles.glassContainer} >
+                        <GlassView intensity={Platform.OS === 'android' ? 100 : 80} tint="dark" style={styles.glassContainer} >
                             {renderContent()}
-                        </BlurView>
+                        </GlassView>
                     </View>
                 ) : (
                     <Animated.View style={[

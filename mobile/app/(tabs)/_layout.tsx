@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { Tabs } from 'expo-router';
 import { View, Pressable, StyleSheet, Platform, useWindowDimensions } from 'react-native';
-import { BlurView } from 'expo-blur';
+import GlassView from '../../components/ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import Animated, { 
@@ -63,7 +63,7 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
 
   const indicatorStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
-    backgroundColor: `${activeTheme.primary}1A`,
+    backgroundColor: `${activeTheme.primary}0D`, // 0D is ~5% opacity (even more subtle)
   }));
 
   // Guard: state may be undefined during initial navigation hydration
@@ -83,19 +83,11 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
     <View style={styles.tabBarContainer}>
       <View style={styles.tabBarGlassContainer}>
         {/* Layer 1: The Glass background */}
-        <BlurView
-          intensity={Platform.OS === 'android' ? 80 : 30}
+        <GlassView
+          intensity={35}
           tint="dark"
-          style={[StyleSheet.absoluteFill, { backgroundColor: 'transparent' }]}
+          style={StyleSheet.absoluteFill}
         />
-        <Animated.View style={[
-        StyleSheet.absoluteFill, // Keep it filling the container
-        {
-          width: SCREEN_WIDTH - 32, // This will be overridden by absoluteFill's left/right
-          backgroundColor: Platform.OS === 'android'
-            ? 'rgba(21,21,21,0.35)'
-            : 'rgba(21,21,21,0.75)' }
-        ]} />
         
         {/* Layer 2: The Indicator Pill (Vibrant & SOLID) */}
         <Animated.View 
@@ -191,8 +183,8 @@ const styles = StyleSheet.create({
     width: '100%',
     borderRadius: 40,
     overflow: 'hidden',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1.2,
+    borderColor: 'rgba(255,255,255,0.22)',
     backgroundColor: 'transparent',
   },
   tabBarOverlay: {

@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { View, Pressable, StyleSheet, Animated, PanResponder, useWindowDimensions, FlatList, Text, ActivityIndicator, Platform } from 'react-native';
 import { Image } from 'expo-image';
-import { BlurView } from 'expo-blur';
+import GlassView from './ui/GlassView';
 import * as Haptics from 'expo-haptics';
 import * as MediaLibrary from 'expo-media-library';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
@@ -255,7 +255,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
         ]}
         {...panResponder.panHandlers}
       >
-        <BlurView intensity={90} tint="dark" style={styles.container}>
+        <GlassView intensity={90} tint="dark" style={styles.container}>
           
           {/* Header */}
           <View style={styles.header}>
@@ -323,7 +323,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
             />
           )}
 
-        </BlurView>
+        </GlassView>
       </Animated.View>
     </Animated.View>
   );

@@ -3,7 +3,7 @@ import { View, Text, Pressable, StyleSheet, StatusBar, Alert } from 'react-nativ
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { useApp, THEMES, ThemeName } from '../../context/AppContext';
-import { BlurView } from 'expo-blur';
+import GlassView from '../../components/ui/GlassView';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Linking from 'expo-linking';
@@ -50,7 +50,7 @@ const ProgressiveBlur = ({
                 const key = `${position}-${i}`;
 
                 return (
-                    <BlurView
+                    <GlassView
                         key={key}
                         intensity={intensity / steps}
                         tint="dark"

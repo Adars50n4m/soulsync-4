@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, Pressable, StyleSheet, StatusBar, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useApp, PrivacyValue } from '../context/AppContext';
-import { BlurView } from 'expo-blur';
+import GlassView from '../components/ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInDown } from 'react-native-reanimated';
@@ -51,7 +51,7 @@ export default function PrivacyScreen() {
             
             {/* Header */}
             <View style={styles.header}>
-                <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+                <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
                 <Pressable onPress={() => router.back()} style={styles.backButton}>
                     <MaterialIcons name="arrow-back" size={24} color="#fff" />
                 </Pressable>

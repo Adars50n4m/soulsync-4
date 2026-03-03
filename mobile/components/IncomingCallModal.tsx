@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Modal, Pressable, Image, Platform } from 'react-native';
-import { BlurView } from 'expo-blur';
+import GlassView from './ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, {
     useSharedValue,
@@ -88,7 +88,7 @@ export const IncomingCallModal = () => {
     return (
         <Modal visible={isVisible} transparent animationType="fade">
             <View style={styles.container}>
-                <BlurView intensity={90} tint="systemThinMaterialDark" style={styles.blurContainer} >
+                <GlassView intensity={90} tint="dark" style={styles.blurContainer} >
                     <Image
                         source={{ uri: contact.avatar || 'https://via.placeholder.com/150' }}
                         style={[StyleSheet.absoluteFillObject, { opacity: 0.3 }]}
@@ -138,7 +138,7 @@ export const IncomingCallModal = () => {
                             </View>
                         </View>
                     </View>
-                </BlurView>
+                </GlassView>
             </View>
         </Modal>
     );

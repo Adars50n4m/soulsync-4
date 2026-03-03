@@ -7,7 +7,7 @@ import {
 import { FlashList } from '@shopify/flash-list';
 
 import { useRouter, useNavigation } from 'expo-router';
-import { BlurView } from 'expo-blur';
+import GlassView from '../components/ui/GlassView';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, { 
@@ -146,7 +146,7 @@ const ListHeader = memo(({
             )}
 
             <View style={[styles.searchSection, isKeyboardVisible && { marginBottom: 12 }]}>
-                <BlurView intensity={20} tint="light" style={styles.searchBar}>
+                <GlassView intensity={35} tint="dark" style={styles.searchBar}>
                     <MaterialIcons name="search" size={20} color="rgba(255,0,128,0.8)" />
                     <TextInput
                         style={styles.searchInput}
@@ -158,7 +158,7 @@ const ListHeader = memo(({
                         autoCorrect={false}
                         autoCapitalize="none"
                     />
-                </BlurView>
+                </GlassView>
             </View>
 
             {!isKeyboardVisible && (
@@ -531,13 +531,13 @@ export default function MusicScreen() {
             <StatusBar barStyle="light-content" />
             
             <Animated.View style={[StyleSheet.absoluteFill, backgroundStyle]}>
-                <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+                <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
             </Animated.View>
 
             <Animated.View style={[StyleSheet.absoluteFill, backdropBlurOpacity, { zIndex: 40 }]}>
                 {Platform.OS === 'ios' && (
-                    <BlurView 
-                        intensity={25} 
+                    <GlassView 
+                        intensity={35} 
                         tint="dark" 
                         style={StyleSheet.absoluteFill}
                     />
@@ -554,8 +554,8 @@ export default function MusicScreen() {
             <Pressable style={[StyleSheet.absoluteFill, { zIndex: 41 }]} onPress={handleClose} />
 
             <Animated.View style={[styles.musicOverlay, overlayStyle]}>
-                <BlurView 
-                    intensity={Platform.OS === 'android' ? 85 : 95} 
+                <GlassView 
+                    intensity={35} 
                     tint="dark" 
                     style={styles.overlayGlass} 
                 >
@@ -591,8 +591,8 @@ export default function MusicScreen() {
                         {/* Liquid Tabs Navigation */}
                         {!keyboardVisible && (
                             <View style={styles.tabBarContainer}>
-                                <BlurView 
-                                    intensity={Platform.OS === 'android' ? 80 : 40} 
+                                <GlassView 
+                                    intensity={35} 
                                     tint="dark" 
                                     style={styles.tabPill} 
                                 >
@@ -610,11 +610,11 @@ export default function MusicScreen() {
                                         <MaterialIcons name="library-music" size={20} color={activeTab === 'music' ? MAGENTA : 'rgba(255,255,255,0.4)'} />
                                         <Text style={[styles.tabText, activeTab === 'music' && styles.tabTextActive]}>Music</Text>
                                     </Pressable>
-                                </BlurView>
+                                </GlassView>
                             </View>
                         )}
                     </KeyboardAvoidingView>
-                </BlurView>
+                </GlassView>
             </Animated.View>
         </View>
     );
@@ -625,7 +625,7 @@ const styles = StyleSheet.create({
     
     // Music Overlay
     musicOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '82%', zIndex: 60, borderTopLeftRadius: 40, borderTopRightRadius: 40, overflow: 'hidden' },
-    overlayGlass: { flex: 1, backgroundColor: Platform.OS === 'android' ? 'rgba(15,15,15,0.7)' : 'rgba(15,15,15,0.3)', borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)' },
+    overlayGlass: { flex: 1, backgroundColor: 'transparent', borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)' },
     dragHandle: { width: 48, height: 6, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 3, alignSelf: 'center', marginTop: 12, marginBottom: 24 },
     listContent: { paddingHorizontal: 24 },
     overlayHeader: { width: '100%', alignItems: 'center' },
@@ -648,7 +648,7 @@ const styles = StyleSheet.create({
     playButton: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#fff', shadowOpacity: 0.2, shadowRadius: 15 },
 
     searchSection: { width: '100%', marginBottom: 24 },
-    searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 25, paddingHorizontal: 16, height: 50, borderWidth: 1, borderColor: 'rgba(255,0,128,0.4)', shadowColor: MAGENTA, shadowOpacity: 0.1, shadowRadius: 10, overflow: 'hidden' },
+    searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'transparent', borderRadius: 25, paddingHorizontal: 16, height: 50, borderWidth: 1.2, borderColor: 'rgba(255,255,255,0.22)', shadowColor: MAGENTA, shadowOpacity: 0.1, shadowRadius: 10, overflow: 'hidden' },
     searchInput: { flex: 1, color: '#fff', marginLeft: 12, fontSize: 14, fontWeight: '500' },
 
     listHeader: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginBottom: 16, paddingHorizontal: 8 },
@@ -663,7 +663,7 @@ const styles = StyleSheet.create({
     songAction: { paddingLeft: 10 },
 
     tabBarContainer: { position: 'absolute', bottom: 40, left: 0, right: 0, alignItems: 'center' },
-    tabPill: { flexDirection: 'row', width: '85%', borderRadius: 40, padding: 6, backgroundColor: Platform.OS === 'android' ? 'rgba(20,20,20,0.45)' : 'rgba(20,20,20,0.6)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', overflow: 'hidden' },
+    tabPill: { flexDirection: 'row', width: '85%', borderRadius: 40, padding: 6, backgroundColor: 'transparent', borderWidth: 1.2, borderColor: 'rgba(255,255,255,0.22)', overflow: 'hidden' },
     tabBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, gap: 8, borderRadius: 34 },
     tabBtnActive: { backgroundColor: 'rgba(255,0,128,0.2)', borderWidth: 1, borderColor: 'rgba(255,0,128,0.5)' },
     tabText: { color: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1.5 },

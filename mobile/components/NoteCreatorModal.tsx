@@ -3,7 +3,7 @@ import {
     View, Text, StyleSheet, Modal, Pressable, TextInput, 
     Image, KeyboardAvoidingView, Platform, Keyboard, useWindowDimensions,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
+import GlassView from './ui/GlassView';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, SlideInDown, useAnimatedStyle, withSpring, useSharedValue } from 'react-native-reanimated';
 import { useApp } from '../context/AppContext';
@@ -69,7 +69,7 @@ export const NoteCreatorModal = ({ visible, onClose, onSave }: NoteCreatorModalP
             onRequestClose={onClose}
         >
             <View style={styles.container}>
-                <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+                <GlassView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
                 
                 <KeyboardAvoidingView 
                     behavior={Platform.OS === 'ios' ? 'padding' : 'height'}

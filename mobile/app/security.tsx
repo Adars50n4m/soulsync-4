@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Pressable, Switch, Alert, ScrollView, Platform, TextInput } from 'react-native';
 import { useRouter } from 'expo-router';
-import { BlurView } from 'expo-blur';
+import GlassView from '../components/ui/GlassView';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 import * as LocalAuthentication from 'expo-local-authentication';
@@ -142,7 +142,7 @@ export default function SecurityScreen() {
 
             {isSettingPin && (
                 <View style={styles.modalOverlay}>
-                    <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill} />
+                    <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
                     <View style={styles.modalContent}>
                         <Text style={styles.modalTitle}>Set 6-Digit PIN</Text>
                         <TextInput

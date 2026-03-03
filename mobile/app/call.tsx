@@ -6,7 +6,7 @@ import {
 import { Camera } from 'expo-camera';
 import { Audio as ExpoAudio } from 'expo-av';
 import { useRouter, useNavigation } from 'expo-router';
-import { BlurView } from 'expo-blur';
+import GlassView from '../components/ui/GlassView';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import ExpoPip from 'expo-pip';
 import Constants from 'expo-constants';
@@ -554,72 +554,74 @@ export default function CallScreen() {
                     </View>
 
                     {/* Controls Footer */}
-                    <BlurView intensity={80} tint="systemThinMaterialDark" style={styles.controlsBar} >
-                        <View style={styles.controlsRow}>
-                            <Pressable
-                                style={[styles.controlBtn, activeCall?.isMuted && styles.controlBtnActive]}
-                                onPress={handleToggleMute}
-                            >
-                                <MaterialIcons
-                                    name={activeCall?.isMuted ? "mic-off" : "mic"}
-                                    size={28}
-                                    color={activeCall?.isMuted ? "#000000" : "white"}
-                                />
-                            </Pressable>
-
-                            <Pressable
-                                style={[styles.controlBtn, isSpeaker && styles.controlBtnActive]}
-                                onPress={handleToggleSpeaker}
-                            >
-                                <MaterialIcons
-                                    name={isSpeaker ? "volume-up" : "volume-down"}
-                                    size={28}
-                                    color={isSpeaker ? "#000000" : "white"}
-                                />
-                            </Pressable>
-
-                            {isVideo && (
-                                <Pressable style={styles.controlBtn} onPress={handleToggleVideo}>
+                    {callState === 'connected' && !isInPipMode && (
+                        <GlassView intensity={35} tint="dark" style={styles.controlsBar} >
+                            <View style={styles.controlsRow}>
+                                <Pressable
+                                    style={[styles.controlBtn, activeCall?.isMuted && styles.controlBtnActive]}
+                                    onPress={handleToggleMute}
+                                >
                                     <MaterialIcons
-                                        name={isVideoOff ? "videocam-off" : "videocam"}
+                                        name={activeCall?.isMuted ? "mic-off" : "mic"}
                                         size={28}
-                                        color={isVideoOff ? "#000000" : "white"}
+                                        color={activeCall?.isMuted ? "#000000" : "white"}
                                     />
                                 </Pressable>
-                            )}
 
-                            {/* Enable manual PiP entry button on Android */}
-                            {isVideo && Platform.OS === 'android' && (
-                                <Pressable style={styles.controlBtn} onPress={() => {
-                                    try {
-                                        ExpoPip.enterPipMode({
-                                            width: Math.floor(width),
-                                            height: Math.floor(width * 1.5)
-                                        });
-                                    } catch (e) {
-                                        console.log("Failed to enter manual PiP:", e);
-                                    }
-                                }}>
-                                    <MaterialIcons name="picture-in-picture" size={28} color="white" />
+                                <Pressable
+                                    style={[styles.controlBtn, isSpeaker && styles.controlBtnActive]}
+                                    onPress={handleToggleSpeaker}
+                                >
+                                    <MaterialIcons
+                                        name={isSpeaker ? "volume-up" : "volume-down"}
+                                        size={28}
+                                        color={isSpeaker ? "#000000" : "white"}
+                                    />
                                 </Pressable>
-                            )}
 
-                            {(!isVideo || Platform.OS !== 'android') && isVideo && (
-                                <Pressable style={styles.controlBtn} onPress={handleSwitchCamera}>
-                                    <Ionicons name="camera-reverse" size={28} color="white" />
+                                {isVideo && (
+                                    <Pressable style={styles.controlBtn} onPress={handleToggleVideo}>
+                                        <MaterialIcons
+                                            name={isVideoOff ? "videocam-off" : "videocam"}
+                                            size={28}
+                                            color={isVideoOff ? "#000000" : "white"}
+                                        />
+                                    </Pressable>
+                                )}
+
+                                {/* Enable manual PiP entry button on Android */}
+                                {isVideo && Platform.OS === 'android' && (
+                                    <Pressable style={styles.controlBtn} onPress={() => {
+                                        try {
+                                            ExpoPip.enterPipMode({
+                                                width: Math.floor(width),
+                                                height: Math.floor(width * 1.5)
+                                            });
+                                        } catch (e) {
+                                            console.log("Failed to enter manual PiP:", e);
+                                        }
+                                    }}>
+                                        <MaterialIcons name="picture-in-picture" size={28} color="white" />
+                                    </Pressable>
+                                )}
+
+                                {(!isVideo || Platform.OS !== 'android') && isVideo && (
+                                    <Pressable style={styles.controlBtn} onPress={handleSwitchCamera}>
+                                        <Ionicons name="camera-reverse" size={28} color="white" />
+                                    </Pressable>
+                                )}
+
+                                <Pressable
+                                    style={[styles.controlBtn, styles.endCallBtn]}
+                                    onPress={handleEndCall}
+                                >
+                                    <MaterialIcons name="call-end" size={32} color="white" />
                                 </Pressable>
-                            )}
-
-                            <Pressable
-                                style={[styles.controlBtn, styles.endCallBtn]}
-                                onPress={handleEndCall}
-                            >
-                                <MaterialIcons name="call-end" size={32} color="white" />
-                            </Pressable>
-                        </View>
-                    </BlurView>
+                            </View>
+                        </GlassView>
+                    )}
                 </View>
-                )}
+                    )}
             </Animated.View>
             </GestureDetector>
         </GestureHandlerRootView>

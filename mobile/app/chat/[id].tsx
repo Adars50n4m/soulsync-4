@@ -10,7 +10,7 @@ import { FlashList } from '@shopify/flash-list';
 
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
-import { BlurView } from 'expo-blur';
+import GlassView from '../../components/ui/GlassView';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -1093,7 +1093,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             }
                             
                             return (
-                                <BlurView intensity={60} tint="dark" style={styles.replyPreview} >
+                                <GlassView intensity={35} tint="dark" style={styles.replyPreview} >
                                     <View style={styles.replyContent}>
                                         <View style={[ChatStyles.quoteBar, { backgroundColor: activeTheme.primary }]} />
                                         <View style={styles.replyTextContainer}>
@@ -1109,12 +1109,12 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                     <Pressable onPress={() => setReplyingTo(null)} style={{ padding: 4, marginLeft: 8 }}>
                                         <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
                                     </Pressable>
-                                </BlurView>
+                                </GlassView>
                             );
                         })()}
                         {/* Unified Pill Container */}
                         <View style={styles.unifiedPillContainer}>
-                            <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill}  />
+                            <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill}  />
                             
                             {/* Expandable Options Menu - Now above inputWrapper to open upwards */}
                             <Animated.View style={[styles.optionsMenu, animatedOptionsStyle]}>
@@ -1253,9 +1253,9 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                  inside an opacity:0 view, the morph target is invisible → black flash.
             */}
             <View style={[StyleSheet.absoluteFill, { zIndex: 2 }]} pointerEvents="box-none">
-                {/* The Morph Target: Solid pill background — NO CHILDREN, opacity always 1 */}
+                {/* The Morph Target: Transparent pill bounds — NO CHILDREN, opacity always 1 */}
                 <Animated.View
-                    style={[styles.headerPill, { position: 'absolute', top: HEADER_PILL_TOP, left: 16, right: 16, height: HEADER_PILL_HEIGHT, backgroundColor: 'rgba(30, 30, 35, 0.4)', borderRadius: HEADER_PILL_RADIUS, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.06)', zIndex: 0 }]}
+                    style={[styles.headerPill, { position: 'absolute', top: HEADER_PILL_TOP, left: 16, right: 16, height: HEADER_PILL_HEIGHT, backgroundColor: 'transparent', borderRadius: HEADER_PILL_RADIUS, zIndex: 0 }]}
                 />
 
                 {/* Liquid-glass blur layer (exactly like bottom input pill) */}
@@ -1263,7 +1263,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                     pointerEvents="none"
                     style={[styles.headerGlass, { position: 'absolute', top: HEADER_PILL_TOP, left: 16, right: 16, height: HEADER_PILL_HEIGHT, borderRadius: HEADER_PILL_RADIUS, zIndex: 1 }]}
                 >
-                    <BlurView intensity={100} tint="dark" style={StyleSheet.absoluteFill}  />
+                    <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill}  />
                 </View>
 
                     {/* Original Header Content - Rendered exactly over the morph bounds as an absolute overlay */}
@@ -1343,12 +1343,16 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             </View>
 
                             <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
-                                <MaterialIcons name="audiotrack" size={20} color={activeTheme.primary} />
+                                {({ pressed }) => (
+                                    <MaterialIcons name="audiotrack" size={20} color={pressed ? activeTheme.primary : '#ffffff'} />
+                                )}
                             </Pressable>
 
                             <View ref={callButtonRef} collapsable={false}>
                                 <Pressable style={styles.headerButton} onPress={openCallModal}>
-                                    <MaterialIcons name="call" size={20} color={activeTheme.primary} />
+                                    {({ pressed }) => (
+                                        <MaterialIcons name="call" size={20} color={pressed ? activeTheme.primary : '#ffffff'} />
+                                    )}
                                 </Pressable>
                             </View>
                           </>
@@ -1387,7 +1391,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             }
                         ]}
                     >
-                        <BlurView intensity={100} tint="dark" style={styles.callDropdownBlur} >
+                        <GlassView intensity={35} tint="dark" style={styles.callDropdownBlur} >
                             <Pressable style={styles.callDropdownItem} onPress={() => handleCall('audio')}>
                                 <View style={[styles.callDropdownIcon, { backgroundColor: 'rgba(34, 197, 94, 0.15)' }]}>
                                     <MaterialIcons name="call" size={20} color="#22c55e" />
@@ -1401,7 +1405,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                 </View>
                                 <Text style={styles.callDropdownText}>Video</Text>
                             </Pressable>
-                        </BlurView>
+                        </GlassView>
                     </RNAnimated.View>
                 </Pressable>
             </Modal>
@@ -1559,15 +1563,15 @@ const styles = StyleSheet.create({
     headerPill: {
         height: HEADER_PILL_HEIGHT,
         borderRadius: HEADER_PILL_RADIUS,
-        borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.08)',
-        backgroundColor: 'rgba(30, 30, 35, 0.4)',
+        backgroundColor: 'transparent',
         overflow: 'hidden',
     },
     headerGlass: {
         borderRadius: HEADER_PILL_RADIUS,
         overflow: 'hidden',
-        backgroundColor: 'rgba(30, 30, 35, 0.22)',
+        backgroundColor: 'transparent',
+        borderWidth: 1.2,
+        borderColor: 'rgba(255, 255, 255, 0.22)',
     },
     header: {
         flex: 1,
@@ -1624,9 +1628,9 @@ const styles = StyleSheet.create({
         width: 44,
         height: 44,
         borderRadius: 22,
-        backgroundColor: '#252525',
+        backgroundColor: 'rgba(255, 255, 255, 0.05)',
         borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.05)',
+        borderColor: 'rgba(255, 255, 255, 0.22)',
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -1715,8 +1719,10 @@ const styles = StyleSheet.create({
         zIndex: 60,
     },
     unifiedPillContainer: {
-        backgroundColor: 'rgba(30, 30, 35, 0.4)',
+        backgroundColor: 'transparent',
         borderRadius: 25,
+        borderWidth: 1.2,
+        borderColor: 'rgba(255, 255, 255, 0.22)',
         overflow: 'hidden',
     },
     inputWrapper: {
@@ -1736,7 +1742,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.05)',
+        borderColor: 'rgba(255, 255, 255, 0.22)',
         flexShrink: 0,
     },
     input: {
@@ -1759,7 +1765,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.05)',
+        borderColor: 'rgba(255, 255, 255, 0.22)',
         flexShrink: 0,
     },
     sendButtonActive: {

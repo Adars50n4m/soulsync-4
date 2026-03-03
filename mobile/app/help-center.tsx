@@ -4,7 +4,7 @@ import {
     Pressable, StatusBar, useWindowDimensions, Animated, Platform, Modal
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { BlurView } from 'expo-blur';
+import GlassView from '../components/ui/GlassView';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 
@@ -139,7 +139,7 @@ export default function HelpCenterScreen() {
 
                 {/* Search Bar */}
                 <View style={styles.searchContainer}>
-                    <BlurView intensity={20} tint="light" style={styles.searchBlur} >
+                    <GlassView intensity={20} tint="light" style={styles.searchBlur} >
                         <MaterialIcons name="search" size={22} color="rgba(255,255,255,0.5)" />
                         <TextInput
                             style={styles.searchInput}
@@ -148,21 +148,21 @@ export default function HelpCenterScreen() {
                             value={searchQuery}
                             onChangeText={setSearchQuery}
                         />
-                    </BlurView>
+                    </GlassView>
                 </View>
 
                 {/* Help Topics */}
                 {filteredTopics.length > 0 && (
                     <View style={styles.section}>
                         <Text style={styles.sectionHeader}>Help Topics</Text>
-                        <BlurView intensity={10} tint="dark" style={styles.glassContainer} >
+                        <GlassView intensity={10} tint="dark" style={styles.glassContainer} >
                             {filteredTopics.map((topic, index) => (
                                 <View key={topic.id}>
                                     <TopicItem topic={topic} onOpen={openArticle} />
                                     {index < filteredTopics.length - 1 && <View style={styles.separator} />}
                                 </View>
                             ))}
-                        </BlurView>
+                        </GlassView>
                     </View>
                 )}
 
@@ -170,14 +170,14 @@ export default function HelpCenterScreen() {
                 {filteredArticles.length > 0 && (
                     <View style={styles.section}>
                         <Text style={styles.sectionHeader}>Popular Articles</Text>
-                        <BlurView intensity={10} tint="dark" style={styles.glassContainer} >
+                        <GlassView intensity={10} tint="dark" style={styles.glassContainer} >
                             {filteredArticles.map((article, index) => (
                                 <View key={article.id}>
                                     <ArticleItem article={article} onOpen={openArticle} primaryColor={activeTheme.primary} />
                                     {index < filteredArticles.length - 1 && <View style={styles.separator} />}
                                 </View>
                             ))}
-                        </BlurView>
+                        </GlassView>
                     </View>
                 )}
 
@@ -204,7 +204,7 @@ export default function HelpCenterScreen() {
                 onRequestClose={() => setSelectedArticle(null)}
             >
                 <View style={styles.modalOverlay}>
-                    <BlurView intensity={80} tint="dark" style={styles.modalContent} >
+                    <GlassView intensity={35} tint="dark" style={styles.modalContent} >
                         <View style={styles.modalHeader}>
                             <Pressable onPress={() => setSelectedArticle(null)} style={styles.closeBtn}>
                                 <MaterialIcons name="close" size={24} color="white" />
@@ -214,7 +214,7 @@ export default function HelpCenterScreen() {
                         <ScrollView contentContainerStyle={styles.modalScroll}>
                             <Text style={styles.articleBody}>{selectedArticle?.content}</Text>
                         </ScrollView>
-                    </BlurView>
+                    </GlassView>
                 </View>
             </Modal>
         </View>

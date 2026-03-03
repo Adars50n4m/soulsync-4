@@ -5,7 +5,7 @@ import {
     Modal, Animated as RNAnimated,    useWindowDimensions,
 } from 'react-native';
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
-import { BlurView } from 'expo-blur';
+import GlassView from '../../components/ui/GlassView';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, { 
@@ -101,7 +101,7 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
                         ) : (
                             // Neutral Glass with subtle Rose tint
                             <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(255, 255, 255, 0.08)' }]}>
-                                <BlurView intensity={20} tint="light" style={StyleSheet.absoluteFill}  />
+                                <GlassView intensity={20} tint="light" style={StyleSheet.absoluteFill}  />
                             </View>
                         )}
                         
@@ -155,9 +155,9 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
                     {msg.reactions && msg.reactions.length > 0 && (
                         <View style={[styles.reactionsRow, isMe ? styles.reactionsRight : styles.reactionsLeft]}>
                             {msg.reactions.map((r: string, idx: number) => (
-                                <BlurView key={idx} intensity={40} tint="dark" style={styles.reactionPill} >
+                                <GlassView key={idx} intensity={40} tint="dark" style={styles.reactionPill} >
                                     <Text style={styles.reactionEmoji}>{r}</Text>
-                                </BlurView>
+                                </GlassView>
                             ))}
                         </View>
                     )}
@@ -174,7 +174,7 @@ const ReactionModal = ({ visible, onClose, onSelect }: any) => {
     return (
         <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
             <Pressable style={styles.reactionModalOverlay} onPress={onClose}>
-                <BlurView intensity={80} tint="dark" style={styles.reactionModalContent} >
+                <GlassView intensity={35} tint="dark" style={styles.reactionModalContent} >
                     <View style={styles.emojiBar}>
                         {emojis.map(emoji => (
                             <Pressable key={emoji} onPress={() => onSelect(emoji)} style={styles.emojiButton}>
@@ -186,7 +186,7 @@ const ReactionModal = ({ visible, onClose, onSelect }: any) => {
                         <MaterialIcons name="delete" size={20} color="#ef4444" />
                         <Text style={styles.deleteText}>Delete</Text>
                     </Pressable>
-                </BlurView>
+                </GlassView>
             </Pressable>
         </Modal>
     );
@@ -303,7 +303,7 @@ export default function RemoteChat() {
             <StatusBar barStyle="light-content" />
 
             {/* Header */}
-            <BlurView intensity={100} tint="dark" style={styles.header} >
+            <GlassView intensity={35} tint="dark" style={styles.header} >
                 <Pressable 
                     onPress={() => {
                         if (navigation.canGoBack()) navigation.goBack();
@@ -345,7 +345,7 @@ export default function RemoteChat() {
                         <MaterialIcons name="call" size={20} color="#f43f5e" />
                     </Pressable>
                 </View>
-            </BlurView>
+            </GlassView>
 
             {/* Messages */}
             <FlatList
@@ -374,7 +374,7 @@ export default function RemoteChat() {
 
             {/* Reply Preview */}
             {replyingTo && (
-                <BlurView intensity={60} tint="dark" style={styles.replyPreview} >
+                <GlassView intensity={35} tint="dark" style={styles.replyPreview} >
                     <View style={styles.replyContent}>
                         <View style={styles.quoteBar} />
                         <View style={styles.replyTextContainer}>
@@ -385,11 +385,11 @@ export default function RemoteChat() {
                     <Pressable onPress={() => setReplyingTo(null)}>
                         <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
                     </Pressable>
-                </BlurView>
+                </GlassView>
             )}
 
             {/* Input Area */}
-            <BlurView intensity={100} tint="dark" style={styles.inputArea} >
+            <GlassView intensity={35} tint="dark" style={styles.inputArea} >
                 <Pressable style={styles.attachButton}>
                     <MaterialIcons name="add" size={24} color="rgba(255,255,255,0.5)" />
                 </Pressable>
@@ -420,7 +420,7 @@ export default function RemoteChat() {
                         color={inputText.trim() ? '#ffffff' : 'rgba(255,255,255,0.5)'}
                     />
                 </Pressable>
-            </BlurView>
+            </GlassView>
 
             {/* Reaction Modal */}
             <ReactionModal
@@ -448,7 +448,7 @@ export default function RemoteChat() {
                             }
                         ]}
                     >
-                        <BlurView intensity={100} tint="dark" style={styles.callDropdownBlur} >
+                        <GlassView intensity={35} tint="dark" style={styles.callDropdownBlur} >
                             <Pressable style={styles.callDropdownItem} onPress={() => handleCall('audio')}>
                                 <View style={[styles.callDropdownIcon, { backgroundColor: 'rgba(34, 197, 94, 0.15)' }]}>
                                     <MaterialIcons name="call" size={20} color="#22c55e" />
@@ -462,7 +462,7 @@ export default function RemoteChat() {
                                 </View>
                                 <Text style={styles.callDropdownText}>Video</Text>
                             </Pressable>
-                        </BlurView>
+                        </GlassView>
                     </RNAnimated.View>
                 </Pressable>
             </Modal>
@@ -588,7 +588,7 @@ const styles = StyleSheet.create({
         ...StyleSheet.absoluteFillObject,
         borderRadius: 22,
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
+        borderColor: 'rgba(255,255,255,0.22)',
         zIndex: 1,
     },
     messageContent: {
@@ -672,7 +672,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 6,
         paddingVertical: 3,
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.15)',
+        borderColor: 'rgba(255,255,255,0.22)',
         backgroundColor: 'rgba(0,0,0,0.5)', 
         overflow: 'hidden',
     },
@@ -755,7 +755,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
+        borderColor: 'rgba(255,255,255,0.22)',
     },
     inputWrapper: {
         flex: 1,
@@ -766,7 +766,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 8,
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
+        borderColor: 'rgba(255,255,255,0.22)',
     },
     input: {
         flex: 1,

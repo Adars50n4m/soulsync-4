@@ -4,7 +4,7 @@ import {
     Animated, ScrollView, ActivityIndicator, TextInput,
     useWindowDimensions, PanResponder, KeyboardAvoidingView, Platform, Keyboard
 } from 'react-native';
-import { BlurView } from 'expo-blur';
+import GlassView from './ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import { getSaavnApiUrl } from '../config/api';
 import { useApp } from '../context/AppContext';
@@ -188,7 +188,7 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
             {/* Backdrop with Dynamic Transparency */}
             <Animated.View style={[StyleSheet.absoluteFill, { opacity: backdropOpacity }]}>
                 {Platform.OS === 'ios' && (
-                    <BlurView 
+                    <GlassView 
                         intensity={25} 
                         tint="dark" 
                         style={StyleSheet.absoluteFill}
@@ -209,8 +209,8 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                 { transform: [{ translateY: slideAnim }] },
                 keyboardVisible && { height: '100%', top: 100 } // Push to top when keyboard is open
             ]}>
-                <BlurView 
-                    intensity={Platform.OS === 'android' ? 60 : 90} 
+                <GlassView 
+                    intensity={80} 
                     tint="dark" 
                     style={styles.glassContainer} 
                 >
@@ -286,9 +286,9 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
 
                             {/* Search Bar - Always Visible */}
                             <View style={[styles.searchContainer, keyboardVisible && { marginTop: 40 }]}>
-                                <BlurView 
-                                    intensity={Platform.OS === 'android' ? 60 : 30} 
-                                    tint="light" 
+                                <GlassView 
+                                    intensity={35} 
+                                    tint="dark" 
                                     style={styles.searchInputWrapper} 
                                 >
                                     <MaterialIcons name="search" size={20} color="rgba(255,255,255,0.5)" style={{ marginRight: 10 }} />
@@ -301,7 +301,7 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                                         onSubmitEditing={handleSearch}
                                         returnKeyType="search"
                                     />
-                                </BlurView>
+                                </GlassView>
                             </View>
 
                             {/* Song List */}
@@ -348,8 +348,8 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                             {!keyboardVisible && (
                                 <View style={styles.floatingTabsContainer}>
                                     <View style={styles.floatingTabsWrapper}>
-                                        <BlurView 
-                                            intensity={Platform.OS === 'android' ? 80 : 40} 
+                                        <GlassView 
+                                            intensity={35} 
                                             tint="dark" 
                                             style={StyleSheet.absoluteFill} 
                                         />
@@ -376,7 +376,7 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
 
                         </View>
                     </KeyboardAvoidingView>
-                </BlurView>
+                </GlassView>
             </Animated.View>
         </Modal>
     );
@@ -392,10 +392,11 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         right: 0,
-        height: '85%', // Slightly taller to account for safe areas
+        height: '85%',
         borderTopLeftRadius: 30,
         borderTopRightRadius: 30,
         overflow: 'hidden',
+        backgroundColor: '#000',
         shadowColor: '#000',
         shadowOffset: { width: 0, height: -10 },
         shadowOpacity: 0.5,
@@ -404,8 +405,7 @@ const styles = StyleSheet.create({
     },
     glassContainer: {
         flex: 1,
-        // Both platforms: dark frosted glass backing
-        backgroundColor: Platform.OS === 'android' ? 'rgba(12, 12, 14, 0.75)' : 'rgba(15, 15, 15, 0.92)',
+        backgroundColor: '#0a0a0a',
     },
     dragHandleContainer: {
         alignItems: 'center',
@@ -539,10 +539,12 @@ const styles = StyleSheet.create({
     searchInputWrapper: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: Platform.OS === 'android' ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.1)',
+        backgroundColor: 'rgba(10, 10, 14, 0.65)',
         borderRadius: 12,
         paddingHorizontal: 16,
         paddingVertical: 12,
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.22)',
         overflow: 'hidden',
     },
     searchInput: {
@@ -579,11 +581,10 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         padding: 10,
         marginBottom: 10,
-        backgroundColor: 'rgba(255, 255, 255, 0.02)',
+        backgroundColor: 'rgba(10, 10, 14, 0.65)',
         borderRadius: 16,
         borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.04)',
-        // Shadow for hover/active effect simulation
+        borderColor: 'rgba(255, 255, 255, 0.22)',
         shadowColor: "#000",
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.1,
@@ -623,13 +624,12 @@ const styles = StyleSheet.create({
         borderRadius: 50,
         overflow: 'hidden',
         borderWidth: 1,
-        borderColor: Platform.OS === 'android' ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.08)',
-        backgroundColor: Platform.OS === 'android' ? 'rgba(22, 22, 26, 0.5)' : 'transparent',
+        borderColor: 'rgba(255, 255, 255, 0.22)',
+        backgroundColor: 'rgba(10, 10, 14, 0.65)',
     },
     floatingTabsOverlay: {
         ...StyleSheet.absoluteFillObject,
-        // iOS: tint over real blur; Android: handled by wrapper backgroundColor
-        backgroundColor: Platform.OS === 'android' ? 'transparent' : 'rgba(20, 20, 20, 0.6)',
+        backgroundColor: 'transparent',
     },
     floatingTabsInner: {
         flexDirection: 'row',

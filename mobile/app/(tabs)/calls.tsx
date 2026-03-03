@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, Image, Pressable, StyleSheet, StatusBar, Alert } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
+import GlassView from '../../components/ui/GlassView';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../../context/AppContext';
@@ -130,10 +131,8 @@ export default function CallsScreen() {
             <StatusBar barStyle="light-content" />
 
             {/* Header */}
-            <LinearGradient
-                colors={['#000000', 'rgba(0,0,0,0.8)', 'transparent']}
-                style={styles.header}
-            >
+            <View style={styles.header}>
+                <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
                 {selectionMode ? (
                     <View style={styles.selectionHeader}>
                         <Pressable onPress={clearSelection} style={styles.iconButton}>
@@ -160,7 +159,7 @@ export default function CallsScreen() {
                         )}
                     </View>
                 )}
-            </LinearGradient>
+            </View>
 
             {/* Call History */}
             <View style={styles.sectionHeader}>

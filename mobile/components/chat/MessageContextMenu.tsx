@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { View, Text, Pressable, Modal, StyleSheet, ScrollView, Platform } from 'react-native';
-import { BlurView } from 'expo-blur';
+import GlassView from '../ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, { 
     useSharedValue, 
@@ -106,7 +106,7 @@ const MessageContextMenu = ({
         <Modal visible={visible} transparent animationType="none" onRequestClose={handleClose}>
             <View style={StyleSheet.absoluteFill}>
                 <Animated.View style={[StyleSheet.absoluteFill, backdropStyle]}>
-                    <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill}  />
+                    <GlassView intensity={40} tint="dark" style={StyleSheet.absoluteFill}  />
                     <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
                 </Animated.View>
 
@@ -128,8 +128,8 @@ const MessageContextMenu = ({
                             shadowRadius: 15,
                             elevation: 10,
                         }}>
-                            <BlurView intensity={80} tint="dark" style={[ChatStyles.contextEmojiTail, { [isMe ? 'right' : 'left']: 20 }]}  />
-                            <BlurView intensity={80} tint="dark" style={{ flex: 1, borderRadius: 27, overflow: 'hidden', backgroundColor: 'rgba(30,30,30,0.5)' }} >
+                            <GlassView intensity={80} tint="dark" style={[ChatStyles.contextEmojiTail, { [isMe ? 'right' : 'left']: 20 }]}  />
+                            <GlassView intensity={80} tint="dark" style={{ flex: 1, borderRadius: 27, overflow: 'hidden', backgroundColor: 'rgba(30,30,30,0.5)' }} >
                                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: 'center', paddingHorizontal: 16, gap: 14 }}>
                                     {emojis.map(e => (
                                         <Pressable key={e} onPress={() => { onReaction(e); handleClose(); }} style={{ paddingVertical: 10 }}>
@@ -140,7 +140,7 @@ const MessageContextMenu = ({
                                         <MaterialIcons name="add" size={20} color="#fff" />
                                     </Pressable>
                                 </ScrollView>
-                            </BlurView>
+                            </GlassView>
                         </View>
 
                         <View style={{
@@ -165,7 +165,7 @@ const MessageContextMenu = ({
                             shadowRadius: 15,
                             elevation: 10,
                         }}>
-                            <BlurView intensity={80} tint="dark" style={{ borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(30,30,30,0.5)' }} >
+                            <GlassView intensity={80} tint="dark" style={{ borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(30,30,30,0.5)' }} >
                                 <Pressable style={ChatStyles.contextActionBtn} onPress={() => { onAction('reply'); handleClose(); }}>
                                     <MaterialIcons name="reply" size={20} color="#fff" />
                                     <Text style={ChatStyles.contextActionText}>Reply</Text>
@@ -182,7 +182,7 @@ const MessageContextMenu = ({
                                     <MaterialIcons name="delete-outline" size={20} color="#ff4444" />
                                     <Text style={[ChatStyles.contextActionText, { color: '#ff4444' }]}>Delete</Text>
                                 </Pressable>
-                            </BlurView>
+                            </GlassView>
                         </View>
                     </View>
                 </Animated.View>

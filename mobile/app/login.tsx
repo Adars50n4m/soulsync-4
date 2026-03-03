@@ -4,7 +4,7 @@ import {
     Animated, KeyboardAvoidingView, Platform, useWindowDimensions
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { BlurView } from 'expo-blur';
+import GlassView from '../components/ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 import { SoulSyncLogo } from '../components/SoulSyncLogo';
@@ -125,7 +125,7 @@ export default function LoginScreen() {
                     </View>
 
                     {/* Login Form */}
-                    <BlurView intensity={40} tint="dark" style={styles.formCard} >
+                    <GlassView intensity={40} tint="dark" style={styles.formCard} >
                         <View style={styles.inputContainer}>
                             <MaterialIcons name="person" size={20} color="rgba(255,255,255,0.4)" />
                             <TextInput
@@ -173,7 +173,7 @@ export default function LoginScreen() {
                             <Text style={styles.loginButtonText}>SYNC CONNECTION</Text>
                             <MaterialIcons name="arrow-forward" size={20} color="#000" />
                         </Pressable>
-                    </BlurView>
+                    </GlassView>
 
                     {/* Hint */}
                     <View style={styles.hintContainer}>

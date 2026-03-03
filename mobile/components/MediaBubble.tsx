@@ -20,7 +20,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { BlurView } from 'expo-blur';
+import GlassView from './ui/GlassView';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { mediaDownloadService, formatBytes } from '../services/MediaDownloadService';
 import { offlineService, MediaStatus } from '../services/LocalDBService';
@@ -169,12 +169,12 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
     if (mediaStatus === 'downloading' || isDownloading) {
       return (
         <View style={[styles.placeholder, { width: mediaWidth, height: mediaHeight }]}>
-          <BlurView intensity={80} style={styles.blurOverlay} >
+          <GlassView intensity={80} style={styles.blurOverlay} >
             <ActivityIndicator size="large" color={theme.primary} />
             <Text style={styles.downloadingText}>
               {downloadProgress > 0 ? `${downloadProgress}%` : 'Downloading...'}
             </Text>
-          </BlurView>
+          </GlassView>
         </View>
       );
     }
@@ -183,11 +183,11 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
     if (mediaStatus === 'download_failed') {
       return (
         <Pressable onPress={handleDownload} style={[styles.placeholder, { width: mediaWidth, height: mediaHeight }]}>
-          <BlurView intensity={80} style={styles.blurOverlay} >
+          <GlassView intensity={80} style={styles.blurOverlay} >
             <MaterialIcons name="error-outline" size={40} color="#FF3B30" />
             <Text style={styles.errorText}>{error || 'Download failed'}</Text>
             <Text style={styles.retryText}>Tap to retry</Text>
-          </BlurView>
+          </GlassView>
         </Pressable>
       );
     }
@@ -195,7 +195,7 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
     // Media not downloaded yet - show download button
     return (
       <Pressable onPress={handleDownload} style={[styles.placeholder, { width: mediaWidth, height: mediaHeight }]}>
-        <BlurView intensity={80} style={styles.blurOverlay} >
+        <GlassView intensity={80} style={styles.blurOverlay} >
           {message.thumbnailUri ? (
             <Image
               source={{ uri: message.thumbnailUri }}
@@ -212,7 +212,7 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
           {message.fileSize && (
             <Text style={styles.fileSizeText}>{formatBytes(message.fileSize)}</Text>
           )}
-        </BlurView>
+        </GlassView>
       </Pressable>
     );
   };

@@ -4,7 +4,7 @@ import { FlashList } from '@shopify/flash-list';
 
 import { useRouter, useNavigation } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { BlurView } from 'expo-blur';
+import GlassView from '../../components/ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, {
   useSharedValue,
@@ -131,9 +131,13 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }
     >
       <Animated.View style={[styles.chatPillContainer, animatedStyle]}>
         
-        {/* The solid flying morph background. Isolated with NO CHILDREN to avoid Reanimated capture bugs. */}
+        {/* Glass blur background — same feel as navbar */}
+        <View style={[StyleSheet.absoluteFill, { borderRadius: 36, overflow: 'hidden' }]}>
+          <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
+        </View>
+        {/* Subtle dark tint overlay */}
         <Animated.View
-            style={[StyleSheet.absoluteFill, { borderRadius: 36, backgroundColor: '#151515', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.08)' }]}
+            style={[StyleSheet.absoluteFill, { borderRadius: 36, backgroundColor: 'rgba(15, 15, 20, 0.4)' }]}
         />
             
         {/* Content rendered safely as an overlay, decoupled from Reanimated's snapshot engine */}
@@ -684,8 +688,8 @@ const styles = StyleSheet.create({
       zIndex: 100,
   },
   // Removed overflow: 'hidden' to let shared elements escape during flight
-  chatPillContainer: { flex: 1, borderRadius: 36, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.08)' },
-  pillBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: '#151515', opacity: 0.95 },
+  chatPillContainer: { flex: 1, borderRadius: 36, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.22)', overflow: 'hidden' },
+  pillBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15, 15, 20, 0.4)', opacity: 0.95 },
   pillBlur: { ...StyleSheet.absoluteFillObject },
   pillContent: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 12 },
   avatarContainer: { position: 'relative' },

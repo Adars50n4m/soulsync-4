@@ -12,7 +12,7 @@ import {
     useWindowDimensions,
     Alert,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
+import GlassView from './ui/GlassView';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Video, AVPlaybackStatus, ResizeMode } from 'expo-av';
@@ -191,7 +191,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
             {/* Video Controls Overlay */}
             {showControls && (
-              <BlurView intensity={60} tint="dark" style={styles.controlsOverlay} >
+              <GlassView intensity={60} tint="dark" style={styles.controlsOverlay} >
                 <View style={styles.playButtonCenter}>
                   <Pressable onPress={togglePlayPause} style={styles.largePlayButton}>
                     <MaterialIcons
@@ -236,13 +236,13 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     />
                   </Pressable>
                 </View>
-              </BlurView>
+              </GlassView>
             )}
           </>
         )}
 
         {mediaType === 'audio' && (
-          <BlurView intensity={100} tint="dark" style={styles.audioContainer} >
+          <GlassView intensity={100} tint="dark" style={styles.audioContainer} >
             <MaterialIcons name="graphic-eq" size={120} color="#BC002A" />
 
             {/* Play Button */}
@@ -287,15 +287,15 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               shouldPlay={true}
               isLooping={false}
             />
-          </BlurView>
+          </GlassView>
         )}
       </Pressable>
 
       {/* Caption Display */}
       {caption && (
-        <BlurView intensity={90} tint="dark" style={styles.captionContainer} >
+        <GlassView intensity={90} tint="dark" style={styles.captionContainer} >
           <Text style={styles.captionText}>{caption}</Text>
-        </BlurView>
+        </GlassView>
       )}
     </Animated.View>
   );
@@ -321,7 +321,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: 'rgba(255, 255, 255, 0.22)',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 10,
@@ -407,7 +407,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: 'rgba(255, 255, 255, 0.22)',
     padding: 12,
     backgroundColor: 'rgba(30, 30, 35, 0.6)',
   },

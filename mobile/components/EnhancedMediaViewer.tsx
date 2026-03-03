@@ -13,7 +13,7 @@ import {
     ActivityIndicator,
     Modal,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
+import GlassView from './ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, {
     useSharedValue,
@@ -219,7 +219,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
         >
             <View style={StyleSheet.absoluteFill} pointerEvents="auto">
                 <Animated.View style={[StyleSheet.absoluteFill, animatedContainerStyle]}>
-                    <BlurView intensity={95} tint="dark" style={StyleSheet.absoluteFill}  />
+                    <GlassView intensity={95} tint="dark" style={StyleSheet.absoluteFill}  />
                     <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.15)' }]} />
                     <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
                 </Animated.View>
@@ -298,7 +298,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                         menuProgress.value = withTiming(0, { duration: 150 }, () => runOnJS(setShowMenu)(false));
                     }} />
                     <Animated.View style={[styles.menuContainer, menuStyle]}>
-                        <BlurView intensity={95} tint="dark" style={styles.menuBlur} >
+                        <GlassView intensity={95} tint="dark" style={styles.menuBlur} >
                             <View style={styles.reactionRow}>
                                 {['❤️', '🔥', '😂', '😮', '😢'].map(emoji => (
                                     <Pressable key={emoji} onPress={() => handleReaction(emoji)} style={styles.reactionItem}>
@@ -330,7 +330,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                                 <MaterialIcons name="file-download" size={22} color="white" />
                                 <Text style={styles.menuItemText}>Save to Gallery</Text>
                             </Pressable>
-                        </BlurView>
+                        </GlassView>
                     </Animated.View>
                 </View>
             )}

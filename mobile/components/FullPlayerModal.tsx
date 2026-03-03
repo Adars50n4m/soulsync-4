@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Pressable, Image, Modal, useWindowDimensions, Alert, Platform, Vibration, Share, Linking } from 'react-native';
-import { BlurView } from 'expo-blur';
+import GlassView from './ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 
@@ -46,7 +46,7 @@ const FullPlayerModal: React.FC<FullPlayerModalProps> = ({ visible, onClose }) =
 
     return (
         <Modal visible={visible} animationType="slide" transparent>
-            <BlurView intensity={Platform.OS === 'android' ? 150 : 100} tint="dark" style={styles.fullPlayerContainer} >
+            <GlassView intensity={Platform.OS === 'android' ? 150 : 100} tint="dark" style={styles.fullPlayerContainer} >
                 <View style={styles.fullPlayerHeader}>
                     <Pressable onPress={onClose} style={styles.chevronDown}>
                         <MaterialIcons name="keyboard-arrow-down" size={32} color="#fff" />
@@ -90,7 +90,7 @@ const FullPlayerModal: React.FC<FullPlayerModalProps> = ({ visible, onClose }) =
                         <Pressable><MaterialIcons name="repeat" size={24} color="rgba(255,255,255,0.5)" /></Pressable>
                     </View>
                 </View>
-            </BlurView>
+            </GlassView>
         </Modal>
     );
 };

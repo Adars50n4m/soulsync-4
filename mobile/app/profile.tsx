@@ -3,7 +3,7 @@ import {
     View, Text, Image, StyleSheet, StatusBar, Dimensions,    useWindowDimensions, Pressable
 } from 'react-native';
 import { useRouter, useNavigation } from 'expo-router';
-import { BlurView } from 'expo-blur';
+import GlassView from '../components/ui/GlassView';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { Alert } from 'react-native';
@@ -168,7 +168,7 @@ export default function ProfileScreen() {
 
                 {/* Glassmorphism Menu Cards */}
                 <View style={styles.menuContainer}>
-                    <BlurView intensity={20} tint="dark" style={styles.glassCard} >
+                    <GlassView intensity={20} tint="dark" style={styles.glassCard} >
                         <MenuItem 
                             icon="person-outline" 
                             title="Profile Status" 
@@ -194,7 +194,7 @@ export default function ProfileScreen() {
                             isLast
                             onPress={handleLogout} 
                         />
-                    </BlurView>
+                    </GlassView>
                 </View>
 
                 <Text style={styles.footerNote}>

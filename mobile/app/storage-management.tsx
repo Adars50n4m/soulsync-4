@@ -4,7 +4,7 @@ import {
     Image, Dimensions, Platform, Alert, ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { BlurView } from 'expo-blur';
+import GlassView from '../components/ui/GlassView';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -344,7 +344,7 @@ export default function StorageManagementScreen() {
                 {/* Section 1: Device Storage Overview */}
                 {storageInfo && (
                     <View style={styles.section}>
-                        <BlurView intensity={10} tint="dark" style={styles.glassContainer} >
+                        <GlassView intensity={10} tint="dark" style={styles.glassContainer} >
                             <View style={styles.storageHeaderRow}>
                                 <Text style={styles.storageUsedLabel}>Used</Text>
                                 <Text style={styles.storageFreeLabel}>
@@ -388,14 +388,14 @@ export default function StorageManagementScreen() {
                                     <Text style={styles.legendLabel}>Free</Text>
                                 </View>
                             </View>
-                        </BlurView>
+                        </GlassView>
                     </View>
                 )}
 
                 {/* Section 2: SoulSync App Storage */}
                 <View style={styles.section}>
                     <Text style={styles.sectionHeader}>SoulSync Storage</Text>
-                    <BlurView intensity={10} tint="dark" style={styles.glassContainer} >
+                    <GlassView intensity={10} tint="dark" style={styles.glassContainer} >
                         <View style={styles.appStorageHeader}>
                             <View style={[styles.appIconContainer, { backgroundColor: `${activeTheme.primary}20` }]}>
                                 <Ionicons name="infinite" size={24} color={activeTheme.primary} />
@@ -411,7 +411,7 @@ export default function StorageManagementScreen() {
                         <BreakdownItem icon="storage" label="Database" value={formatBytes(storageInfo?.dbSize || 0)} color="#3b82f6" />
                         <BreakdownItem icon="cached" label="Cache" value={formatBytes(storageInfo?.appCacheSize || 0)} color="#f59e0b" />
                         <BreakdownItem icon="perm-media" label={`Media`} value={`${totalMediaCount} items`} color="#10b981" />
-                    </BlurView>
+                    </GlassView>
                 </View>
 
                 {/* Section 3: Review & Delete Media */}
@@ -542,7 +542,7 @@ export default function StorageManagementScreen() {
                 {/* Section 4: Per-Chat Storage */}
                 <View style={styles.section}>
                     <Text style={styles.sectionHeader}>Chat Storage</Text>
-                    <BlurView intensity={10} tint="dark" style={styles.glassContainer} >
+                    <GlassView intensity={10} tint="dark" style={styles.glassContainer} >
                         {chatStorageData.length > 0 ? (
                             chatStorageData.map((chat, index) => (
                                 <ChatStorageItem 
@@ -559,13 +559,13 @@ export default function StorageManagementScreen() {
                                 <Text style={styles.emptyText}>No chat data yet</Text>
                             </View>
                         )}
-                    </BlurView>
+                    </GlassView>
                 </View>
 
                 {/* Section 5: Actions */}
                 <View style={styles.section}>
                     <Text style={styles.sectionHeader}>Actions</Text>
-                    <BlurView intensity={10} tint="dark" style={styles.glassContainer} >
+                    <GlassView intensity={10} tint="dark" style={styles.glassContainer} >
                         <Pressable style={styles.actionItem} onPress={handleClearCache}>
                             <View style={[styles.actionIcon, { backgroundColor: 'rgba(245,158,11,0.15)' }]}>
                                 <MaterialIcons name="cleaning-services" size={22} color="#f59e0b" />
@@ -595,7 +595,7 @@ export default function StorageManagementScreen() {
                             </View>
                             <MaterialIcons name="chevron-right" size={24} color="rgba(255,255,255,0.2)" />
                         </Pressable>
-                    </BlurView>
+                    </GlassView>
                 </View>
             </ScrollView>
         </View>
