@@ -15,7 +15,7 @@ const ProgressiveBlur = ({
     intensity = 300,
 }: ProgressiveBlurProps) => {
     // 8 Layers of overlapping blur with feathered heights and low opacities
-    const blurLayers = 8; 
+    const blurLayers = Platform.OS === 'android' ? 4 : 8; 
     
     return (
         <View

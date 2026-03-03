@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
 import { View, Text, Image, Pressable, StyleSheet, StatusBar, Dimensions, Alert, FlatList } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 
@@ -215,8 +215,10 @@ export default function HomeScreen() {
   const [statusMediaPreview, setStatusMediaPreview] = useState<{ uri: string; type: 'image' | 'video' | 'audio' } | null>(null);
   const [isUploadingStatus, setIsUploadingStatus] = useState(false);
 
-  // Hide tab bar when fullscreen overlays are open
-  useEffect(() => {
+  // Hide tab bar when fullscreen overlays are open — useLayoutEffect ensures
+  // the tab bar is hidden before the first paint, avoiding a flash on Android
+  // where the View overlay (not Modal) is used for the status viewer.
+  useLayoutEffect(() => {
     const shouldHideTabBar = isViewerVisible || isMediaPickerVisible || !!statusMediaPreview || isNoteModalVisible;
     navigation.setOptions({
       tabBarStyle: { display: shouldHideTabBar ? 'none' : 'flex' }
@@ -287,6 +289,8 @@ export default function HomeScreen() {
   };
 
   const handleStatusPress = (contact: Contact) => {
+    console.log('[HomeScreen] 牒 handleStatusPress triggered for:', contact.name);
+    console.log('[HomeScreen] Stories count:', contact.stories?.length);
     setSelectedStatusContact(contact);
     setIsViewerVisible(true);
   };
@@ -459,6 +463,96 @@ export default function HomeScreen() {
   // Stable keyExtractor for FlashList
   const keyExtractor = useCallback((item: Contact) => item.id, []);
 
+  // Stable header component to prevent remounting and touch loss on Android
+  const renderHeader = useCallback(() => (
+    <View style={styles.statusRail}>
+      <FlatList
+        horizontal
+        data={[{ id: 'my-status' }, ...contactsWithStories]}
+        keyExtractor={item => item.id}
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.statusContent}
+        removeClippedSubviews={false} // Better touch stability on Android
+        renderItem={({ item }) => {
+          if (item.id === 'my-status') {
+            const myStoryPreviewUrl = myStories[0]?.url;
+            return (
+              <Pressable 
+                style={styles.statusCard} 
+                onPress={handleMyStatusPress}
+                android_ripple={{ color: 'rgba(255,255,255,0.1)' }}
+              >
+                <View style={[styles.myStatusBackground, myStories.length > 0 && { justifyContent: 'flex-start', alignItems: 'flex-start' }]}>
+                  {!!myStoryPreviewUrl ? (
+                    <>
+                      <Image source={{ uri: myStoryPreviewUrl }} style={styles.myStatusPreviewBgFull} />
+                      <View style={styles.myStatusAvatarBadgeCorner} pointerEvents="none">
+                        <Image source={{ uri: proxySupabaseUrl(currentUser?.avatar) || '' }} style={styles.myStatusAvatarSmall} />
+                        <View style={styles.myStatusAddBadgeBlue}>
+                          <MaterialIcons name="add" size={14} color="#fff" />
+                        </View>
+                      </View>
+                      <Text style={[styles.startStoryText, styles.myStatusTextBottom]}>My status</Text>
+                    </>
+                  ) : (
+                    <>
+                      <View style={styles.myStatusAvatarContainer} pointerEvents="none">
+                        <Image source={{ uri: proxySupabaseUrl(currentUser?.avatar) || '' }} style={styles.myStatusAvatar} />
+                        <View style={styles.myStatusAddBadge}><MaterialIcons name="add" size={16} color="#fff" /></View>
+                      </View>
+                      <Text style={styles.startStoryText}>
+                        {currentUser?.note && isNoteValid(currentUser.noteTimestamp)
+                          ? 'Your Note'
+                          : 'Start a story'}
+                      </Text>
+                    </>
+                  )}
+                </View>
+                {currentUser?.note && isNoteValid(currentUser.noteTimestamp) && (
+                  <View style={styles.notePositioner} pointerEvents="none">
+                     <NoteBubble text={currentUser.note} isMe />
+                  </View>
+                )}
+              </Pressable>
+            );
+          }
+          const contact = item as Contact;
+          const hasUnseen = contact.stories?.some(s => !s.seen);
+          const storyUrl = contact.stories?.[0]?.url;
+          return (
+            <Pressable 
+                style={styles.statusCard} 
+                onPress={() => handleStatusPress(contact)}
+                android_ripple={{ color: 'rgba(255,255,255,0.1)' }}
+            >
+              {storyUrl ? (
+                  <Image source={{ uri: storyUrl }} style={styles.statusMediaBackground} />
+              ) : (
+                  <View style={[styles.statusMediaBackground, styles.statusPlaceholder]} />
+              )}
+              <View style={styles.statusOverlay} pointerEvents="none">
+                <View style={[styles.contactAvatarBadge, { borderColor: hasUnseen ? '#3b82f6' : 'rgba(255,255,255,0.4)' }]}>
+                  <Image source={{ uri: proxySupabaseUrl(contact.avatar) || DEFAULT_AVATAR }} style={styles.smallStatusAvatar} />
+                </View>
+                <LinearGradient
+                  colors={['transparent', 'rgba(0,0,0,0.8)']}
+                  style={styles.statusNameGradient}
+                >
+                  <Text style={styles.statusNameText}>{contact.name}</Text>
+                </LinearGradient>
+              </View>
+              {contact.note && isNoteValid(contact.noteTimestamp) && (
+                  <View style={styles.notePositioner} pointerEvents="none">
+                      <NoteBubble text={contact.note} />
+                  </View>
+              )}
+            </Pressable>
+          );
+        }}
+      />
+    </View>
+  ), [contactsWithStories, myStories, currentUser, handleMyStatusPress, handleStatusPress]);
+
   return (
     <Animated.View 
         style={styles.container} 
@@ -469,86 +563,7 @@ export default function HomeScreen() {
         data={visibleContacts}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
-        ListHeaderComponent={() => (
-
-          <View style={styles.statusRail}>
-            <FlatList
-              horizontal
-              data={[{ id: 'my-status' }, ...contactsWithStories]}
-              keyExtractor={item => item.id}
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.statusContent}
-              renderItem={({ item }) => {
-                if (item.id === 'my-status') {
-                  const myStoryPreviewUrl = myStories[0]?.url;
-                  return (
-                    <Pressable style={styles.statusCard} onPress={handleMyStatusPress}>
-                      <View style={[styles.myStatusBackground, myStories.length > 0 && { justifyContent: 'flex-start', alignItems: 'flex-start' }]}>
-                        {!!myStoryPreviewUrl ? (
-                          <>
-                            <Image source={{ uri: myStoryPreviewUrl }} style={styles.myStatusPreviewBgFull} />
-                            <View style={styles.myStatusAvatarBadgeCorner}>
-                              <Image source={{ uri: proxySupabaseUrl(currentUser?.avatar) || '' }} style={styles.myStatusAvatarSmall} />
-                              <View style={styles.myStatusAddBadgeBlue}>
-                                <MaterialIcons name="add" size={14} color="#fff" />
-                              </View>
-                            </View>
-                            <Text style={[styles.startStoryText, styles.myStatusTextBottom]}>My status</Text>
-                          </>
-                        ) : (
-                          <>
-                            <View style={styles.myStatusAvatarContainer}>
-                              <Image source={{ uri: proxySupabaseUrl(currentUser?.avatar) || '' }} style={styles.myStatusAvatar} />
-                              <View style={styles.myStatusAddBadge}><MaterialIcons name="add" size={16} color="#fff" /></View>
-                            </View>
-                            <Text style={styles.startStoryText}>
-                              {currentUser?.note && isNoteValid(currentUser.noteTimestamp)
-                                ? 'Your Note'
-                                : 'Start a story'}
-                            </Text>
-                          </>
-                        )}
-                      </View>
-                      {currentUser?.note && isNoteValid(currentUser.noteTimestamp) && (
-                        <View style={styles.notePositioner}>
-                           <NoteBubble text={currentUser.note} isMe />
-                        </View>
-                      )}
-                    </Pressable>
-                  );
-                }
-                const contact = item as Contact;
-                const hasUnseen = contact.stories?.some(s => !s.seen);
-                const storyUrl = contact.stories?.[0]?.url;
-                return (
-                  <Pressable style={styles.statusCard} onPress={() => handleStatusPress(contact)}>
-                    {storyUrl ? (
-                        <Image source={{ uri: storyUrl }} style={styles.statusMediaBackground} />
-                    ) : (
-                        <View style={[styles.statusMediaBackground, styles.statusPlaceholder]} />
-                    )}
-                    <View style={styles.statusOverlay}>
-                      <View style={[styles.contactAvatarBadge, { borderColor: hasUnseen ? '#3b82f6' : 'rgba(255,255,255,0.4)' }]}>
-                        <Image source={{ uri: proxySupabaseUrl(contact.avatar) || DEFAULT_AVATAR }} style={styles.smallStatusAvatar} />
-                      </View>
-                      <LinearGradient
-                        colors={['transparent', 'rgba(0,0,0,0.8)']}
-                        style={styles.statusNameGradient}
-                      >
-                        <Text style={styles.statusNameText}>{contact.name}</Text>
-                      </LinearGradient>
-                    </View>
-                    {contact.note && isNoteValid(contact.noteTimestamp) && (
-                        <View style={styles.notePositioner}>
-                            <NoteBubble text={contact.note} />
-                        </View>
-                    )}
-                  </Pressable>
-                );
-              }}
-            />
-          </View>
-        )}
+        ListHeaderComponent={renderHeader}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
       />

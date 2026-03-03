@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
     View, Text, Image, Pressable, StyleSheet, StatusBar,
-    useWindowDimensions, Platform, Alert
+    useWindowDimensions, Platform, Alert, AppState
 } from 'react-native';
 import { Camera } from 'expo-camera';
 import { Audio as ExpoAudio } from 'expo-av';
 import { useRouter, useNavigation } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
+import ExpoPip from 'expo-pip';
+import Constants from 'expo-constants';
 import { useApp } from '../context/AppContext';
 import { callService, CallSignal } from '../services/CallService';
 import Animated, {
@@ -63,6 +65,31 @@ export default function CallScreen() {
     const [isVideoOff, setIsVideoOff] = useState(false);
     const [isSpeaker, setIsSpeaker] = useState(false);
 
+    // Picture-in-Picture (Android) State
+    const { isInPipMode: androidIsInPipMode } = Platform.OS === 'android' ? ExpoPip.useIsInPip() : { isInPipMode: false };
+    const [iosIsInPipMode, setIosIsInPipMode] = useState(false);
+
+    // Track if we are in PiP manually via AppState for iOS UI treatment
+    useEffect(() => {
+        if (Platform.OS !== 'ios') return;
+        let timeout: NodeJS.Timeout;
+        const subscription = AppState.addEventListener('change', nextAppState => {
+            // If the app goes to background during an active video call, treat UI as PiP
+            if (nextAppState.match(/inactive|background/) && activeCall?.type === 'video' && activeCall?.isAccepted && !isMinimizing.current) {
+                // Short delay to allow iOS native PiP animation to start before hiding UI
+                timeout = setTimeout(() => setIosIsInPipMode(true), 150);
+            } else if (nextAppState === 'active') {
+                setIosIsInPipMode(false);
+            }
+        });
+        return () => {
+            clearTimeout(timeout);
+            subscription.remove();
+        };
+    }, [activeCall]);
+
+    const isInPipMode = Platform.OS === 'android' ? androidIsInPipMode : iosIsInPipMode;
+
     // Track if we are minimizing to prevent ending call on unmount
     const isMinimizing = useRef(false);
 
@@ -108,7 +135,7 @@ export default function CallScreen() {
         transform: [
             { translateX: selfVideoX.value },
             { translateY: selfVideoY.value }
-        ]
+        ] as any
     }));
 
     // Swipe down to minimize gesture (Signal style)
@@ -165,7 +192,9 @@ export default function CallScreen() {
                     allowsRecordingIOS: true,
                     playsInSilentModeIOS: true,
                     staysActiveInBackground: true,
-                    interruptionModeIOS: 1, // DoNotMix
+                    // Use iOS interruption mode 0 (MixWithOthers) or 1 (DoNotMix). 
+                    // For PiP, it's safer to ensure we don't block the background video rendering
+                    interruptionModeIOS: Constants?.platform?.ios ? 1 : 1, 
                     shouldDuckAndroid: true,
                     interruptionModeAndroid: 1, // DoNotMix
                     playThroughEarpieceAndroid: false
@@ -276,19 +305,29 @@ export default function CallScreen() {
         };
     }, []);
 
-    // Sync state with activeCall
+    // Sync PiP parameters with activeCall
     useEffect(() => {
         if (!activeCall) {
             console.log('[CallScreen] ⚠️ activeCall became null — navigating back');
-            console.trace('[CallScreen] activeCall null trace:');
             if (navigation.canGoBack()) navigation.goBack();
             return;
         }
-        if (activeCall?.isAccepted && callState !== 'connected' && callState !== 'ended') {
-            setCallState('connected');
-            // makeOffer is now handled internally by startCall for the initiator
+
+        // Enable PIP Auto-Enter for Video Calls (Android)
+        // We do this as soon as the call is accepted and it's a video call
+        if (activeCall.type === 'video' && activeCall.isAccepted && Platform.OS === 'android') {
+            try {
+                ExpoPip.setPictureInPictureParams({
+                    autoEnterEnabled: true,
+                    // Provide aspect ratio hints
+                    width: Math.floor(width),
+                    height: Math.floor(width * 1.5)
+                });
+            } catch (e) {
+                console.log('Failed to set PIP params:', e);
+            }
         }
-    }, [activeCall, callState]);
+    }, [activeCall?.isAccepted, activeCall?.type, width]);
 
     // Timer - only start if call is connected AND accepted
     useEffect(() => {
@@ -416,6 +455,11 @@ export default function CallScreen() {
                                 objectFit="cover"
                                 mirror={false}
                                 zOrder={0}
+                                iosPIP={{
+                                    enabled: true,
+                                    startAutomatically: true,
+                                    stopAutomatically: true
+                                }}
                             />
                         ) : (
                             <Image
@@ -426,8 +470,8 @@ export default function CallScreen() {
                         )}
                         
                         {/* Connecting / Initializing Overlay */}
-                        {(!remoteStream && isVideo && activeCall.isAccepted) && (
-                            <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }]}>
+                        {(callState !== 'connected' && isVideo && activeCall.isAccepted) && (
+                            <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 10 }]}>
                                 <Text style={{ color: 'white', fontSize: 18, fontWeight: '600' }}>Connecting Video...</Text>
                             </View>
                         )}
@@ -443,8 +487,8 @@ export default function CallScreen() {
                     </View>
                 )}
 
-                {/* Draggable Self Video (Only in Video Call) */}
-                {isVideo && (
+                {/* Draggable Self Video (Only in Video Call) - Hidden in PIP */}
+                {(isVideo && !isInPipMode) && (
                     <GestureDetector gesture={panGesture}>
                         <Animated.View style={[styles.selfVideoContainer, selfVideoStyle]}>
                             {RTCView && localStream && !isVideoOff ? (
@@ -464,8 +508,9 @@ export default function CallScreen() {
                     </GestureDetector>
                 )}
 
-                {/* Content Layer */}
-                <View style={styles.content}>
+                {/* Content Layer - Hidden in PIP mode */}
+                {!isInPipMode && (
+                    <View style={styles.content}>
                     {/* Header */}
                     <View style={styles.header}>
                         {/* Drag Handle for visual cue */}
@@ -543,7 +588,23 @@ export default function CallScreen() {
                                 </Pressable>
                             )}
 
-                            {isVideo && (
+                            {/* Enable manual PiP entry button on Android */}
+                            {isVideo && Platform.OS === 'android' && (
+                                <Pressable style={styles.controlBtn} onPress={() => {
+                                    try {
+                                        ExpoPip.enterPipMode({
+                                            width: Math.floor(width),
+                                            height: Math.floor(width * 1.5)
+                                        });
+                                    } catch (e) {
+                                        console.log("Failed to enter manual PiP:", e);
+                                    }
+                                }}>
+                                    <MaterialIcons name="picture-in-picture" size={28} color="white" />
+                                </Pressable>
+                            )}
+
+                            {(!isVideo || Platform.OS !== 'android') && isVideo && (
                                 <Pressable style={styles.controlBtn} onPress={handleSwitchCamera}>
                                     <Ionicons name="camera-reverse" size={28} color="white" />
                                 </Pressable>
@@ -558,6 +619,7 @@ export default function CallScreen() {
                         </View>
                     </BlurView>
                 </View>
+                )}
             </Animated.View>
             </GestureDetector>
         </GestureHandlerRootView>

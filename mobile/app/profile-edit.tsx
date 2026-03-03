@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import * as React from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
     View, Text, Image, Pressable, StyleSheet, StatusBar,
     TextInput, ScrollView, Alert, Modal, Animated as RNAnimated,
@@ -42,10 +43,25 @@ export default function ProfileEditScreen() {
     const [bio, setBio] = useState(currentUser?.bio || '');
     const [avatar, setAvatar] = useState(currentUser?.avatar || '');
     const [birthdate, setBirthdate] = useState(currentUser?.birthdate || '');
+    const [tempBirthdate, setTempBirthdate] = useState(currentUser?.birthdate || '');
+    const [pickerDate, setPickerDate] = useState<Date>(new Date());
     const [showImageModal, setShowImageModal] = useState(false);
     const [showFullImage, setShowFullImage] = useState(false);
     const [isEditing, setIsEditing] = useState<'name' | 'bio' | null>(null);
     const [showDatePicker, setShowDatePicker] = useState(false);
+
+    useEffect(() => {
+        if (currentUser) {
+            if (currentUser.name && !isEditing) setName(currentUser.name);
+            if (currentUser.bio && !isEditing) setBio(currentUser.bio);
+            // Only sync birthdate if we aren't currently picking one
+            // and the value is actually different from what we have locally
+            if (currentUser.birthdate && !showDatePicker && currentUser.birthdate !== birthdate) {
+                setBirthdate(currentUser.birthdate);
+                setTempBirthdate(currentUser.birthdate);
+            }
+        }
+    }, [currentUser?.birthdate, currentUser?.name, currentUser?.bio, isEditing, showDatePicker]);
 
     const slideAnim = useRef(new RNAnimated.Value(0)).current;
     const heroProgress = useSharedValue(0);
@@ -207,11 +223,40 @@ export default function ProfileEditScreen() {
             setShowDatePicker(false);
         }
         
-        if (selectedDate) {
-            const formatted = selectedDate.toISOString().split('T')[0];
-            setBirthdate(formatted);
-            updateProfile({ birthdate: formatted });
+        if (event.type === 'dismissed') {
+            setShowDatePicker(false);
+            return;
         }
+        
+        if (selectedDate) {
+            setPickerDate(selectedDate);
+            // Format as YYYY-MM-DD using local time to avoid timezone shifts
+            const year = selectedDate.getFullYear();
+            const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
+            const day = String(selectedDate.getDate()).padStart(2, '0');
+            const formatted = `${year}-${month}-${day}`;
+            setTempBirthdate(formatted);
+            
+            if (Platform.OS === 'android') {
+                setBirthdate(formatted);
+                updateProfile({ birthdate: formatted });
+            }
+        }
+    };
+
+    const confirmBirthdate = () => {
+        setBirthdate(tempBirthdate);
+        updateProfile({ birthdate: tempBirthdate });
+        setShowDatePicker(false);
+    };
+
+    const formatDisplayDate = (dateString: string) => {
+        if (!dateString) return '';
+        const parts = dateString.split('-');
+        if (parts.length === 3) {
+            return `${parts[2]}/${parts[1]}/${parts[0]}`; // DD/MM/YYYY
+        }
+        return dateString;
     };
 
 
@@ -333,32 +378,58 @@ export default function ProfileEditScreen() {
                         <View style={styles.settingsGroup}>
                             <SettingRow
                                 label=""
-                                value={birthdate}
+                                value={formatDisplayDate(showDatePicker ? tempBirthdate : birthdate)}
                                 icon="cake"
-                                onPress={() => setShowDatePicker(true)}
+                                onPress={() => {
+                                    setTempBirthdate(birthdate);
+                                    const parts = birthdate ? birthdate.split('-') : [];
+                                    if (parts.length === 3) {
+                                        setPickerDate(new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 12, 0, 0));
+                                    } else {
+                                        setPickerDate(new Date());
+                                    }
+                                    setShowDatePicker(true);
+                                }}
                             />
-                            
-                            {showDatePicker && (
-                                <DateTimePicker
-                                    value={birthdate ? new Date(birthdate) : new Date()}
-                                    mode="date"
-                                    display={Platform.OS === 'ios' ? 'inline' : 'default'}
-                                    onChange={handleDateChange}
-                                    maximumDate={new Date()}
-                                    themeVariant="dark"
-                                />
-                            )}
-                            
-                            {Platform.OS === 'ios' && showDatePicker && (
-                                <Pressable 
-                                    onPress={() => setShowDatePicker(false)}
-                                    style={{ padding: 10, alignItems: 'center', borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)' }}
-                                >
-                                    <Text style={{ color: activeTheme.primary, fontWeight: '600' }}>Done</Text>
-                                </Pressable>
-                            )}
                         </View>
                     </View>
+
+                    {/* Smart Birthday Picker Modal */}
+                    <Modal
+                        visible={showDatePicker}
+                        transparent
+                        animationType="slide"
+                        onRequestClose={() => setShowDatePicker(false)}
+                    >
+                        <View style={styles.modalOverlay}>
+                            <Pressable style={styles.modalBackdrop} onPress={() => setShowDatePicker(false)} />
+                            <View style={[styles.modalContent, { paddingBottom: 40 }]}>
+                                <View style={styles.modalHeader}>
+                                    <Text style={styles.modalTitle}>Choose Birthdate</Text>
+                                    <Pressable 
+                                        onPress={confirmBirthdate} 
+                                        style={[styles.saveBtn, { backgroundColor: activeTheme.primary }]}
+                                    >
+                                        <MaterialIcons name="check" size={24} color="#ffffff" />
+                                    </Pressable>
+                                </View>
+                                
+                                <View style={{ padding: 20, minHeight: 250, justifyContent: 'center', alignItems: 'center' }}>
+                                    <DateTimePicker
+                                        value={pickerDate}
+                                        mode="date"
+                                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                        onChange={handleDateChange}
+                                        maximumDate={new Date()}
+                                        themeVariant="dark"
+                                        textColor="#ffffff"
+                                        accentColor={activeTheme.primary}
+                                        style={{ height: 200, width: '100%' }}
+                                    />
+                                </View>
+                            </View>
+                        </View>
+                    </Modal>
                 </ScrollView>
             </KeyboardAvoidingView>
 

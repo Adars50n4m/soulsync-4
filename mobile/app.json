@@ -106,7 +106,8 @@
       "./plugins/withWebSocketFix",
       "expo-local-authentication",
       "expo-font",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-pip"
     ],
     "experiments": {
       "typedRoutes": true,

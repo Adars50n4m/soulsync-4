@@ -11,11 +11,13 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import ProgressiveBlur from './chat/ProgressiveBlur';
 import Animated, { 
   useSharedValue, 
@@ -105,11 +107,13 @@ export const StatusViewerModal = ({
   const [isLongPressActive, setIsLongPressActive] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
   const [showViewers, setShowViewers] = useState(false);
+  const sessionRef = useRef(0);
   const [prevVisible, setPrevVisible] = useState(visible);
 
   // Use render-time state reset to avoid cascading renders in useEffect
   if (visible !== prevVisible) {
       if (visible) {
+          sessionRef.current += 1;
           setCurrentIndex(0);
           setReplyText('');
           setMediaLoadFailed(false);
@@ -148,7 +152,21 @@ export const StatusViewerModal = ({
     }
   }, [visible, currentStory?.id, onStorySeen]);
 
+  // Android: handle hardware back button (Modal does this via onRequestClose, but View overlay needs it explicit)
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !visible) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      onClose();
+      return true;
+    });
+    return () => sub.remove();
+  }, [visible, onClose]);
+
+  // Capture the session at render time so stale animation callbacks are ignored
+  const activeSession = sessionRef.current;
+
   const handleNext = () => {
+    if (sessionRef.current !== activeSession) return; // Stale callback from previous open
     if (currentIndex < stories.length - 1) {
       setCurrentIndex(prev => prev + 1);
     } else {
@@ -259,15 +277,8 @@ export const StatusViewerModal = ({
 
   if (!visible || !currentStory) return null;
 
-  return (
-    <Modal 
-      visible={visible} 
-      animationType="fade" 
-      transparent 
-      statusBarTranslucent
-      onRequestClose={onClose}
-    >
-      <View style={styles.container}>
+  const content = (
+      <View style={[styles.container, StyleSheet.absoluteFillObject]}>
         <RNStatusBar barStyle="light-content" translucent backgroundColor="transparent" />
         
         {/* Background Backdrop */}
@@ -278,10 +289,25 @@ export const StatusViewerModal = ({
         )}
         
         {isUIVisible && (
-          <>
-            <ProgressiveBlur position="top" height={220} intensity={400} />
-            <ProgressiveBlur position="bottom" height={350} intensity={400} />
-          </>
+          Platform.OS === 'android' ? (
+            <>
+              <LinearGradient
+                  colors={['rgba(0,0,0,0.8)', 'transparent']}
+                  style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 180, zIndex: 2 }}
+                  pointerEvents="none"
+              />
+              <LinearGradient
+                  colors={['transparent', 'rgba(0,0,0,0.8)']}
+                  style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 280, zIndex: 2 }}
+                  pointerEvents="none"
+              />
+            </>
+          ) : (
+            <>
+              <ProgressiveBlur position="top" height={220} intensity={400} />
+              <ProgressiveBlur position="bottom" height={350} intensity={400} />
+            </>
+          )
         )}
 
         {/* Main Content */}
@@ -497,6 +523,18 @@ export const StatusViewerModal = ({
         )}
 
       </View>
+  );
+
+  // Android: use a full-screen View overlay instead of Modal to avoid
+  // Android Dialog bugs where Modal silently fails to re-show after dismiss.
+  if (Platform.OS === 'android') {
+    return <View style={styles.androidOverlay}>{content}</View>;
+  }
+
+  // iOS: use native Modal for proper window layering
+  return (
+    <Modal visible animationType="slide" transparent statusBarTranslucent onRequestClose={onClose}>
+      {content}
     </Modal>
   );
 };
@@ -511,6 +549,16 @@ const captionTextShadow = Platform.select({
 });
 
 const styles = StyleSheet.create({
+  androidOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 9999,
+    elevation: 50,
+    backgroundColor: '#000',
+  },
   container: {
     flex: 1,
     backgroundColor: 'black',
