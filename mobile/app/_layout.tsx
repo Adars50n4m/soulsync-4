@@ -26,7 +26,7 @@ function RootContent() {
     // --- AUTH GUARD ---
     useEffect(() => {
         // Wait for everything to be ready before attempting any navigation
-        if (!context || !isReady || !segments || segments.length === 0) return;
+        if (!context || !isReady || !segments || (segments as any[]).length === 0) return;
 
         const inAuthGroup = segments[0] === 'login';
 
@@ -48,13 +48,14 @@ function RootContent() {
     useEffect(() => {
         if (!activeCall || !segments) return;
 
-        const inCallScreen = segments[0] === 'call';
+        const path = segments.join('/');
+        const inCallScreen = path.includes('call');
 
         // 1. If call is outgoing (just initiated) or accepted, navigate to call screen
         const shouldBeInCallScreen = !activeCall.isIncoming || activeCall.isAccepted;
 
         if (shouldBeInCallScreen && !activeCall.isMinimized && !inCallScreen) {
-            console.log('Call active & (Outgoing or Accepted) - Navigating to Call Screen');
+            console.log('[TrafficController] Navigating to Call Screen. Path:', path);
             router.push('/call');
         }
     }, [activeCall?.isAccepted, activeCall?.isIncoming, activeCall?.isMinimized, segments, context]);
@@ -88,14 +89,14 @@ function RootContent() {
         }} />
         <Stack.Screen name="chat/[id]" options={{
           presentation: 'card',
-          animation: 'ios_from_right',
+          animation: 'none',
           headerShown: false,
           gestureEnabled: true,
           contentStyle: { backgroundColor: '#000' },
         }} />
         <Stack.Screen name="profile-edit" options={{
           presentation: 'card',
-          animation: 'fade',
+          animation: 'none',
           gestureEnabled: true,
         }} />
         <Stack.Screen name="profile" options={{
@@ -130,10 +131,14 @@ function RootContent() {
         <Stack.Screen name="+not-found" />
       </Stack>
 
-      {/* Global Overlays */}
-      <IncomingCallModal />
-      <PipOverlay />
-      <SecurityLockOverlay />
+      {/* Global Overlays - Only render when ready to avoid backdrop glitches */}
+      {isReady && (
+        <>
+          <IncomingCallModal />
+          <PipOverlay />
+          <SecurityLockOverlay />
+        </>
+      )}
     </View>
   );
 }

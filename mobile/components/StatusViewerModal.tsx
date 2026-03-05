@@ -16,6 +16,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import GlassView from './ui/GlassView';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
+import { SoulAvatar } from './SoulAvatar';
 import ProgressiveBlur from './chat/ProgressiveBlur';
 import Animated, { 
   useSharedValue, 
@@ -280,11 +281,9 @@ export const StatusViewerModal = ({
         <RNStatusBar barStyle="light-content" translucent backgroundColor="transparent" />
         
         {/* Background Backdrop */}
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }]} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.85)' : '#000' }]} />
         
-        {Platform.OS === 'ios' && (
-          <GlassView intensity={24} tint="dark" style={StyleSheet.absoluteFill} />
-        )}
+        <GlassView intensity={24} tint="dark" style={StyleSheet.absoluteFill} />
         
         {isUIVisible && (
           <>
@@ -366,7 +365,7 @@ export const StatusViewerModal = ({
             {/* Header */}
             <View style={styles.header}>
                 <View style={styles.userInfo}>
-                    <Image source={{ uri: contactAvatar }} style={styles.avatar} />
+                    <SoulAvatar uri={contactAvatar} size={44} style={styles.avatar} />
                     <View style={styles.userTextInfo}>
                       <Text style={styles.userName}>{contactName}</Text>
                       <View style={styles.metaRow}>
@@ -483,7 +482,7 @@ export const StatusViewerModal = ({
                     const liked = currentStory.likes?.includes(userId);
                     return (
                       <View key={userId} style={styles.viewerItem}>
-                        <Image source={{ uri: user?.avatar }} style={styles.viewerAvatar} />
+                        <SoulAvatar uri={user?.avatar} size={44} style={styles.viewerAvatar} />
                         <View style={styles.viewerInfo}>
                           <Text style={styles.viewerName}>{user?.name || 'Anonymous'}</Text>
                           <Text style={styles.viewerTime}>Just now</Text>

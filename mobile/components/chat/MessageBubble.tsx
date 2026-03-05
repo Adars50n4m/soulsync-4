@@ -175,7 +175,7 @@ const MessageBubble = React.memo(({
         transform: [
             { translateX: translateX.value - 60 },
             { scale: Math.min(translateX.value / 60, 1) }
-        ]
+        ] as any,
     }));
 
     const handleMediaPress = (index: number, openGallery = false) => {

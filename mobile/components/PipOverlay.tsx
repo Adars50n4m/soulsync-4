@@ -1,9 +1,10 @@
-import React, { useRef, useMemo } from 'react';
+import React, { useRef, useMemo, useEffect } from 'react';
 import { View, Image, Pressable, Text, StyleSheet, Animated, PanResponder, Platform, useWindowDimensions } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useSegments } from 'expo-router';
 import GlassView from './ui/GlassView';
-import { MaterialIcons } from '@expo/vector-icons';
+import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
+import { SoulAvatar } from './SoulAvatar';
 
 // Safe import for RTCView
 let RTCView: any = null;
@@ -16,18 +17,19 @@ try {
     console.log("WebRTC not available in PipOverlay");
 }
 
-const OVERLAY_WIDTH = 110;
-const OVERLAY_HEIGHT = 160;
+const OVERLAY_WIDTH = 100;
+const OVERLAY_HEIGHT = 140;
 
 export default function PipOverlay() {
     const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
     const router = useRouter();
+    const segments = useSegments();
     const { activeCall, contacts, toggleMinimizeCall, endCall } = useApp();
     const contact = contacts.find(c => c.id === activeCall?.contactId);
 
     const position = useMemo(() => new Animated.ValueXY({
-        x: SCREEN_WIDTH - OVERLAY_WIDTH - 20,
-        y: 100
+        x: SCREEN_WIDTH - OVERLAY_WIDTH - 16,
+        y: 80
     }), [SCREEN_WIDTH]);
 
     const panResponder = useMemo(() =>
@@ -52,16 +54,19 @@ export default function PipOverlay() {
                 let finalY = (position.y as any)._value;
 
                 // Snap logic
-                if (finalX < 0) finalX = 10;
-                if (finalX > SCREEN_WIDTH - OVERLAY_WIDTH) finalX = SCREEN_WIDTH - OVERLAY_WIDTH - 10;
-                if (finalY < 50) finalY = 60;
-                if (finalY > SCREEN_HEIGHT - OVERLAY_HEIGHT - 120) finalY = SCREEN_HEIGHT - OVERLAY_HEIGHT - 120;
+                if (finalX < 10) finalX = 10;
+                if (finalX > SCREEN_WIDTH - OVERLAY_WIDTH - 10) finalX = SCREEN_WIDTH - OVERLAY_WIDTH - 10;
+                if (finalY < 40) finalY = 60;
+                if (finalY > SCREEN_HEIGHT - OVERLAY_HEIGHT - 100) finalY = SCREEN_HEIGHT - OVERLAY_HEIGHT - 100;
+
+                // Snap to left or right sides
+                const snapX = finalX < SCREEN_WIDTH / 2 ? 16 : SCREEN_WIDTH - OVERLAY_WIDTH - 16;
 
                 Animated.spring(position, {
-                    toValue: { x: finalX, y: finalY },
+                    toValue: { x: snapX, y: finalY },
                     useNativeDriver: false,
-                    tension: 40,
-                    friction: 8,
+                    tension: 60,
+                    friction: 10,
                 }).start();
             },
         }), [position, SCREEN_WIDTH, SCREEN_HEIGHT]);
@@ -76,7 +81,15 @@ export default function PipOverlay() {
         endCall();
     };
 
-    if (!activeCall || !activeCall.isMinimized || !contact) return null;
+    // --- LOGIC: When to show this overlay ---
+    // Show if:
+    // 1. There is an active call
+    // 2. We are NOT on the /call screen
+    // 3. We are NOT seeing an incoming call modal elsewhere
+    const inCallScreen = segments[0] === 'call';
+    const isVisible = activeCall && !inCallScreen && contact && (activeCall.isAccepted || !activeCall.isIncoming);
+
+    if (!isVisible) return null;
 
     const isVideo = activeCall.type === 'video';
     // Get the remote stream for the PiP window
@@ -90,49 +103,50 @@ export default function PipOverlay() {
             ]}
             {...panResponder.panHandlers}
         >
-            <Pressable onPress={handlePress} style={styles.pressable}>
-                <View style={styles.contentContainer}>
-                    {isVideo ? (
-                        remoteStream ? (
-                            <RTCView
-                                streamURL={remoteStream.toURL()}
-                                style={styles.videoStream}
-                                objectFit="cover"
-                                mirror={false}
-                                zOrder={2} // Ensure it sits on top
-                            />
+            <View style={styles.shadowWrapper}>
+                <Pressable onPress={handlePress} style={styles.pressable}>
+                    <View style={styles.contentContainer}>
+                        {isVideo ? (
+                            remoteStream ? (
+                                <RTCView
+                                    streamURL={typeof remoteStream.toURL === 'function' ? remoteStream.toURL() : remoteStream}
+                                    style={styles.videoStream}
+                                    objectFit="cover"
+                                    mirror={false}
+                                    zOrder={2}
+                                />
+                            ) : (
+                                <View style={styles.videoPlaceholder}>
+                                    <SoulAvatar uri={contact.avatar} size={50} />
+                                    <Text style={styles.placeholderLabel}>No Video</Text>
+                                </View>
+                            )
                         ) : (
-                             // Fallback if video stream is missing but call type is video
-                            <Image
-                                source={{ uri: contact.avatar }}
-                                style={styles.videoImage}
-                                resizeMode="cover"
-                            />
-                        )
-                    ) : (
-                        // Audio Call Look
-                        <GlassView intensity={80} tint="dark" style={styles.blur} >
-                            <View style={styles.audioContent}>
-                                <View style={styles.avatarContainer}>
-                                    <Image source={{ uri: contact.avatar }} style={styles.avatar} />
+                            <GlassView intensity={60} tint="dark" style={styles.audioBlur}>
+                                <View style={styles.audioContent}>
+                                    <SoulAvatar uri={contact.avatar} size={44} />
+                                    <View style={styles.pulseContainer}>
+                                        <Animated.View style={styles.pulseDot} />
+                                        <Animated.View style={[styles.pulseDot, { opacity: 0.6 }]} />
+                                        <Animated.View style={[styles.pulseDot, { opacity: 0.3 }]} />
+                                    </View>
                                 </View>
-                                <View style={styles.pulseContainer}>
-                                    <View style={styles.pulseDot} />
-                                    <View style={styles.pulseDot} />
-                                    <View style={styles.pulseDot} />
-                                </View>
-                            </View>
-                        </GlassView>
-                    )}
+                            </GlassView>
+                        )}
 
-                    {/* Controls Overlay */}
-                    <View style={styles.overlayControls}>
-                         <Pressable style={styles.endButton} onPress={handleEndCall}>
-                            <MaterialIcons name="call-end" size={16} color="#ffffff" />
+                        {/* Top Indicator */}
+                        <View style={styles.topBar}>
+                            <MaterialIcons name={isVideo ? "videocam" : "call"} size={10} color="rgba(255,255,255,0.8)" />
+                            <Text style={styles.topLabel} numberOfLines={1}>{contact.name}</Text>
+                        </View>
+
+                        {/* Floating End Button */}
+                        <Pressable style={styles.endCallBubble} onPress={handleEndCall}>
+                            <MaterialIcons name="call-end" size={14} color="white" />
                         </Pressable>
                     </View>
-                </View>
-            </Pressable>
+                </Pressable>
+            </View>
         </Animated.View>
     );
 }
@@ -140,22 +154,25 @@ export default function PipOverlay() {
 const styles = StyleSheet.create({
     container: {
         position: 'absolute',
-        zIndex: 9999, // Very high z-index
+        zIndex: 10000, 
         width: OVERLAY_WIDTH,
         height: OVERLAY_HEIGHT,
+    },
+    shadowWrapper: {
+        flex: 1,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.4,
+        shadowRadius: 12,
+        elevation: 15,
     },
     pressable: {
         width: '100%',
         height: '100%',
-        borderRadius: 16,
+        borderRadius: 20,
         overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.3)',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.5,
-        shadowRadius: 10,
-        elevation: 10,
+        borderWidth: 1.5,
+        borderColor: 'rgba(255,255,255,0.15)',
         backgroundColor: '#000',
     },
     contentContainer: {
@@ -165,63 +182,72 @@ const styles = StyleSheet.create({
     videoStream: {
         width: '100%',
         height: '100%',
-        backgroundColor: '#1a1a1a',
+        backgroundColor: '#121212',
     },
-    blur: {
+    videoPlaceholder: {
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: 'transparent',
+        backgroundColor: '#1C1C1E',
     },
-    videoImage: {
-        width: '100%',
-        height: '100%',
-        opacity: 0.8,
+    placeholderLabel: {
+        color: 'rgba(255,255,255,0.5)',
+        fontSize: 10,
+        marginTop: 8,
+    },
+    audioBlur: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     audioContent: {
         alignItems: 'center',
-        gap: 12,
-    },
-    avatarContainer: {
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        borderWidth: 2,
-        borderColor: 'rgba(244, 63, 94, 0.5)',
-        padding: 2,
-    },
-    avatar: {
-        width: '100%',
-        height: '100%',
-        borderRadius: 22,
+        paddingTop: 10,
     },
     pulseContainer: {
         flexDirection: 'row',
         gap: 4,
+        marginTop: 12,
     },
     pulseDot: {
         width: 4,
         height: 4,
         borderRadius: 2,
-        backgroundColor: '#f43f5e',
+        backgroundColor: '#3b82f6',
     },
-    overlayControls: {
-        ...StyleSheet.absoluteFillObject,
-        justifyContent: 'flex-end',
+    topBar: {
+        position: 'absolute',
+        top: 8,
+        left: 0,
+        right: 0,
+        flexDirection: 'row',
         alignItems: 'center',
-        paddingBottom: 20,
+        justifyContent: 'center',
+        paddingHorizontal: 8,
+        gap: 4,
         zIndex: 10,
     },
-    endButton: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
+    topLabel: {
+        color: 'white',
+        fontSize: 10,
+        fontWeight: '600',
+        maxWidth: 60,
+        textShadowColor: 'black',
+        textShadowRadius: 3,
+    },
+    endCallBubble: {
+        position: 'absolute',
+        bottom: 12,
+        alignSelf: 'center',
+        width: 28,
+        height: 28,
+        borderRadius: 14,
         backgroundColor: '#ef4444',
         alignItems: 'center',
         justifyContent: 'center',
-        shadowColor: 'black',
-        shadowOpacity: 0.3,
-        shadowRadius: 3,
-        elevation: 5,
+        zIndex: 30,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.2)',
     },
 });
+

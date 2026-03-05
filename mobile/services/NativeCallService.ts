@@ -92,7 +92,7 @@ class NativeCallService {
 
     const options = {
       ios: {
-        appName: 'SoulSync',
+        appName: 'Soul',
         includesCallsInRecents: true,
         maximumCallGroups: 1,
         maximumCallsPerCallGroup: 1,
@@ -100,15 +100,15 @@ class NativeCallService {
       },
       android: {
         alertTitle: 'Permissions Required',
-        alertDescription: 'SoulSync needs phone account permission to show incoming calls',
+        alertDescription: 'Soul needs phone account permission to show incoming calls',
         cancelButton: 'Cancel',
         okButton: 'OK',
         selfManaged: true,
         additionalPermissions: [],
         foregroundService: {
           channelId: 'com.soulsync4.mobile.calls',
-          channelName: 'SoulSync Calls',
-          notificationTitle: 'SoulSync Call',
+          channelName: 'Soul Calls',
+          notificationTitle: 'Soul Call',
           notificationIcon: 'ic_launcher',
         },
       },

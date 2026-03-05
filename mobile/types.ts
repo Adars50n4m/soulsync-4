@@ -53,7 +53,7 @@ export interface Contact {
     unreadCount?: number;
     stories?: Story[];
     birthdate?: string;
-    note?: string; // New field for SoulSync Notes (status bubble)
+    note?: string; // New field for Soul Notes (status bubble)
     noteTimestamp?: string; // ISO date string
 }
 

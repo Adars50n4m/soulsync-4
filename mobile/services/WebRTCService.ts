@@ -1,3 +1,6 @@
+import { Platform } from 'react-native';
+import { callService, CallSignal } from './CallService';
+
 // Safe imports for WebRTC to prevent crashes in Expo Go
 let RTCPeerConnection: any;
 let RTCSessionDescription: any;
@@ -15,9 +18,6 @@ try {
 } catch (e) {
     console.log('[WebRTCService] Native modules not available');
 }
-
-import { Platform } from 'react-native';
-import { callService, CallSignal } from './CallService';
 
 // STUN/TURN servers for NAT traversal
 // STUN/TURN servers for NAT traversal

@@ -5,7 +5,7 @@
  * Files are organized by type and never deleted automatically.
  *
  * Folder Structure:
- * {documentDirectory}/SoulSync/
+ * {documentDirectory}/Soul/
  * ├── media/
  * │   ├── images/       ← .jpg, .png, .webp
  * │   ├── videos/       ← .mp4, .mov
@@ -22,7 +22,7 @@
 
 import * as FileSystem from 'expo-file-system';
 
-const BASE_DIR = FileSystem.documentDirectory + 'SoulSync/';
+const BASE_DIR = FileSystem.documentDirectory + 'Soul/';
 
 const DIRS = {
   images: `${BASE_DIR}media/images/`,
@@ -175,7 +175,7 @@ export const cleanTemp = async (): Promise<void> => {
 };
 
 /**
- * Get total storage used by SoulSync media
+ * Get total storage used by Soul media
  */
 export const getStorageUsage = async (): Promise<{
   totalBytes: number;

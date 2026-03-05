@@ -1,6 +1,7 @@
 import { Audio } from 'expo-av';
 
 class SoundService {
+  private notificationSound: Audio.Sound | null = null;
   private ringtoneSound: Audio.Sound | null = null;
   private dialingSound: Audio.Sound | null = null;
   private ringingSound: Audio.Sound | null = null;
@@ -9,6 +10,31 @@ class SoundService {
   private isPlayingRingtone = false;
   private isPlayingDialing = false;
   private isPlayingRinging = false;
+
+  private lastNotificationTime = 0;
+
+  async playNotification() {
+    const now = Date.now();
+    if (now - this.lastNotificationTime < 1000) return;
+    this.lastNotificationTime = now;
+    
+    try {
+      const { sound } = await Audio.Sound.createAsync(
+        require('../assets/sounds/notification.wav'),
+        { shouldPlay: true, isLooping: false, volume: 1.0 }
+      );
+      this.notificationSound = sound;
+      console.log('[SoundService] Playing notification sound...');
+      
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          sound.unloadAsync();
+        }
+      });
+    } catch (error) {
+      console.log('[SoundService] Error playing notification sound:', error);
+    }
+  }
 
   async playRingtone() {
     if (this.isPlayingRingtone) return;

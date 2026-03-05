@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, StatusBar, Alert } from 'react-native';
+import { View, Text, Pressable, StyleSheet, StatusBar, Alert, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { useApp, THEMES, ThemeName } from '../../context/AppContext';
@@ -11,64 +11,45 @@ import Animated, {
     Easing,
     Extrapolation,
     interpolate,
-    runOnJS,
+    SharedTransition,
     useAnimatedScrollHandler,
     useAnimatedStyle,
     useSharedValue,
     withTiming,
 } from 'react-native-reanimated';
 
-const ProgressiveBlur = ({
-    position = 'bottom',
-    height = 180,
-    intensity = 100,
-    steps = 200,
-}: {
-    position?: 'top' | 'bottom';
-    height?: number;
-    intensity?: number;
-    steps?: number;
-}) => {
-    return (
-        <View
-            style={{
-                position: 'absolute',
-                [position]: 0,
-                left: 0,
-                right: 0,
-                height,
-                zIndex: position === 'top' ? 90 : 50,
-                overflow: 'hidden',
-            }}
-            pointerEvents="none"
-        >
-            {Array.from({ length: steps }).map((_, i) => {
-                const ratio = (i + 1) / steps;
-                const layerHeight = height * ratio;
-                const fade = Math.pow(1 - ratio, 1.4);
-                const opacity = Math.max(0, Math.min(1, fade));
-                const key = `${position}-${i}`;
+import { SoulAvatar } from '../../components/SoulAvatar';
+import ProgressiveBlur from '../../components/chat/ProgressiveBlur';
 
-                return (
-                    <GlassView
-                        key={key}
-                        intensity={intensity / steps}
-                        tint="dark"
-                        
-                        style={{
-                            position: 'absolute',
-                            [position]: 0,
-                            left: 0,
-                            right: 0,
-                            height: layerHeight,
-                            opacity,
-                        }}
-                    />
-                );
-            })}
-        </View>
-    );
-};
+const profileMorphTransition = SharedTransition.custom((values) => {
+    'worklet';
+    const morph = {
+        duration: 400,
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+    };
+    return {
+        originX: withTiming(values.targetOriginX, morph),
+        originY: withTiming(values.targetOriginY, morph),
+        width: withTiming(values.targetWidth, morph),
+        height: withTiming(values.targetHeight, morph),
+        borderRadius: withTiming(values.targetBorderRadius, morph),
+    };
+}).duration(400);
+
+const profileBoundsTransition = SharedTransition.custom((values) => {
+    'worklet';
+    const morph = {
+        duration: 400,
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+    };
+    return {
+        originX: withTiming(values.targetOriginX, morph),
+        originY: withTiming(values.targetOriginY, morph),
+        width: withTiming(values.targetWidth, morph),
+        height: withTiming(values.targetHeight, morph),
+        borderRadius: withTiming(values.targetBorderRadius, morph),
+    };
+}).duration(400);
 const SettingItem = ({ icon, title, subtitle, onPress, rightElement, danger, activeTheme }: any) => (
     <Pressable style={styles.settingItem} onPress={onPress}>
         <View style={[styles.settingIcon, { backgroundColor: danger ? 'rgba(239,68,68,0.1)' : `${activeTheme.primary}20` }]}>
@@ -83,12 +64,12 @@ const SettingItem = ({ icon, title, subtitle, onPress, rightElement, danger, act
 );
 
 export default function SettingsScreen() {
+    const enableSharedMorph = Platform.OS === 'ios';
     const router = useRouter();
     const { currentUser, logout, theme, activeTheme } = useApp();
     const [notifications, setNotifications] = useState(true);
     const isNavigatingRef = useRef(false);
     const scrollY = useSharedValue(0);
-    const openProgress = useSharedValue(0);
     const onScroll = useAnimatedScrollHandler((event) => {
         scrollY.value = event.contentOffset.y;
     });
@@ -96,31 +77,16 @@ export default function SettingsScreen() {
     useFocusEffect(
         useCallback(() => {
             isNavigatingRef.current = false;
-            openProgress.value = withTiming(0, { duration: 120 });
             return undefined;
-        }, [openProgress])
+        }, [])
     );
-
-    const profileImageAnimatedStyle = useAnimatedStyle(() => ({
-        transform: [
-            {
-                translateY: interpolate(scrollY.value, [-200, 0, 260, 520], [-52, 0, 66, 120], Extrapolation.CLAMP),
-            },
-            {
-                translateX: interpolate(scrollY.value, [-200, 0, 520], [-10, 0, 12], Extrapolation.CLAMP),
-            },
-            {
-                scale: interpolate(scrollY.value, [-200, 0, 260], [1.24, 1.08, 1], Extrapolation.CLAMP),
-            },
-        ],
-    }));
 
     const overlayAnimatedStyle = useAnimatedStyle(() => ({
         transform: [
             {
                 translateY: interpolate(scrollY.value, [-140, 0, 320], [-8, 0, 26], Extrapolation.CLAMP),
             },
-        ],
+        ] as any,
     }));
 
     const fadeAnimatedStyle = useAnimatedStyle(() => ({
@@ -135,7 +101,7 @@ export default function SettingsScreen() {
             {
                 scale: interpolate(scrollY.value, [-160, 0, 300], [1.03, 1, 0.95], Extrapolation.CLAMP),
             },
-        ],
+        ] as any,
     }));
 
     const dobAnimatedStyle = useAnimatedStyle(() => ({
@@ -143,7 +109,7 @@ export default function SettingsScreen() {
             {
                 translateY: interpolate(scrollY.value, [-160, 0, 320], [-6, 0, 22], Extrapolation.CLAMP),
             },
-        ],
+        ] as any,
         opacity: interpolate(scrollY.value, [0, 320], [1, 0.86], Extrapolation.CLAMP),
     }));
 
@@ -155,28 +121,14 @@ export default function SettingsScreen() {
             {
                 scale: interpolate(scrollY.value, [-160, 0, 320], [1.04, 1, 0.93], Extrapolation.CLAMP),
             },
-        ],
+        ] as any,
         opacity: interpolate(scrollY.value, [0, 320], [1, 0.88], Extrapolation.CLAMP),
-    }));
-
-    const openingCardStyle = useAnimatedStyle(() => ({
-        transform: [
-            { scale: interpolate(openProgress.value, [0, 1], [1, 0.985], Extrapolation.CLAMP) },
-            { translateY: interpolate(openProgress.value, [0, 1], [0, -8], Extrapolation.CLAMP) },
-        ],
-        opacity: interpolate(openProgress.value, [0, 1], [1, 0.94], Extrapolation.CLAMP),
     }));
 
     const openProfileEdit = () => {
         if (isNavigatingRef.current) return;
         isNavigatingRef.current = true;
-        openProgress.value = withTiming(
-            1,
-            { duration: 180, easing: Easing.out(Easing.cubic) },
-            (finished) => {
-                if (finished) runOnJS(router.push)('/profile-edit' as any);
-            }
-        );
+        router.push('/profile-edit' as any);
     };
 
     const handleLogout = () => {
@@ -198,7 +150,7 @@ export default function SettingsScreen() {
     };
 
     const handleReportProblem = async () => {
-        const url = 'mailto:work.adarshthakur@gmail.com?subject=SoulSync%20-%20Problem%20Report';
+        const url = 'mailto:work.adarshthakur@gmail.com?subject=Soul%20-%20Problem%20Report';
         try {
             await Linking.openURL(url);
         } catch (error) {
@@ -240,23 +192,32 @@ export default function SettingsScreen() {
                 scrollEventThrottle={16}
             >
                 {/* Cinematic Profile Card */}
-                <Animated.View
-                    style={openingCardStyle}
-                    collapsable={false}
-                >
-                    <Pressable 
-                        style={styles.profileCard} 
+                <View style={styles.profileCard}>
+                    <Pressable
+                        style={styles.profileCardPressable}
                         onPress={openProfileEdit}
+                        collapsable={false}
                     >
-                    <Animated.Image
-                        source={{ uri: currentUser?.avatar }} 
-                        style={[
-                            styles.profileCardImage,
-                            profileImageAnimatedStyle,
-                        ]}
-                    />
+                    <Animated.View
+                        style={styles.profileCardImageShell}
+                        {...(enableSharedMorph
+                            ? {
+                                sharedTransitionTag: 'profile-avatar-bounds',
+                                sharedTransitionStyle: profileBoundsTransition,
+                            }
+                            : {})}
+                        collapsable={false}
+                    >
+                        <SoulAvatar 
+                            uri={currentUser?.avatar} 
+                            size={480} // Dummy size, style overrides it
+                            style={styles.profileCardImage}
+                            sharedTransitionTag={enableSharedMorph ? 'profile-avatar' : undefined}
+                            sharedTransitionStyle={enableSharedMorph ? profileMorphTransition : undefined}
+                        />
+                    </Animated.View>
                     
-                    <ProgressiveBlur position="bottom" height={120} intensity={190} steps={30} />
+                    <ProgressiveBlur position="bottom" height={120} intensity={190} />
                     <Animated.View style={fadeAnimatedStyle}>
                         <LinearGradient
                             colors={['transparent', 'rgba(0,0,0,0.16)', 'rgba(0,0,0,0.34)']}
@@ -314,7 +275,7 @@ export default function SettingsScreen() {
                         </View>
                     </Animated.View>
                     </Pressable>
-                </Animated.View>
+                </View>
 
                 {/* Theme Section - Navigates to Theme Screen */}
                 <View style={styles.section}>
@@ -433,7 +394,7 @@ export default function SettingsScreen() {
 
                 {/* App Info */}
                 <View style={styles.appInfo}>
-                    <Text style={styles.appName}>SoulSync</Text>
+                    <Text style={styles.appName}>Soul</Text>
                     <Text style={styles.appVersion}>Made with ❤️</Text>
                 </View>
             </Animated.ScrollView>
@@ -461,10 +422,19 @@ const styles = StyleSheet.create({
         marginBottom: 32,
         backgroundColor: 'rgba(255,255,255,0.05)',
     },
+    profileCardPressable: {
+        flex: 1,
+    },
     profileCardImage: {
         width: '100%',
         height: '100%',
         resizeMode: 'cover',
+        borderRadius: 32,
+    },
+    profileCardImageShell: {
+        ...StyleSheet.absoluteFillObject,
+        borderRadius: 32,
+        overflow: 'hidden',
     },
     profileCardOverlay: {
         position: 'absolute',

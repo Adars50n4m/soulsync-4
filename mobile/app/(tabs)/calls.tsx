@@ -5,6 +5,7 @@ import GlassView from '../../components/ui/GlassView';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../../context/AppContext';
+import { SoulAvatar } from '../../components/SoulAvatar';
 
 const CallItem = React.memo(({ item, contact, onCall, activeTheme, isSelected, toggleSelection, selectionMode }: any) => {
     const isMissed = item.type === 'missed';
@@ -26,9 +27,10 @@ const CallItem = React.memo(({ item, contact, onCall, activeTheme, isSelected, t
             delayLongPress={200}
         >
             <View style={styles.avatarWrapper}>
-                <Image
-                    source={{ uri: contact?.avatar || 'https://via.placeholder.com/50' }}
-                    style={styles.avatar}
+                <SoulAvatar 
+                    uri={contact?.avatar} 
+                    size={48} 
+                    style={styles.avatar} 
                 />
                 {isSelected && (
                     <View style={styles.selectionBadge}>

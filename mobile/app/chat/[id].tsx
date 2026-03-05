@@ -35,15 +35,16 @@ import Animated, {
     withDelay,
     withRepeat,
     withSequence,
+    SharedTransition,
     interpolate,
     interpolateColor,
     Extrapolation,
     Easing,
 } from 'react-native-reanimated';
-import { MORPH_EASING, MORPH_IN_DURATION, MORPH_OUT_DURATION, MORPH_OUT_EASING, MORPH_SPRING_CONFIG } from '../../constants/transitions';
 import 'react-native-gesture-handler';
 
 import { useApp } from '../../context/AppContext';
+import { SoulAvatar } from '../../components/SoulAvatar';
 import { chatService } from '../../services/ChatService';
 import { MusicPlayerOverlay } from '../../components/MusicPlayerOverlay';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
@@ -55,8 +56,27 @@ import { ResizeMode, Video, Audio } from 'expo-av';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
 const IS_IOS = Platform.OS === 'ios';
+const ENABLE_SHARED_TRANSITIONS = Platform.OS === 'ios';
 const IOS_KEYBOARD_SAFE_ADJUST = 0; 
 const HEADER_PILL_TOP = 62;
+const LIST_PILL_HEIGHT = 72;
+const LIST_PILL_RADIUS = 36;
+const MORPH_IN_OUT_DURATION = 720;
+const MORPH_OUT_HANDOFF = Math.round(MORPH_IN_OUT_DURATION * 0.38);
+const pillSharedTransition = SharedTransition.custom((values) => {
+    'worklet';
+    const morph = {
+        duration: 720,
+        easing: Easing.bezier(0.2, 1, 0.36, 1),
+    };
+    return {
+        originX: withTiming(values.targetOriginX, morph),
+        originY: withTiming(values.targetOriginY, morph),
+        width: withTiming(values.targetWidth, morph),
+        height: withTiming(values.targetHeight, morph),
+        borderRadius: withTiming(values.targetBorderRadius, morph),
+    };
+}).duration(720);
 
 type ChatMediaItem = {
     url: string;
@@ -178,6 +198,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     // Support both direct routing (params) and inline rendering (props)
     const id = propsUser?.id || (Array.isArray(paramsId) ? paramsId[0] : paramsId);
     const sourceY = propsSourceY ?? (paramsSourceY ? Number(Array.isArray(paramsSourceY) ? paramsSourceY[0] : paramsSourceY) : undefined);
+    const isMorphEntry = sourceY !== undefined;
     
     const router = useRouter();
     const isFocused = useIsFocused();
@@ -214,12 +235,13 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const ITEM_MARGIN = 16;
     const ITEM_RADIUS = 36;
     
-    const chatBodyOpacity = useSharedValue(sourceY !== undefined ? 0 : 1);
     const keyboardOffset = useSharedValue(0);
-
-    const chatBodyAnimStyle = useAnimatedStyle(() => ({
-        opacity: chatBodyOpacity.value,
-    }));
+    const headerAccessoryOpacity = useSharedValue(isMorphEntry ? 0 : 1);
+    const backgroundMorphProgress = useSharedValue(isMorphEntry ? 0 : 1);
+    const headerPillOffsetY = useSharedValue(
+        isMorphEntry ? Math.max(0, sourceY - HEADER_PILL_TOP) : 0
+    );
+    const headerPillProgress = useSharedValue(isMorphEntry ? 0 : 1);
 
     const inputAreaAnimatedStyle = useAnimatedStyle(() => ({
         transform: [{ translateY: -keyboardOffset.value }],
@@ -229,17 +251,78 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         paddingBottom: keyboardOffset.value,
     }));
 
-    // Animate IN with staggered delay - Using useEffect for more reliable animation start
+    const headerAccessoryAnimatedStyle = useAnimatedStyle(() => ({
+        opacity: headerAccessoryOpacity.value,
+    }));
+
+    const backgroundMorphAnimatedStyle = useAnimatedStyle(() => ({
+        opacity: interpolate(
+            backgroundMorphProgress.value,
+            [0, 1],
+            [0.9, 1],
+            Extrapolation.CLAMP
+        ),
+        transform: [
+            {
+                translateY: interpolate(
+                    backgroundMorphProgress.value,
+                    [0, 1],
+                    [20, 0],
+                    Extrapolation.CLAMP
+                ),
+            },
+            {
+                scale: interpolate(
+                    backgroundMorphProgress.value,
+                    [0, 1],
+                    [0.985, 1],
+                    Extrapolation.CLAMP
+                ),
+            },
+        ] as any,
+    }));
+
+    const headerMorphAnimatedStyle = useAnimatedStyle(() => ({
+        transform: [{ translateY: headerPillOffsetY.value }],
+        height: interpolate(
+            headerPillProgress.value,
+            [0, 1],
+            [LIST_PILL_HEIGHT, HEADER_PILL_HEIGHT],
+            Extrapolation.CLAMP
+        ),
+        borderRadius: interpolate(
+            headerPillProgress.value,
+            [0, 1],
+            [LIST_PILL_RADIUS, HEADER_PILL_RADIUS],
+            Extrapolation.CLAMP
+        ),
+    }));
+
     useEffect(() => {
-        if (sourceY !== undefined) {
-            // 1. Full shape morph starts instantly
-            // 2. Chat body text/input fades in midway through the morph
-            chatBodyOpacity.value = withDelay(MORPH_IN_DURATION * 0.3, withTiming(1, {
-                duration: MORPH_IN_DURATION * 0.8,
-                easing: Easing.out(Easing.quad)
-            }));
+        if (isMorphEntry) {
+            headerPillOffsetY.value = withTiming(0, {
+                duration: MORPH_IN_OUT_DURATION,
+                easing: Easing.bezier(0.22, 1, 0.36, 1),
+            });
+            headerPillProgress.value = withTiming(1, {
+                duration: MORPH_IN_OUT_DURATION,
+                easing: Easing.bezier(0.22, 1, 0.36, 1),
+            });
+            backgroundMorphProgress.value = withTiming(1, {
+                duration: MORPH_IN_OUT_DURATION,
+                easing: Easing.bezier(0.22, 1, 0.36, 1),
+            });
+            headerAccessoryOpacity.value = withDelay(
+                320,
+                withTiming(1, { duration: 260, easing: Easing.out(Easing.cubic) })
+            );
+            return;
         }
-    }, [sourceY]);
+        headerPillOffsetY.value = 0;
+        headerPillProgress.value = 1;
+        backgroundMorphProgress.value = 1;
+        headerAccessoryOpacity.value = 1;
+    }, [backgroundMorphProgress, headerAccessoryOpacity, headerPillOffsetY, headerPillProgress, isMorphEntry]);
 
     useEffect(() => {
         const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -302,12 +385,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         isNavigatingRef.current = true;
         if (onBackStart) onBackStart();
 
-        // Content fades out quickly for smoother perceived transition
-        chatBodyOpacity.value = withTiming(0, {
-            duration: MORPH_OUT_DURATION * 0.35,
-            easing: Easing.out(Easing.quad),
-        });
-
         // Close transient overlays before navigating back to avoid stale touch blockers.
         setShowCallModal(false);
         setSelectedContextMessage(null);
@@ -316,16 +393,40 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         setMediaCollection(null);
         setMediaViewer(null);
 
-        // Use native navigation goBack to trigger shared transition OUT
-        if (onBack) {
-            onBack();
-        } else if (navigation.canGoBack()) {
-            navigation.goBack();
-        } else {
-            console.warn('Navigation: Cannot go back');
-            isNavigatingRef.current = false;
+        // OUT = reverse of IN (same easing + same duration + same path).
+        if (isMorphEntry && sourceY !== undefined) {
+            headerAccessoryOpacity.value = withTiming(0, { duration: 100 });
+            backgroundMorphProgress.value = withTiming(0, {
+                duration: MORPH_IN_OUT_DURATION,
+                easing: Easing.bezier(0.22, 1, 0.36, 1),
+            });
+            headerPillOffsetY.value = withTiming(Math.max(0, sourceY - HEADER_PILL_TOP), {
+                duration: MORPH_IN_OUT_DURATION,
+                easing: Easing.bezier(0.22, 1, 0.36, 1),
+            });
+            headerPillProgress.value = withTiming(0, {
+                duration: MORPH_IN_OUT_DURATION,
+                easing: Easing.bezier(0.22, 1, 0.36, 1),
+            });
+            // Show Home during return morph (status/nav appear without end-delay).
+            setTimeout(() => finishBack(), MORPH_OUT_HANDOFF);
+            return;
         }
-    }, [onBackStart, onBack, navigation, chatBodyOpacity, selectionMode]);
+        headerAccessoryOpacity.value = withTiming(0, { duration: 1000 });
+        requestAnimationFrame(() => {
+            finishBack();
+        });
+    }, [
+        backgroundMorphProgress,
+        finishBack,
+        headerAccessoryOpacity,
+        headerPillOffsetY,
+        headerPillProgress,
+        isMorphEntry,
+        onBackStart,
+        selectionMode,
+        sourceY,
+    ]);
 
     // Defensive cleanup: if the screen blurs/unmounts while an overlay is open,
     // ensure it cannot keep intercepting touches above the list screen.
@@ -635,7 +736,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             transform: [
                 { translateX: recordingTranslateX.value },
                 { scale: interpolate(progress, [0, 0.9, 0.98, 1], [1, 1, 0.92, 0.28], Extrapolation.CLAMP) },
-            ],
+            ] as any,
             opacity: interpolate(progress, [0, 0.97, 1], [1, 1, 0], Extrapolation.CLAMP),
             backgroundColor: interpolateColor(
                 progress,
@@ -1033,10 +1134,10 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000', zIndex: -1 }]} />
 
             {/* Content Wrapper */}
-            <View style={[StyleSheet.absoluteFill, { zIndex: 1 }]}>
+            <Animated.View style={[StyleSheet.absoluteFill, { zIndex: 1 }, backgroundMorphAnimatedStyle as any]}>
 
                 {/* Chat body — fades in AFTER the morph transition completes */}
-                <Animated.View style={[StyleSheet.absoluteFill, chatBodyAnimStyle]}>
+                <View style={StyleSheet.absoluteFill}>
 
                 {/* Chat content - Deferred Rendering for Performance */}
                 {isReady && (
@@ -1244,8 +1345,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                         </Animated.View>
                     </View>
                 )}
-                </Animated.View>
-            </View>
+                </View>
+            </Animated.View>
 
             {/* ─── Header & Morph Pill — OUTSIDE all opacity wrappers ─────────────────
                  These MUST be at the root level with opacity:1 from frame 0.
@@ -1253,21 +1354,38 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                  inside an opacity:0 view, the morph target is invisible → black flash.
             */}
             <View style={[StyleSheet.absoluteFill, { zIndex: 2 }]} pointerEvents="box-none">
-                {/* The Morph Target: Transparent pill bounds — NO CHILDREN, opacity always 1 */}
+                {/* The Morph Target: Dedicated view with matching tag for shared transition */}
                 <Animated.View
-                    style={[styles.headerPill, { position: 'absolute', top: HEADER_PILL_TOP, left: 16, right: 16, height: HEADER_PILL_HEIGHT, backgroundColor: 'transparent', borderRadius: HEADER_PILL_RADIUS, zIndex: 0 }]}
+                    {...(ENABLE_SHARED_TRANSITIONS
+                        ? {
+                            sharedTransitionTag: `pill-${id}`,
+                            sharedTransitionStyle: pillSharedTransition,
+                        }
+                        : {})}
+                    style={[styles.headerPill, headerMorphAnimatedStyle, { 
+                        position: 'absolute', 
+                        top: HEADER_PILL_TOP, 
+                        left: 16, 
+                        right: 16, 
+                        height: HEADER_PILL_HEIGHT, 
+                        backgroundColor: 'rgba(15, 15, 20, 0.4)', 
+                        borderRadius: HEADER_PILL_RADIUS, 
+                        zIndex: 0,
+                        borderWidth: 1,
+                        borderColor: 'rgba(255, 255, 255, 0.22)'
+                    }]}
                 />
 
                 {/* Liquid-glass blur layer (exactly like bottom input pill) */}
-                <View
+                <Animated.View
                     pointerEvents="none"
-                    style={[styles.headerGlass, { position: 'absolute', top: HEADER_PILL_TOP, left: 16, right: 16, height: HEADER_PILL_HEIGHT, borderRadius: HEADER_PILL_RADIUS, zIndex: 1 }]}
+                    style={[styles.headerGlass, headerMorphAnimatedStyle, { position: 'absolute', top: HEADER_PILL_TOP, left: 16, right: 16, height: HEADER_PILL_HEIGHT, borderRadius: HEADER_PILL_RADIUS, zIndex: 1 }]}
                 >
                     <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill}  />
-                </View>
+                </Animated.View>
 
                     {/* Original Header Content - Rendered exactly over the morph bounds as an absolute overlay */}
-                    <View style={[styles.header, { position: 'absolute', top: HEADER_PILL_TOP, left: 16, right: 16, height: HEADER_PILL_HEIGHT, zIndex: 10 }]} pointerEvents="box-none">
+                    <Animated.View style={[styles.header, headerMorphAnimatedStyle, { position: 'absolute', top: HEADER_PILL_TOP, left: 16, right: 16, height: HEADER_PILL_HEIGHT, zIndex: 10 }]} pointerEvents="box-none">
                         {selectionMode ? (
                             <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, width: '100%' }}>
                                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -1284,80 +1402,102 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             </View>
                         ) : (
                           <>
-                            <Pressable onPress={handleBack} style={styles.backButton}>
-                                <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
-                            </Pressable>
+                            <Animated.View style={headerAccessoryAnimatedStyle}>
+                                <Pressable onPress={handleBack} style={styles.backButton}>
+                                    <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
+                                </Pressable>
+                            </Animated.View>
 
-                            <Pressable 
-                                style={styles.avatarWrapper} 
-                                onPress={() => {
-                                    if (contact.stories && contact.stories.length > 0) {
-                                        // Open status viewer logic could be added here
-                                        // But for now, just navigate to profile or show ring
-                                        router.push(`/profile/${contact.id}` as any);
-                                    } else {
-                                        router.push(`/profile/${contact.id}` as any);
+                            <Animated.View
+                                {...(ENABLE_SHARED_TRANSITIONS
+                                    ? {
+                                        sharedTransitionTag: `pill-avatar-${id}`,
+                                        sharedTransitionStyle: pillSharedTransition,
                                     }
-                                }}
+                                    : {})}
                             >
-                                <Animated.Image
-                                    source={{ uri: contact.avatar }}
-                                    style={[
-                                        styles.avatar,
-                                        contact.stories && contact.stories.length > 0 && {
-                                            borderWidth: 2,
-                                            borderColor: contact.stories.some(s => !s.seen) ? '#3b82f6' : 'rgba(255,255,255,0.4)',
-                                            padding: 2
+                                <Pressable 
+                                    style={styles.avatarWrapper} 
+                                    onPress={() => {
+                                        if (contact.stories && contact.stories.length > 0) {
+                                            router.push(`/profile/${contact.id}` as any);
+                                        } else {
+                                            router.push(`/profile/${contact.id}` as any);
                                         }
-                                    ]}
-                                />
-                                {contact.status === 'online' && <View style={styles.onlineIndicator} />}
-                            </Pressable>
+                                    }}
+                                >
+                                    <SoulAvatar
+                                        uri={contact.avatar}
+                                        size={40}
+                                        style={[
+                                            contact.stories && contact.stories.length > 0 && {
+                                                borderWidth: 2,
+                                                borderColor: contact.stories.some(s => !s.seen) ? '#3b82f6' : 'rgba(255,255,255,0.4)',
+                                                padding: 2
+                                            }
+                                        ]}
+                                    />
+                                    {contact.status === 'online' && <View style={styles.onlineIndicator} />}
+                                </Pressable>
+                            </Animated.View>
 
                             <View style={styles.headerInfo}>
-                                <View>
+                                <Animated.View
+                                    {...(ENABLE_SHARED_TRANSITIONS
+                                        ? {
+                                            sharedTransitionTag: `pill-name-${id}`,
+                                            sharedTransitionStyle: pillSharedTransition,
+                                        }
+                                        : {})}
+                                >
                                     <Text style={styles.contactName}>{contact.name}</Text>
-                                </View>
-                                {isTyping ? (
-                                    <Text style={[styles.statusText, { color: '#22c55e' }]}>
-                                        typing...
-                                    </Text>
-                                ) : musicState.currentSong ? (
-                                    <View style={styles.nowPlayingStatus}>
-                                        <MaterialIcons name="audiotrack" size={12} color={activeTheme.primary} />
-                                        <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
-                                            {sanitizeSongTitle(musicState.currentSong.name)}
+                                </Animated.View>
+                                <Animated.View style={headerAccessoryAnimatedStyle}>
+                                    {isTyping ? (
+                                        <Text style={[styles.statusText, { color: '#22c55e' }]}>
+                                            typing...
                                         </Text>
-                                    </View>
-                                ) : contact.status === 'online' ? (
-                                    <Text style={[styles.statusText, { color: '#22c55e' }]}>
-                                        online
-                                    </Text>
-                                ) : (
-                                    <Text style={[styles.statusText, { color: 'rgba(255,255,255,0.35)' }]}>
-                                        {contact.lastSeen
-                                            ? `last seen ${formatLastSeen(contact.lastSeen)}`
-                                            : 'offline'}
-                                    </Text>
-                                )}
+                                    ) : musicState.currentSong ? (
+                                        <View style={styles.nowPlayingStatus}>
+                                            <MaterialIcons name="audiotrack" size={12} color={activeTheme.primary} />
+                                            <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
+                                                {sanitizeSongTitle(musicState.currentSong.name)}
+                                            </Text>
+                                        </View>
+                                    ) : contact.status === 'online' ? (
+                                        <Text style={[styles.statusText, { color: '#22c55e' }]}>
+                                            online
+                                        </Text>
+                                    ) : (
+                                        <Text style={[styles.statusText, { color: 'rgba(255,255,255,0.35)' }]}>
+                                            {contact.lastSeen
+                                                ? `last seen ${formatLastSeen(contact.lastSeen)}`
+                                                : 'offline'}
+                                        </Text>
+                                    )}
+                                </Animated.View>
                             </View>
 
-                            <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
-                                {({ pressed }) => (
-                                    <MaterialIcons name="audiotrack" size={20} color={pressed ? activeTheme.primary : '#ffffff'} />
-                                )}
-                            </Pressable>
-
-                            <View ref={callButtonRef} collapsable={false}>
-                                <Pressable style={styles.headerButton} onPress={openCallModal}>
+                            <Animated.View style={headerAccessoryAnimatedStyle}>
+                                <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
                                     {({ pressed }) => (
-                                        <MaterialIcons name="call" size={20} color={pressed ? activeTheme.primary : '#ffffff'} />
+                                        <MaterialIcons name="audiotrack" size={20} color={pressed ? activeTheme.primary : '#ffffff'} />
                                     )}
                                 </Pressable>
-                            </View>
+                            </Animated.View>
+
+                            <Animated.View style={headerAccessoryAnimatedStyle}>
+                                <View ref={callButtonRef} collapsable={false}>
+                                    <Pressable style={styles.headerButton} onPress={openCallModal}>
+                                        {({ pressed }) => (
+                                            <MaterialIcons name="call" size={20} color={pressed ? activeTheme.primary : '#ffffff'} />
+                                        )}
+                                    </Pressable>
+                                </View>
+                            </Animated.View>
                           </>
                         )}
-                    </View>
+                    </Animated.View>
             </View>
 
             {/* Reaction Modal */}

@@ -8,6 +8,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { Alert } from 'react-native';
 import { useApp } from '../context/AppContext';
+import { SoulAvatar } from '../components/SoulAvatar';
 import Animated, {
     FadeIn,
     FadeOut,
@@ -76,7 +77,7 @@ export default function ProfileScreen() {
     const handleLogout = () => {
         Alert.alert(
             'Logout',
-            'Are you sure you want to disconnect your SoulSync?',
+            'Are you sure you want to disconnect your Soul?',
             [
                 { text: 'Cancel', style: 'cancel' },
                 {
@@ -99,23 +100,15 @@ export default function ProfileScreen() {
         <View style={styles.container}>
             <StatusBar barStyle="light-content" translucent />
 
-            {/* Ambient Background Orbs */}
+            {/* Ambient Background Orbs - Simplified to red only or removed */}
             <View style={StyleSheet.absoluteFill}>
                 <LinearGradient
-                    colors={['rgba(244, 63, 94, 0.1)', 'transparent']}
+                    colors={['rgba(188, 0, 42, 0.08)', 'transparent']}
                     style={[styles.orb, { top: -100, left: -50 }]}
                 />
                 <LinearGradient
-                    colors={['rgba(168, 85, 247, 0.1)', 'transparent']}
+                    colors={['rgba(188, 0, 42, 0.05)', 'transparent']}
                     style={[styles.orb, { bottom: 100, right: -100 }]}
-                />
-                <LinearGradient
-                    colors={['rgba(59, 130, 246, 0.05)', 'transparent']}
-                    style={[styles.orb, { top: '40%', right: -50 }]}
-                />
-                <LinearGradient
-                    colors={['rgba(244, 63, 94, 0.08)', 'transparent']}
-                    style={[styles.orb, { top: '60%', left: -100 }]}
                 />
             </View>
 
@@ -148,7 +141,12 @@ export default function ProfileScreen() {
                         <Animated.View
                             style={styles.avatarGlowContainer}
                         >
-                            <Image source={{ uri: currentUser.avatar }} style={styles.profileAvatar} />
+                            <SoulAvatar 
+                                uri={currentUser.avatar} 
+                                size={120} 
+                                style={styles.profileAvatar} 
+                                iconSize={60}
+                            />
                             <View style={styles.avatarGlassBorder} />
                             <View style={styles.editOverlay}>
                                 <MaterialIcons name="edit" size={24} color="#ffffff" />
@@ -156,7 +154,7 @@ export default function ProfileScreen() {
                         </Animated.View>
                     </Pressable>
                     <Text style={styles.userName}>{currentUser.name}</Text>
-                    <Text style={styles.userHandle}>@{currentUser.id || 'soul_sync'}</Text>
+                    <Text style={styles.userHandle}>Soul ID: {currentUser.id || 'soul_user'}</Text>
                     <Pressable 
                         style={({ pressed }) => [styles.editProfileButton, pressed && styles.editProfileButtonPressed]}
                         onPress={handleEditProfile}
@@ -198,7 +196,7 @@ export default function ProfileScreen() {
                 </View>
 
                 <Text style={styles.footerNote}>
-                    Your profile is synced with the SoulSync network.
+                    Your profile is synced with the Soul network.
                 </Text>
             </Animated.ScrollView>
         </View>

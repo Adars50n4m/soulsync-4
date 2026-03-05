@@ -21,7 +21,7 @@ const MediaGalleryItem = ({ item, activeCategory, morphProgress }: any) => {
             transform: [
                 { scale: interpolate(morphProgress.value, [0, 1], [0.1, 1]) },
                 { translateY: interpolate(morphProgress.value, [0, 1], [-height / 4, 0]) }
-            ],
+            ] as any,
             borderRadius: interpolate(morphProgress.value, [0, 1], [40, 0]),
             opacity: morphProgress.value,
         };
@@ -109,7 +109,7 @@ export default function ProfileScreen() {
                 { translateY: interpolate(p, [0, 1], [gridCenterY - screenCenterY, 0]) },
                 { scaleX: interpolate(p, [0, 1], [initialScaleX, 1]) },
                 { scaleY: interpolate(p, [0, 1], [initialScaleY, 1]) }
-            ],
+            ] as any,
             borderRadius: interpolate(p, [0, 1], [18 / initialScaleX, 0]),
             opacity: interpolate(p, [0, 0.05], [0, 1]),
             shadowOpacity: interpolate(p, [0, 0.5, 1], [0, 0.5, 0]),
@@ -271,17 +271,7 @@ export default function ProfileScreen() {
         <View style={styles.container}>
             <StatusBar barStyle="light-content" translucent />
 
-            {/* Ambient Background Orbs */}
-            <View style={StyleSheet.absoluteFill}>
-                <LinearGradient
-                    colors={['rgba(244, 63, 94, 0.08)', 'transparent']}
-                    style={[styles.orb, { top: -100, left: -50 }]}
-                />
-                <LinearGradient
-                    colors={['rgba(168, 85, 247, 0.08)', 'transparent']}
-                    style={[styles.orb, { bottom: 100, right: -100 }]}
-                />
-            </View>
+
 
             {/* Header - Transparent & Minimal */}
             <View style={styles.header}>

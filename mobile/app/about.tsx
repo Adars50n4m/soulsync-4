@@ -43,7 +43,7 @@ export default function AboutScreen() {
                     <View style={[styles.logoContainer, { borderColor: activeTheme.primary }]}>
                         <Ionicons name="infinite" size={50} color={activeTheme.primary} />
                     </View>
-                    <Text style={styles.appName}>SoulSync</Text>
+                    <Text style={styles.appName}>Soul</Text>
                     <Text style={styles.version}>Version 1.0.0 (Build 104)</Text>
                     <Text style={styles.tagline}>Sync your soul, cinematic style.</Text>
                 </View>
@@ -63,7 +63,7 @@ export default function AboutScreen() {
                 <View style={styles.footer}>
                     <Text style={styles.footerText}>Designed & Developed with ❤️</Text>
                     <Text style={styles.developerName}>by Adarsh Thakur</Text>
-                    <Text style={styles.copyright}>© 2026 SoulSync Labs. All rights reserved.</Text>
+                    <Text style={styles.copyright}>© 2026 Soul Labs. All rights reserved.</Text>
                 </View>
             </ScrollView>
         </View>

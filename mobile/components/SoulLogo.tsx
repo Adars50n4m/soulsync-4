@@ -4,7 +4,7 @@ import { styled } from 'nativewind';
 
 const StyledView = styled(View);
 
-export const SoulSyncLogo = ({ className, width = 160, height = 160 }: { className?: string; width?: number; height?: number }) => (
+export const SoulLogo = ({ className, width = 160, height = 160 }: { className?: string; width?: number; height?: number }) => (
     <StyledView 
         className={className} 
         style={{ 

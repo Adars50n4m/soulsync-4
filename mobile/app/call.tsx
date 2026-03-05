@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
     View, Text, Image, Pressable, StyleSheet, StatusBar,
-    useWindowDimensions, Platform, Alert, AppState
+    useWindowDimensions, Platform, Alert, AppState, ActivityIndicator
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Camera } from 'expo-camera';
 import { Audio as ExpoAudio } from 'expo-av';
 import { useRouter, useNavigation } from 'expo-router';
@@ -24,6 +25,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useKeepAwake } from 'expo-keep-awake';
+import { SoulAvatar } from '../components/SoulAvatar';
 
 // Safe require for WebRTC to prevent Expo Go crashes
 const getWebRTCModules = () => {
@@ -51,10 +53,11 @@ const webRTCService = webrtcModules.webRTCService;
 type CallState = 'idle' | 'ringing' | 'connecting' | 'connected' | 'ended';
 
 export default function CallScreen() {
+    const insets = useSafeAreaInsets();
     const { width, height } = useWindowDimensions();
     const router = useRouter();
     const navigation = useNavigation();
-    const { activeCall, contacts, currentUser, otherUser, activeTheme, endCall: endAppCall, toggleMute: toggleAppMute, toggleMinimizeCall } = useApp();
+    const { activeCall, contacts, currentUser, otherUser, activeTheme, endCall: endAppCall, acceptCall: acceptAppCall, toggleMute: toggleAppMute, toggleMinimizeCall } = useApp();
     useKeepAwake(); // Prevents screen from sleeping during call
 
     const [callDuration, setCallDuration] = useState(0);
@@ -313,9 +316,9 @@ export default function CallScreen() {
             return;
         }
 
-        // Enable PIP Auto-Enter for Video Calls (Android)
-        // We do this as soon as the call is accepted and it's a video call
-        if (activeCall.type === 'video' && activeCall.isAccepted && Platform.OS === 'android') {
+        // Enable PIP Auto-Enter for ALL Calls (Android)
+        // This ensures that moving to home screen during a call triggers native PiP
+        if (activeCall.isAccepted && Platform.OS === 'android') {
             try {
                 ExpoPip.setPictureInPictureParams({
                     autoEnterEnabled: true,
@@ -424,6 +427,14 @@ export default function CallScreen() {
         }
     };
 
+    const handleAcceptCall = async () => {
+        try {
+            await acceptAppCall();
+        } catch (e) {
+            console.error('[CallScreen] handleAcceptCall failed:', e);
+        }
+    };
+
     const handleMinimize = () => {
         isMinimizing.current = true;
         toggleMinimizeCall(true);
@@ -434,7 +445,8 @@ export default function CallScreen() {
         return (
             <View style={[styles.container, { backgroundColor: activeTheme?.bg || '#000', justifyContent: 'center', alignItems: 'center' }]}>
                 <StatusBar hidden />
-                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 16 }}>Initializing...</Text>
+                <ActivityIndicator size="large" color="#BC002A" />
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 16, marginTop: 10 }}>Initializing Call...</Text>
             </View>
         );
     }
@@ -442,187 +454,151 @@ export default function CallScreen() {
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>
             <GestureDetector gesture={screenPanGesture}>
-            <Animated.View style={[styles.container, { backgroundColor: activeTheme?.bg || '#000', width, height }, screenStyle]}>
-                <StatusBar hidden />
+                <Animated.View style={[styles.container, { backgroundColor: activeTheme?.bg || '#000', width, height }, screenStyle]}>
+                    <StatusBar hidden />
 
-                {/* Background Layer */}
-                {isVideo ? (
+                    {/* 1. Background Layer (Remote Video or Blurred Avatar) */}
                     <View style={StyleSheet.absoluteFill}>
-                        {RTCView && remoteStream && activeCall.isAccepted ? (
+                        {isVideo && RTCView && remoteStream && activeCall.isAccepted ? (
                             <RTCView
                                 streamURL={typeof remoteStream.toURL === 'function' ? remoteStream.toURL() : remoteStream}
                                 style={styles.remoteVideo}
                                 objectFit="cover"
                                 mirror={false}
                                 zOrder={0}
-                                iosPIP={{
-                                    enabled: true,
-                                    startAutomatically: true,
-                                    stopAutomatically: true
-                                }}
                             />
                         ) : (
-                            <Image
-                                source={{ uri: contact.avatar }}
-                                style={[styles.backgroundImage, { width, height }]}
-                                blurRadius={50}
-                            />
+                            <>
+                                <Image
+                                    source={{ uri: contact.avatar }}
+                                    style={[styles.backgroundImage, { width, height }]}
+                                    blurRadius={50}
+                                />
+                                <View style={styles.overlay} />
+                            </>
                         )}
                         
-                        {/* Connecting / Initializing Overlay */}
+                        {/* Connecting Overlay for Video */}
                         {(callState !== 'connected' && isVideo && activeCall.isAccepted) && (
-                            <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 10 }]}>
-                                <Text style={{ color: 'white', fontSize: 18, fontWeight: '600' }}>Connecting Video...</Text>
+                            <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 5 }]}>
+                                <ActivityIndicator size="small" color="#fff" style={{ marginBottom: 12 }} />
+                                <Text style={{ color: 'white', fontSize: 16, fontWeight: '500' }}>Connecting Soul Video...</Text>
                             </View>
                         )}
                     </View>
-                ) : (
-                    <View style={StyleSheet.absoluteFill}>
-                        <Image
-                            source={{ uri: contact.avatar }}
-                            style={[styles.backgroundImage, { width, height }]}
-                            blurRadius={60}
-                        />
-                        <View style={styles.overlay} />
-                    </View>
-                )}
 
-                {/* Draggable Self Video (Only in Video Call) - Hidden in PIP */}
-                {(isVideo && !isInPipMode) && (
-                    <GestureDetector gesture={panGesture}>
-                        <Animated.View style={[styles.selfVideoContainer, selfVideoStyle]}>
-                            {RTCView && localStream && !isVideoOff ? (
-                                <RTCView
-                                    streamURL={typeof localStream.toURL === 'function' ? localStream.toURL() : localStream}
-                                    style={styles.selfVideo}
-                                    objectFit="cover"
-                                    mirror={true}
-                                    zOrder={1}
-                                />
-                            ) : (
-                                <View style={styles.selfVideoPlaceholder}>
-                                    <MaterialIcons name="videocam-off" size={24} color="rgba(255,255,255,0.5)" />
+                    {/* 2. Main Content (Visible ONLY when NOT in PiP) */}
+                    {!isInPipMode ? (
+                        <View style={styles.content}>
+                            {/* Header */}
+                            <View style={[styles.header, { marginTop: Math.max(insets.top, 20) }]}>
+                                <Pressable onPress={handleMinimize} style={styles.iconButton}>
+                                    <MaterialIcons name="keyboard-arrow-down" size={32} color="white" />
+                                </Pressable>
+                                
+                                <View style={styles.securityBadge}>
+                                    <MaterialIcons name="lock" size={12} color="rgba(255,255,255,0.6)" />
+                                    <Text style={styles.securityText}>Soul End-to-End Encrypted</Text>
                                 </View>
-                            )}
-                        </Animated.View>
-                    </GestureDetector>
-                )}
+                                
+                                <View style={{ width: 44 }} />
+                            </View>
 
-                {/* Content Layer - Hidden in PIP mode */}
-                {!isInPipMode && (
-                    <View style={styles.content}>
-                    {/* Header */}
-                    <View style={styles.header}>
-                        {/* Drag Handle for visual cue */}
-                        <View style={styles.dragHandle} />
-                        
-                        <Pressable onPress={handleMinimize} style={styles.iconButton}>
-                            <MaterialIcons name="keyboard-arrow-down" size={32} color="white" />
-                        </Pressable>
-                        <Text style={styles.headerTitle}>
-                            {activeCall.type === 'video' ? 'SoulSync Video' : 'SoulSync Audio'}
-                        </Text>
-                        <View style={{ width: 32 }} />
-                    </View>
+                            {/* Center Info (Avatar/Name) - Only show if not connected video */}
+                            {(!isVideo || callState !== 'connected') && (
+                                <View style={styles.mainInfo}>
+                                    <View style={styles.avatarWrapper}>
+                                        <Animated.View style={[styles.pulseRing, pulseStyle]} />
+                                        <SoulAvatar uri={contact.avatar} size={170} />
+                                    </View>
 
-                    {/* Main Info Area */}
-                    <View style={styles.mainInfo}>
-                        {!isVideo && (
-                            <View style={styles.avatarWrapper}>
-                                <Animated.View style={[styles.pulseRing, pulseStyle]} />
-                                <Animated.View style={[styles.pulseRing, pulseStyle, { animationDelay: '500ms' }]} />
-                                <View style={styles.avatarShadow}>
-                                    <View style={styles.avatarContainer}>
-                                        <Image 
-                                            source={{ uri: contact.avatar }} 
-                                            style={styles.avatar} 
-                                            resizeMode="cover"
-                                        />
+                                    <View style={styles.textContainer}>
+                                        <Text style={styles.contactName}>{contact.name}</Text>
+                                        <Text style={styles.callStatus}>
+                                            {callState === 'connected' ? formatDuration(callDuration) : 
+                                             callState === 'ringing' ? (activeCall.isIncoming ? 'Incoming Soul Call...' : 'Ringing...') : 
+                                             callState === 'connecting' ? 'Connecting...' : 'Ending...'}
+                                        </Text>
                                     </View>
                                 </View>
-                            </View>
-                        )}
+                            )}
 
-                        <View style={styles.textContainer}>
-                            <Text style={styles.contactName}>{contact.name}</Text>
-                            <Text style={styles.callStatus}>
-                                {activeCall.isAccepted
-                                    ? formatDuration(callDuration)
-                                    : (activeCall.isIncoming ? (activeCall.isRinging ? 'Ringing...' : 'Incoming Call') : 'Calling...')}
-                            </Text>
-                        </View>
-                    </View>
-
-                    {/* Controls Footer */}
-                    {callState === 'connected' && !isInPipMode && (
-                        <GlassView intensity={35} tint="dark" style={styles.controlsBar} >
-                            <View style={styles.controlsRow}>
-                                <Pressable
-                                    style={[styles.controlBtn, activeCall?.isMuted && styles.controlBtnActive]}
-                                    onPress={handleToggleMute}
-                                >
-                                    <MaterialIcons
-                                        name={activeCall?.isMuted ? "mic-off" : "mic"}
-                                        size={28}
-                                        color={activeCall?.isMuted ? "#000000" : "white"}
-                                    />
-                                </Pressable>
-
-                                <Pressable
-                                    style={[styles.controlBtn, isSpeaker && styles.controlBtnActive]}
-                                    onPress={handleToggleSpeaker}
-                                >
-                                    <MaterialIcons
-                                        name={isSpeaker ? "volume-up" : "volume-down"}
-                                        size={28}
-                                        color={isSpeaker ? "#000000" : "white"}
-                                    />
-                                </Pressable>
-
-                                {isVideo && (
-                                    <Pressable style={styles.controlBtn} onPress={handleToggleVideo}>
-                                        <MaterialIcons
-                                            name={isVideoOff ? "videocam-off" : "videocam"}
-                                            size={28}
-                                            color={isVideoOff ? "#000000" : "white"}
+                            {/* Self Video (Draggable) */}
+                            {isVideo && localStream && !isVideoOff && (
+                                <GestureDetector gesture={panGesture}>
+                                    <Animated.View style={[styles.selfVideoContainer, selfVideoStyle]}>
+                                        <RTCView
+                                            streamURL={typeof localStream.toURL === 'function' ? localStream.toURL() : localStream}
+                                            style={styles.selfVideo}
+                                            objectFit="cover"
+                                            mirror={true}
+                                            zOrder={1}
                                         />
-                                    </Pressable>
-                                )}
+                                    </Animated.View>
+                                </GestureDetector>
+                            )}
 
-                                {/* Enable manual PiP entry button on Android */}
-                                {isVideo && Platform.OS === 'android' && (
-                                    <Pressable style={styles.controlBtn} onPress={() => {
-                                        try {
-                                            ExpoPip.enterPipMode({
-                                                width: Math.floor(width),
-                                                height: Math.floor(width * 1.5)
-                                            });
-                                        } catch (e) {
-                                            console.log("Failed to enter manual PiP:", e);
-                                        }
-                                    }}>
-                                        <MaterialIcons name="picture-in-picture" size={28} color="white" />
-                                    </Pressable>
-                                )}
+                            {/* Footer Controls */}
+                            <GlassView intensity={35} tint="dark" style={[styles.controlsBar, { marginBottom: Math.max(insets.bottom, 40) }]}>
+                                {callState !== 'connected' && activeCall.isIncoming ? (
+                                    <View style={styles.incomingActionsRow}>
+                                        <View style={styles.incomingAction}>
+                                            <Pressable style={[styles.actionButton, { backgroundColor: '#ef4444' }]} onPress={handleEndCall}>
+                                                <MaterialIcons name="call-end" size={32} color="white" />
+                                            </Pressable>
+                                            <Text style={styles.actionText}>Decline</Text>
+                                        </View>
+                                        <View style={styles.incomingAction}>
+                                            <Pressable style={[styles.actionButton, { backgroundColor: '#22c55e' }]} onPress={handleAcceptCall}>
+                                                <MaterialIcons name={isVideo ? "videocam" : "call"} size={32} color="white" />
+                                            </Pressable>
+                                            <Text style={styles.actionText}>Accept</Text>
+                                        </View>
+                                    </View>
+                                ) : (
+                                    <View style={styles.controlsRow}>
+                                        <Pressable style={[styles.controlBtn, activeCall.isMuted && styles.controlBtnActive]} onPress={handleToggleMute}>
+                                            <MaterialIcons name={activeCall.isMuted ? "mic-off" : "mic"} size={28} color={activeCall.isMuted ? "#000" : "white"} />
+                                        </Pressable>
 
-                                {(!isVideo || Platform.OS !== 'android') && isVideo && (
-                                    <Pressable style={styles.controlBtn} onPress={handleSwitchCamera}>
-                                        <Ionicons name="camera-reverse" size={28} color="white" />
-                                    </Pressable>
-                                )}
+                                        {isVideo && (
+                                            <Pressable style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={handleToggleVideo}>
+                                                <MaterialIcons name={isVideoOff ? "videocam-off" : "videocam"} size={28} color={isVideoOff ? "#000" : "white"} />
+                                            </Pressable>
+                                        )}
 
-                                <Pressable
-                                    style={[styles.controlBtn, styles.endCallBtn]}
-                                    onPress={handleEndCall}
-                                >
-                                    <MaterialIcons name="call-end" size={32} color="white" />
-                                </Pressable>
+                                        <Pressable style={[styles.controlBtn, isSpeaker && styles.controlBtnActive]} onPress={handleToggleSpeaker}>
+                                            <MaterialIcons name={isSpeaker ? "volume-up" : "volume-down"} size={28} color={isSpeaker ? "#000" : "white"} />
+                                        </Pressable>
+
+                                        {isVideo && (
+                                            <Pressable style={styles.controlBtn} onPress={handleSwitchCamera}>
+                                                <Ionicons name="camera-reverse" size={28} color="white" />
+                                            </Pressable>
+                                        )}
+
+                                        <Pressable style={[styles.controlBtn, styles.endCallBtn]} onPress={handleEndCall}>
+                                            <MaterialIcons name="call-end" size={36} color="white" />
+                                        </Pressable>
+                                    </View>
+                                )}
+                            </GlassView>
+                        </View>
+                    ) : (
+                        // 3. PiP Overlay (Visible ONLY in Native PiP window)
+                        // If it's a video call, the RTCView (background) stays visible.
+                        // For audio call, we show this branding/info overlay.
+                        !isVideo && (
+                            <View style={styles.pipOverlay}>
+                                <SoulAvatar uri={contact.avatar} size={width * 0.4} />
+                                <View style={[styles.pipTitleBar, { marginTop: 15 }]}>
+                                    <Text style={styles.pipName}>{contact.name}</Text>
+                                    <Text style={styles.pipStatus}>{formatDuration(callDuration)}</Text>
+                                </View>
                             </View>
-                        </GlassView>
+                        )
                     )}
-                </View>
-                    )}
-            </Animated.View>
+                </Animated.View>
             </GestureDetector>
         </GestureHandlerRootView>
     );
@@ -690,21 +666,6 @@ const styles = StyleSheet.create({
         marginTop: 60,
         paddingHorizontal: 20,
     },
-    dragHandle: {
-        position: 'absolute',
-        top: -40,
-        left: '50%',
-        marginLeft: -20,
-        width: 40,
-        height: 5,
-        backgroundColor: 'rgba(255,255,255,0.3)',
-        borderRadius: 10,
-    },
-    iconButton: {
-        padding: 8,
-        borderRadius: 20,
-        backgroundColor: 'rgba(255,255,255,0.1)',
-    },
     headerTitle: {
         color: 'rgba(255,255,255,0.7)',
         fontSize: 14,
@@ -759,20 +720,18 @@ const styles = StyleSheet.create({
         color: 'white',
         fontSize: 32,
         fontWeight: 'bold',
-        marginBottom: 8,
-        letterSpacing: 0.5,
         ...callContactNameShadow,
     },
     callStatus: {
         color: 'rgba(255,255,255,0.7)',
         fontSize: 18,
-        fontWeight: '500',
-        letterSpacing: 1,
+        marginTop: 8,
     },
     controlsBar: {
         marginHorizontal: 20,
-        marginBottom: 50,
-        borderRadius: 40,
+        borderRadius: 35,
+        paddingVertical: 15,
+        paddingHorizontal: 10,
         overflow: 'hidden',
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.1)',
@@ -781,23 +740,94 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'space-evenly',
         alignItems: 'center',
-        paddingVertical: 20,
     },
     controlBtn: {
-        width: 50,
-        height: 50,
-        borderRadius: 25,
+        width: 54,
+        height: 54,
+        borderRadius: 27,
+        backgroundColor: 'rgba(255,255,255,0.1)',
         justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: 'rgba(255,255,255,0.1)',
     },
     controlBtnActive: {
-        backgroundColor: 'white',
+        backgroundColor: 'rgba(255,255,255,0.9)',
+    },
+    iconButton: {
+        padding: 8,
+        borderRadius: 20,
+        backgroundColor: 'rgba(255,255,255,0.1)',
+    },
+    securityBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'rgba(255,255,255,0.1)',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 12,
+        gap: 6,
+    },
+    securityText: {
+        color: 'rgba(255,255,255,0.6)',
+        fontSize: 10,
+        fontWeight: '600',
+    },
+    incomingActionsRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        width: '100%',
+        paddingHorizontal: 20,
     },
     endCallBtn: {
+        backgroundColor: '#ef4444',
         width: 64,
         height: 64,
         borderRadius: 32,
-        backgroundColor: '#ef4444',
-    }
+    },
+    incomingAction: {
+        alignItems: 'center',
+        gap: 10,
+    },
+    actionButton: {
+        width: 70,
+        height: 70,
+        borderRadius: 35,
+        justifyContent: 'center',
+        alignItems: 'center',
+        elevation: 5,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 5,
+    },
+    actionText: {
+        color: 'white',
+        fontSize: 14,
+        fontWeight: '600',
+    },
+    // PiP Specific Styles
+    pipOverlay: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: '#000',
+    },
+    pipAvatarContainer: {
+        marginBottom: 10,
+    },
+    pipTitleBar: {
+        alignItems: 'center',
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        borderRadius: 15,
+    },
+    pipName: {
+        color: 'white',
+        fontSize: 12,
+        fontWeight: 'bold',
+    },
+    pipStatus: {
+        color: 'rgba(255,255,255,0.8)',
+        fontSize: 10,
+    },
 });

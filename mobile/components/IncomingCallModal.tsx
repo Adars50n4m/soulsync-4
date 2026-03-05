@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Modal, Pressable, Image, Platform } from 'react-native';
+import { View, Text, StyleSheet, Modal, Pressable, Image, Platform, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import GlassView from './ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, {
@@ -19,7 +20,8 @@ import { useApp } from '../context/AppContext';
  */
 export const IncomingCallModal = () => {
     const { activeCall, contacts, acceptCall, endCall } = useApp();
-    const contact = contacts.find(c => c.id === activeCall?.contactId);
+    const insets = useSafeAreaInsets();
+    const { width, height } = useWindowDimensions();
     
     // Determine visibility: Incoming and not yet accepted
     const isVisible = !!activeCall && activeCall.isIncoming && !activeCall.isAccepted;
@@ -28,6 +30,8 @@ export const IncomingCallModal = () => {
     const rippleScale = useSharedValue(1);
     const rippleOpacity = useSharedValue(0.8);
     const avatarScale = useSharedValue(1);
+
+    const contact = contacts.find(c => c.id === activeCall?.contactId);
 
     useEffect(() => {
         if (isVisible) {
@@ -95,12 +99,15 @@ export const IncomingCallModal = () => {
                         blurRadius={50}
                     />
 
-                    <View style={styles.content}>
+                    <View style={[styles.content, { 
+                        paddingTop: Math.max(insets.top + 40, 80),
+                        paddingBottom: Math.max(insets.bottom + 40, 80)
+                    }]}>
                         {/* Caller Info */}
                         <View style={styles.callerInfo}>
                             <View style={styles.avatarWrapper}>
                                 <Animated.View style={[styles.rippleRing, rippleStyle]} />
-                                <Animated.View style={[styles.rippleRing, rippleStyle, { animationDelay: '500ms' }]} />
+                                <Animated.View style={[styles.rippleRing, rippleStyle]} />
                                 <Animated.View style={[styles.avatarContainer, avatarAnimatedStyle]}>
                                     <Image
                                         source={{ uri: contact.avatar || 'https://via.placeholder.com/150' }}

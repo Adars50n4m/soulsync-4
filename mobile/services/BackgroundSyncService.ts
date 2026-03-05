@@ -175,7 +175,7 @@ async function showSyncNotification(count: number): Promise<void> {
     const Notifications = require('expo-notifications');
     await Notifications.scheduleNotificationAsync({
       content: {
-        title: 'SoulSync',
+        title: 'Soul',
         body: `You have ${count} new message${count > 1 ? 's' : ''}`,
         sound: false,
         priority: Notifications.AndroidNotificationPriority.LOW,

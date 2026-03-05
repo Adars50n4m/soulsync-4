@@ -83,7 +83,7 @@ export default function SecurityScreen() {
                             </View>
                             <View style={styles.settingInfo}>
                                 <Text style={styles.settingTitle}>Fingerprint / Biometric</Text>
-                                <Text style={styles.settingSubtitle}>Unlock SoulSync with biometrics</Text>
+                                <Text style={styles.settingSubtitle}>Unlock Soul with biometrics</Text>
                             </View>
                             <Switch
                                 value={biometricEnabled}
@@ -135,7 +135,7 @@ export default function SecurityScreen() {
                 <View style={styles.infoBox}>
                     <MaterialIcons name="info-outline" size={20} color="rgba(255,255,255,0.4)" />
                     <Text style={styles.infoText}>
-                        When enabled, SoulSync will ask for authentication every time you open the app or return to it.
+                        When enabled, Soul will ask for authentication every time you open the app or return to it.
                     </Text>
                 </View>
             </ScrollView>

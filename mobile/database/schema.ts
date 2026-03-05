@@ -37,7 +37,23 @@ export const MIGRATE_DB = async (db: any) => {
       avatar TEXT,
       bio TEXT,
       status TEXT DEFAULT 'offline',
+      last_message TEXT,
+      unread_count INTEGER DEFAULT 0,
       last_synced_at TEXT
+    );`,
+
+    // ── chats (NEW: Missing from current schema) ─────────────────────
+    `CREATE TABLE IF NOT EXISTS chats (
+      id TEXT PRIMARY KEY NOT NULL,
+      name TEXT,
+      type TEXT DEFAULT 'direct',
+      last_message TEXT,
+      last_message_time INTEGER,
+      last_message_type TEXT DEFAULT 'text',
+      unread_count INTEGER DEFAULT 0,
+      avatar_local_path TEXT,
+      avatar_remote_url TEXT,
+      updated_at INTEGER
     );`,
 
     // ── messages (matches LocalDBService column names) ───────────────
@@ -126,6 +142,9 @@ export const MIGRATE_DB = async (db: any) => {
       `ALTER TABLE messages ADD COLUMN mime_type TEXT;`,
       `ALTER TABLE messages ADD COLUMN reaction TEXT;`,
       `ALTER TABLE statuses ADD COLUMN is_seen INTEGER DEFAULT 0;`,
+      // Missing columns for contacts
+      `ALTER TABLE contacts ADD COLUMN last_message TEXT;`,
+      `ALTER TABLE contacts ADD COLUMN unread_count INTEGER DEFAULT 0;`,
     ];
 
     for (const alterQuery of alterQueries) {

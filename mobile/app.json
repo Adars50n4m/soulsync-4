@@ -13,9 +13,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.soulsync4.mobile",
       "infoPlist": {
-        "NSCameraUsageDescription": "SoulSync needs camera access for video calls",
-        "NSMicrophoneUsageDescription": "SoulSync needs microphone access for audio and video calls",
-        "NSFaceIDUsageDescription": "Allow SoulSync to use FaceID for secure access",
+        "NSCameraUsageDescription": "Soul needs camera access for video calls",
+        "NSMicrophoneUsageDescription": "Soul needs microphone access for audio and video calls",
+        "NSFaceIDUsageDescription": "Allow Soul to use FaceID for secure access",
         "UIBackgroundModes": [
           "audio",
           "fetch",
@@ -89,8 +89,8 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "SoulSync needs camera access for video calls",
-          "microphonePermission": "SoulSync needs microphone access for video calls",
+          "cameraPermission": "Soul needs camera access for video calls",
+          "microphonePermission": "Soul needs microphone access for video calls",
           "recordAudioAndroid": true
         }
       ],

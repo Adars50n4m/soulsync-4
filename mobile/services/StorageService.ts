@@ -1,5 +1,5 @@
 import * as FileSystem from 'expo-file-system';
-import { SERVER_URL, proxySupabaseUrl } from '../config/api';
+import { SERVER_URL, proxySupabaseUrl, serverFetch } from '../config/api';
 // Temporarily keeping supabase instance around as a fallback if needed
 import { supabase } from '../config/supabase';
 import { offlineService } from './LocalDBService';
@@ -23,7 +23,7 @@ export const storageService = {
             }
 
             // 1. Get Presigned PUT URL from Node Server
-            const res = await fetch(`${SERVER_URL}/api/media/presign-upload`, {
+            const res = await serverFetch(`${SERVER_URL}/api/media/presign-upload`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ fileName, contentType })
@@ -87,7 +87,7 @@ export const storageService = {
         if (keys.length === 0) return;
 
         try {
-            const res = await fetch(`${SERVER_URL}/api/media/delete`, {
+            const res = await serverFetch(`${SERVER_URL}/api/media/delete`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ keys })
@@ -125,7 +125,7 @@ export const storageService = {
             }
 
             // 2. Fetch Presigned Download URL from Server
-            const res = await fetch(`${SERVER_URL}/api/media/presign-download`, {
+            const res = await serverFetch(`${SERVER_URL}/api/media/presign-download`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ key: r2Key })

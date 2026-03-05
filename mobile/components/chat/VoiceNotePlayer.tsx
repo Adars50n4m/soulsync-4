@@ -2,14 +2,13 @@ import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
+import { formatDuration } from '../../utils/formatters';
 
 interface VoiceNotePlayerProps {
     uri: string;
     isMe: boolean;
     theme: any;
 }
-
-import { formatDuration } from '../../utils/formatters';
 
 
 const VoiceNotePlayer = ({ uri, isMe, theme }: VoiceNotePlayerProps) => {

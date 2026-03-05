@@ -27,12 +27,13 @@ type StatusCallback = (messageId: string, status: ChatMessage['status'], newId?:
 type StatusUpdateCallback = (status: any) => void;
 type StatusViewUpdateCallback = (statusId: string, viewerId: string) => void;
 type NetworkStatusCallback = (isOnline: boolean) => void;
+type ReactionCallback = (messageId: string, reaction: string, senderId?: string) => void;
 
 // Configuration for retry logic
 const MAX_RETRY_COUNT = 5;
 const INITIAL_RETRY_DELAY_MS = 1000;
 const MAX_RETRY_DELAY_MS = 60000; // 1 minute
-const PROCESSING_INTERVAL_MS = 2000; // Check queue every 2 seconds
+const PROCESSING_INTERVAL_MS = 5000; // Check queue every 5 seconds
 
 class ChatService {
     private socket: Socket | null = null;
@@ -43,6 +44,7 @@ class ChatService {
     private onNewStatus: StatusUpdateCallback | null = null;
     private onStatusViewUpdate: StatusViewUpdateCallback | null = null;
     private onNetworkStatusChange: NetworkStatusCallback | null = null;
+    private onReaction: ReactionCallback | null = null;
     private isInitialized: boolean = false;
     
     // Queue management
@@ -56,8 +58,19 @@ class ChatService {
     private networkListenerCleanup: (() => void) | null = null;
 
     /**
-     * Initialize the chat service for a specific user pair
+     * Get the current socket instance
      */
+    public getSocket(): Socket | null {
+        return this.socket;
+    }
+
+    /**
+     * Check if socket is currently connected
+     */
+    public isSocketConnected(): boolean {
+        return this.socket?.connected || false;
+    }
+
     async initialize(
         userId: string,
         partnerId: string,
@@ -65,19 +78,22 @@ class ChatService {
         onStatus: StatusCallback,
         onNewStatus?: StatusUpdateCallback,
         onStatusViewUpdate?: StatusViewUpdateCallback,
-        onNetworkStatus?: NetworkStatusCallback
+        onNetworkStatus?: NetworkStatusCallback,
+        onReaction?: ReactionCallback
     ): Promise<void> {
+        this.onNewMessage = onMessage;
+        this.onStatusUpdate = onStatus;
+        this.onNewStatus = onNewStatus ?? null;
+        this.onStatusViewUpdate = onStatusViewUpdate ?? null;
+        this.onNetworkStatusChange = onNetworkStatus ?? null;
+        this.onReaction = onReaction ?? null;
+
         if (this.isInitialized && this.userId === userId && this.partnerId === partnerId) {
             return;
         }
 
         this.userId = userId;
         this.partnerId = partnerId;
-        this.onNewMessage = onMessage;
-        this.onStatusUpdate = onStatus;
-        this.onNewStatus = onNewStatus ?? null;
-        this.onStatusViewUpdate = onStatusViewUpdate ?? null;
-        this.onNetworkStatusChange = onNetworkStatus ?? null;
 
         // Setup network listener
         this.setupNetworkListener();
@@ -87,15 +103,28 @@ class ChatService {
 
         // Connect to Node.js Socket.IO server
         if (!this.socket) {
-            this.socket = io(SERVER_URL);
+            console.log(`[ChatService] Connecting to ${SERVER_URL} as ${userId}`);
+            this.socket = io(SERVER_URL, {
+                // Allow polling fallback for better iOS/Localtunnel compatibility
+                transports: ['polling', 'websocket'],
+                extraHeaders: { 'bypass-tunnel-reminder': 'true' },
+                reconnectionAttempts: 10,
+                reconnectionDelay: 2000,
+            });
+            
+            const doRegister = () => {
+                if (this.userId && this.socket?.connected) {
+                    console.log(`[ChatService] Registering user ${this.userId}`);
+                    this.socket.emit('register', this.userId);
+                    this.socket.emit('user:online', { userId: this.userId, isOnline: true });
+                }
+            };
 
             this.socket.on('connect', () => {
                 this.isInitialized = true;
                 this.updateNetworkStatus(true);
-                console.log('[ChatService] Connected to Socket.IO Server');
-                
-                // Identify the user to receive targeted messages
-                this.socket?.emit('register', userId);
+                console.log('[ChatService] Socket connected!');
+                doRegister();
                 this.startQueueProcessing();
             });
 
@@ -106,58 +135,80 @@ class ChatService {
             });
 
             this.socket.on('connect_error', (err) => {
-                console.error(`[ChatService] Socket connection error to ${SERVER_URL}:`, err.message);
+                const message = err?.message ?? String(err ?? 'unknown websocket error');
+                // Expected during bad network/tunnel downtime; avoid redbox from console.error.
+                console.warn(`[ChatService] Socket connection error to ${SERVER_URL}: ${message}`);
                 this.updateNetworkStatus(false);
             });
 
             this.socket.on('reconnect_attempt', (attempt) => {
                 console.log(`[ChatService] Socket reconnect attempt ${attempt} to ${SERVER_URL}`);
             });
-
-            this.socket.on('message:receive', (msg: any) => {
-                if (msg.receiver_id === this.userId && msg.sender_id === this.partnerId) {
-                    console.log('[ChatService] Received new message for current chat:', msg);
-                    this.onNewMessage?.(msg as ChatMessage);
-                    
-                    // Mark as delivered
-                    this.socket?.emit('message:status', {
-                        senderId: msg.sender_id,
-                        messageId: msg.id,
-                        status: 'delivered'
-                    });
-                    
-                    this.updateMessageStatus(msg.id, 'delivered');
-                }
-            });
-
-            this.socket.on('message:status_update', (data: any) => {
-                // data = { senderId, messageId, status }
-                if (data.senderId === this.userId) {
-                    this.onStatusUpdate?.(data.messageId, data.status);
-                    offlineService.updateMessageStatus(data.messageId, data.status);
-                }
-            });
-
-            this.socket.on('status:new', (statusData: any) => {
-                console.log('[ChatService] Received new status via socket:', statusData);
-                this.onNewStatus?.(statusData);
-            });
-
-            this.socket.on('status:view_update', (data: { statusId: string, viewerId: string }) => {
-                console.log('[ChatService] Received status view update:', data);
-                this.onStatusViewUpdate?.(data.statusId, data.viewerId);
-            });
-
-            this.socket.on('user:online', (data: any) => {
-                if (data.userId === this.partnerId) {
-                    this.onNetworkStatusChange?.(data.isOnline);
-                }
-            });
-        } else {
-            // If reusing existing socket, just register again just in case
-            this.socket.emit('register', userId);
-            this.socket.emit('user:online', { userId, isOnline: true });
         }
+
+        // IMPORTANT: These off() calls MUST be outside the if(!socket) block.
+        // The socket persists between initialize() calls, so listeners stack up on every call.
+        // We remove old listeners first, then re-register fresh ones every time.
+        this.socket.removeAllListeners('message:receive');
+        this.socket.removeAllListeners('message:status_update');
+        this.socket.removeAllListeners('message:reaction');
+        this.socket.removeAllListeners('status:new');
+        this.socket.removeAllListeners('status:view_update');
+        this.socket.removeAllListeners('user:online');
+
+        this.socket.on('message:receive', (rawMsg: any) => {
+            const msg: ChatMessage = {
+                ...rawMsg,
+                sender_id: rawMsg?.sender_id || rawMsg?.sender || '',
+                receiver_id: rawMsg?.receiver_id || rawMsg?.receiver || this.userId || '',
+            };
+
+            const isForCurrentUser = msg.receiver_id === this.userId;
+            const isCurrentChat =
+                !this.partnerId || msg.sender_id === this.partnerId || msg.receiver_id === this.partnerId;
+
+            if (isForCurrentUser && isCurrentChat) {
+                console.log('[ChatService] Received new message for current chat:', msg);
+                this.onNewMessage?.(msg);
+                
+                this.socket?.emit('message:status', {
+                    senderId: msg.sender_id,
+                    messageId: msg.id,
+                    status: 'delivered'
+                });
+                
+                this.updateMessageStatus(msg.id, 'delivered');
+            }
+        });
+
+        this.socket.on('message:status_update', (data: any) => {
+            if (data.senderId === this.userId) {
+                this.onStatusUpdate?.(data.messageId, data.status);
+                offlineService.updateMessageStatus(data.messageId, data.status);
+            }
+        });
+
+        this.socket.on('message:reaction', async (data: any) => {
+            console.log(`[ChatService] Received reaction [${data.reaction}] for message ${data.messageId} from ${data.senderId}`);
+            await offlineService.updateMessageReaction(data.messageId, data.reaction);
+            this.onReaction?.(data.messageId, data.reaction, data.senderId);
+        });
+
+        this.socket.on('status:new', (statusData: any) => {
+            console.log('[ChatService] Received new status via socket:', statusData);
+            this.onNewStatus?.(statusData);
+        });
+
+        this.socket.on('status:view_update', (data: { statusId: string, viewerId: string }) => {
+            console.log('[ChatService] Received status view update:', data);
+            this.onStatusViewUpdate?.(data.statusId, data.viewerId);
+        });
+
+        this.socket.on('user:online', (data: any) => {
+            if (data.userId === this.partnerId) {
+                this.onNetworkStatusChange?.(data.isOnline);
+            }
+        });
     }
 
     /**
@@ -167,7 +218,7 @@ class ChatService {
         // Initial check
         await this.checkConnectivity();
 
-        // Listen for app state changes (foregrounding usually triggers network reconnections)
+        // Listen for app state changes
         const handleAppStateChange = (nextAppState: AppStateStatus) => {
             if (nextAppState === 'active') {
                 console.log('[ChatService] App foregrounded, checking connectivity...');
@@ -177,16 +228,18 @@ class ChatService {
 
         const subscription = AppState.addEventListener('change', handleAppStateChange);
 
-        // Fallback: Periodically check connectivity if needed
+        // Fallback: Periodically check connectivity
         const intervalId = setInterval(() => {
             this.checkConnectivity();
-        }, 30000); // Every 30 seconds
+        }, 30000);
 
         this.networkListenerCleanup = () => {
             subscription.remove();
             clearInterval(intervalId);
         };
     }
+
+
 
     /**
      * Check actual connectivity by pinging Supabase
@@ -271,22 +324,25 @@ class ChatService {
     /**
      * Process pending messages in the queue
      */
+    private _isCurrentlyProcessing = false;
     private async processQueue(): Promise<void> {
-        if (!this.isOnline || this.isProcessingQueue === false) {
+        if (!this.isOnline || !this.socket?.connected || this._isCurrentlyProcessing) {
             return;
         }
 
+        this._isCurrentlyProcessing = true;
         try {
             const pendingMessages = await offlineService.getPendingMessages();
             
             if (pendingMessages.length === 0) {
+                this._isCurrentlyProcessing = false;
                 return;
             }
 
-            console.log(`[ChatService] Processing ${pendingMessages.length} pending message(s)`);
+            console.log(`[ChatService] Queue: ${pendingMessages.length} message(s) to sync`);
 
             for (const message of pendingMessages) {
-                // Skip if already being retried or currently sending
+                // Skip if current session already tried this and failed (waiting for timer)
                 if (this.retryTimers.has(message.id) || this.sendingIds.has(message.id)) {
                     continue;
                 }
@@ -306,6 +362,8 @@ class ChatService {
             }
         } catch (error) {
             console.error('[ChatService] Error processing queue:', error);
+        } finally {
+            this._isCurrentlyProcessing = false;
         }
     }
 
@@ -350,7 +408,7 @@ class ChatService {
                 });
                 
                 // timeout fallback
-                setTimeout(() => resolve({ success: false, error: 'Ack timeout' }), 10000);
+                setTimeout(() => resolve({ success: false, error: 'Ack timeout' }), 15000);
             }) as any;
 
             if (!response.success) {

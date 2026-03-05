@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
-import { View, Text, Image, Pressable, StyleSheet, StatusBar, Dimensions, Alert, FlatList } from 'react-native';
+import { View, Text, Image, Pressable, StyleSheet, StatusBar, Dimensions, Alert, FlatList, Platform } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 
 import { useRouter, useNavigation } from 'expo-router';
@@ -26,7 +26,8 @@ import { storageService } from '../../services/StorageService';
 import { proxySupabaseUrl } from '../../config/api';
 
 import { useApp } from '../../context/AppContext';
-import { SoulSyncLogo } from '../../components/SoulSyncLogo';
+import { SoulAvatar } from '../../components/SoulAvatar';
+import { SoulLogo } from '../../components/SoulLogo';
 import { StatusViewerModal } from '../../components/StatusViewerModal';
 import { MediaPreviewModal } from '../../components/MediaPreviewModal';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
@@ -34,6 +35,7 @@ import { Contact, Story } from '../../types';
 import { NoteBubble } from '../../components/NoteBubble';
 import { NoteCreatorModal } from '../../components/NoteCreatorModal';
 const DEFAULT_AVATAR = '';
+const ENABLE_SHARED_TRANSITIONS = Platform.OS === 'ios';
 
 const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promise<string> => {
   let resolvedUri = asset.uri;
@@ -149,8 +151,12 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }
     >
       {/* Outer morph target - ONLY handles the shared element transition */}
       <Animated.View 
-        sharedTransitionTag={`pill-${item.id}`}
-        sharedTransitionStyle={pillSharedTransition}
+        {...(ENABLE_SHARED_TRANSITIONS
+          ? {
+              sharedTransitionTag: `pill-${item.id}`,
+              sharedTransitionStyle: pillSharedTransition,
+            }
+          : {})}
         style={[styles.chatPillContainer]}
       >
         {/* Inner container handles the press scale animation */}
@@ -167,14 +173,18 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }
         {/* Content rendered safely as an overlay, decoupled from Reanimated's snapshot engine */}
         <View style={[styles.pillContent, { position: 'absolute', width: '100%', height: '100%', paddingHorizontal: 16 }]} pointerEvents="box-none">
           <Animated.View
-            sharedTransitionTag={`pill-avatar-${item.id}`}
-            sharedTransitionStyle={pillSharedTransition}
+            {...(ENABLE_SHARED_TRANSITIONS
+              ? {
+                  sharedTransitionTag: `pill-avatar-${item.id}`,
+                  sharedTransitionStyle: pillSharedTransition,
+                }
+              : {})}
             style={styles.avatarContainer}
           >
-            <Animated.Image
-              source={{ uri: proxySupabaseUrl(item.avatar) || DEFAULT_AVATAR }}
+            <SoulAvatar
+              uri={proxySupabaseUrl(item.avatar) || DEFAULT_AVATAR}
+              size={46}
               style={[
-                styles.avatar,
                 item.stories && item.stories.length > 0 && {
                   borderWidth: 2,
                   borderColor: item.stories.some((s) => !s.seen) ? '#3b82f6' : 'rgba(255,255,255,0.4)'
@@ -186,8 +196,12 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }
 
           <View style={styles.chatContent}>
             <Animated.View
-              sharedTransitionTag={`pill-name-${item.id}`}
-              sharedTransitionStyle={pillSharedTransition}
+              {...(ENABLE_SHARED_TRANSITIONS
+                ? {
+                    sharedTransitionTag: `pill-name-${item.id}`,
+                    sharedTransitionStyle: pillSharedTransition,
+                  }
+                : {})}
             >
               <Text style={styles.contactName}>
                 {item.name}

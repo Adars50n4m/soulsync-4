@@ -114,7 +114,7 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
             const apiUrl = getSaavnApiUrl();
             // Increased limit to 50 for "unlimited" feel
             const response = await fetch(`${apiUrl}/api/search/songs?query=${encodeURIComponent(query)}&limit=50`);
-            const data = await response.json();
+            const data = await response.json() as any;
 
             if (data?.success && data?.data?.results) {
                 const songs = data.data.results.map((s: any) => ({
@@ -187,17 +187,15 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
         >
             {/* Backdrop with Dynamic Transparency */}
             <Animated.View style={[StyleSheet.absoluteFill, { opacity: backdropOpacity }]}>
-                {Platform.OS === 'ios' && (
-                    <GlassView 
-                        intensity={25} 
-                        tint="dark" 
-                        style={StyleSheet.absoluteFill}
-                    />
-                )}
+                <GlassView 
+                    intensity={25} 
+                    tint="dark" 
+                    style={StyleSheet.absoluteFill}
+                />
                 <Pressable 
                     style={[
                         styles.backdrop, 
-                        Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.7)' }
+                        Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.45)' }
                     ]} 
                     onPress={onClose} 
                 />

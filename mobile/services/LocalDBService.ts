@@ -409,6 +409,18 @@ export const offlineService = {
   },
 
   /**
+   * Update message reaction (emoji)
+   */
+  async updateMessageReaction(messageId: string, reaction: string | null): Promise<void> {
+    const db = await getDB();
+    if (!db) return;
+    await db.runAsync(
+      `UPDATE messages SET reaction = ? WHERE id = ?;`,
+      [reaction, messageId]
+    );
+  },
+
+  /**
    * Delete local media file and update status
    */
   async deleteLocalMedia(messageId: string): Promise<void> {

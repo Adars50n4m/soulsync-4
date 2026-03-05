@@ -150,7 +150,7 @@ export default function ViewStatusScreen() {
         transform: [
             { translateY: translateY.value },
             { scale: scale.value }
-        ],
+        ] as any,
         borderRadius: translateY.value > 0 ? 20 : 0,
     }));
 

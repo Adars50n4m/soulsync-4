@@ -12,11 +12,11 @@ import { useApp } from '../context/AppContext';
 const HELP_DATA: Record<string, { title: string, content: string }> = {
     '1': {
         title: 'Get Started',
-        content: 'Welcome to SoulSync! To get started, customize your profile in Settings. You can change your avatar, bio, and birthdate to help your contacts recognize you. Start a new chat by tapping the message icon on the Home screen.'
+        content: 'Welcome to Soul! To get started, customize your profile in Settings. You can change your avatar, bio, and birthdate to help your contacts recognize you. Start a new chat by tapping the message icon on the Home screen.'
     },
     '2': {
         title: 'Chats',
-        content: 'SoulSync offers end-to-end encrypted messaging. You can send text, images, and audio messages. Long-press a message to see more options like reply or delete.'
+        content: 'Soul offers end-to-end encrypted messaging. You can send text, images, and audio messages. Long-press a message to see more options like reply or delete.'
     },
     '3': {
         title: 'Voice and Video Calls',
@@ -24,18 +24,18 @@ const HELP_DATA: Record<string, { title: string, content: string }> = {
     },
     '4': {
         title: 'Privacy & Security',
-        content: 'Your privacy is our priority. SoulSync uses advanced encryption for all communications. You can manage your security settings, including two-step verification, in the Account section of Settings.'
+        content: 'Your privacy is our priority. Soul uses advanced encryption for all communications. You can manage your security settings, including two-step verification, in the Account section of Settings.'
     },
     '5': {
         title: 'Accounts',
-        content: 'Manage your SoulSync account details. If you encounter any issues with your account or notice suspicious activity, please report it immediately through the "Report a Problem" section.'
+        content: 'Manage your Soul account details. If you encounter any issues with your account or notice suspicious activity, please report it immediately through the "Report a Problem" section.'
     },
     'a1': {
         title: 'How to make a video call',
         content: 'To make a video call:\n1. Open a chat with the person you want to call.\n2. Tap the Video Camera icon at the top right.\n3. Wait for the contact to accept the call.\n\nYou can switch between front and back cameras during the call.'
     },
     'a2': {
-        title: 'How to stay safe on SoulSync',
+        title: 'How to stay safe on Soul',
         content: 'Stay safe by:\n- Never sharing your verification code.\n- Using Two-Step Verification.\n- Highlighting suspicious contacts.\n- Blocking users who make you feel uncomfortable.'
     },
     'a3': {
@@ -44,7 +44,7 @@ const HELP_DATA: Record<string, { title: string, content: string }> = {
     },
     'a4': {
         title: 'Ads in Status',
-        content: 'SoulSync is committed to a clean, cinematic experience. While we may introduce subtle sponsorship in Status or Channels in the future, your private chats will always remain ad-free and private.'
+        content: 'Soul is committed to a clean, cinematic experience. While we may introduce subtle sponsorship in Status or Channels in the future, your private chats will always remain ad-free and private.'
     },
 };
 
@@ -58,9 +58,9 @@ const HELP_TOPICS = [
 
 const POPULAR_ARTICLES = [
     { id: 'a1', title: 'How to make a video call' },
-    { id: 'a2', title: 'How to stay safe on SoulSync' },
+    { id: 'a2', title: 'How to stay safe on Soul' },
     { id: 'a3', title: 'About temporarily banned accounts' },
-    { id: 'a4', title: 'About ads in SoulSync Status and Channels' },
+    { id: 'a4', title: 'About ads in Soul Status and Channels' },
 ];
 
 const TopicItem = ({ topic, onOpen }: { topic: typeof HELP_TOPICS[0], onOpen: (id: string) => void }) => (

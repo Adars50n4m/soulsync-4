@@ -26,7 +26,7 @@ import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system';
 import { storageService } from '../services/StorageService';
 
-const DEFAULT_AVATAR = 'https://via.placeholder.com/150';
+const DEFAULT_AVATAR = '';
 
 export default function MyStatusScreen() {
   const router = useRouter();
@@ -298,11 +298,11 @@ export default function MyStatusScreen() {
         onSelectAsset={handleSelectGallery}
         onSelectAudio={() => {
             setIsMediaPickerVisible(false);
-            Alert.alert("SoulSync Audio", "Audio status coming soon!");
+            Alert.alert("Soul Audio", "Audio status coming soon!");
         }}
         onSelectNote={() => {
             setIsMediaPickerVisible(false);
-            Alert.alert("SoulSync Notes", "Leave a note from the Home screen!");
+            Alert.alert("Soul Notes", "Leave a note from the Home screen!");
         }}
       />
 

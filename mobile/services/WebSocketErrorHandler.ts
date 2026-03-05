@@ -14,14 +14,15 @@
  * - Cleanup helpers for app reload/shutdown
  */
 
-import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+const ORIGINAL_CONSOLE_ERROR_KEY = '__soulSyncOriginalConsoleError';
+const CONSOLE_ERROR_PATCHED_KEY = '__soulSyncConsoleErrorPatched';
+const CONSOLE_ERROR_IN_FLIGHT_KEY = '__soulSyncConsoleErrorInFlight';
 
-const RCTWebSocketModule = NativeModules.WebSocketModule;
-
-interface WebSocketError extends Error {
-  code?: number;
-  domain?: string;
-}
+type GlobalConsoleState = typeof globalThis & {
+  [ORIGINAL_CONSOLE_ERROR_KEY]?: typeof console.error;
+  [CONSOLE_ERROR_PATCHED_KEY]?: boolean;
+  [CONSOLE_ERROR_IN_FLIGHT_KEY]?: boolean;
+};
 
 /**
  * Safe wrapper for RCTWebSocketModule to prevent nil error crashes
@@ -39,25 +40,50 @@ class WebSocketErrorHandler {
   }
 
   constructor() {
-    this.originalConsoleError = console.error;
+    this.originalConsoleError = this.resolveOriginalConsoleError();
     this.setupErrorHandlers();
+  }
+
+  private resolveOriginalConsoleError(): typeof console.error {
+    const globalState = globalThis as GlobalConsoleState;
+    if (!globalState[ORIGINAL_CONSOLE_ERROR_KEY]) {
+      globalState[ORIGINAL_CONSOLE_ERROR_KEY] = console.error;
+    }
+    return globalState[ORIGINAL_CONSOLE_ERROR_KEY]!;
   }
 
   /**
    * Install global error handlers to catch WebSocket-related errors
    */
   private setupErrorHandlers(): void {
+    const globalState = globalThis as GlobalConsoleState;
+    if (globalState[CONSOLE_ERROR_PATCHED_KEY]) {
+      return;
+    }
+
+    globalState[CONSOLE_ERROR_PATCHED_KEY] = true;
+
     // Patch console.error to filter WebSocket errors during shutdown
     console.error = (...args: any[]) => {
+      // Re-entrancy guard: prevents recursive console.error loops during redbox render/update.
+      if (globalState[CONSOLE_ERROR_IN_FLIGHT_KEY]) {
+        this.originalConsoleError.apply(console, args);
+        return;
+      }
+
+      globalState[CONSOLE_ERROR_IN_FLIGHT_KEY] = true;
+      try {
       const message = args[0]?.toString() || '';
       
       // Filter out WebSocket errors during app reload
       if (this.isShuttingDown && this.isWebSocketError(message)) {
-        console.log('[WebSocketErrorHandler] Suppressed error during shutdown:', message);
         return;
       }
       
       this.originalConsoleError.apply(console, args);
+      } finally {
+        globalState[CONSOLE_ERROR_IN_FLIGHT_KEY] = false;
+      }
     };
 
     // console.error is enough to catch most issues without risking native crashes

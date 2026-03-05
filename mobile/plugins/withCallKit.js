@@ -85,7 +85,7 @@ function patchSwiftAppDelegate(contents) {
     
     // Setup CallKeep
     RNCallKeep.setup([
-      "appName": "SoulSync",
+      "appName": "Soul",
       "maximumCallGroups": 1,
       "maximumCallsPerCallGroup": 1,
       "supportsVideo": true

@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, createContext, useContext, useCallback, us
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
+import { AppState, AppStateStatus, Alert, Image, Platform } from 'react-native';
 import { Message, Contact, StatusUpdate, CallLog, ActiveCall, Song, MusicState } from '../types';
 import { musicSyncService, PlaybackState } from '../services/MusicSyncService';
 import { chatService, ChatMessage } from '../services/ChatService';
@@ -17,21 +18,20 @@ import {
 import { webRTCService } from '../services/WebRTCService';
 import { nativeCallBridge } from '../services/NativeCallBridge';
 import { nativeCallService } from '../services/NativeCallService';
-import { webSocketErrorHandler } from '../services/WebSocketErrorHandler';
+
 import { supabase } from '../config/supabase';
 import { offlineService } from '../services/LocalDBService';
 import { storageService } from '../services/StorageService';
 import { backgroundSyncService } from '../services/BackgroundSyncService';
 import { soundService } from '../services/SoundService';
-import { proxySupabaseUrl, SERVER_URL } from '../config/api';
+import { proxySupabaseUrl, SERVER_URL, serverFetch } from '../config/api';
 
 if (!offlineService) {
     console.warn('[AppContext] LocalDBService failed to load. Check native modules.');
 }
-import { AppState, AppStateStatus, Alert, Image, Platform } from 'react-native';
 
 // Initialize WebSocket error handler early to catch reload crashes
-webSocketErrorHandler;
+// webSocketErrorHandler is initialized as a singleton when the module is imported
 
 export type ThemeName = 'midnight' | 'liquid-blue' | 'sunset' | 'emerald' | 'cyber' | 'amethyst';
 
@@ -57,7 +57,7 @@ interface User {
     avatar: string;
     bio: string;
     birthdate?: string;
-    note?: string; // New field for SoulSync Notes
+    note?: string; // New field for Soul Notes
     noteTimestamp?: string; // ISO date string
     privacy?: PrivacySettings;
 }
@@ -83,14 +83,14 @@ const USERS: Record<string, User> = {
     'shri': {
         id: 'shri',
         name: 'SHRI',
-        avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=400&h=400&fit=crop',
+        avatar: '',
         bio: '笨ｨ Connected through the stars',
         birthdate: '2000-01-01',
     },
     'hari': {
         id: 'hari',
         name: 'HARI',
-        avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=400&h=400&fit=crop',
+        avatar: '',
         bio: '牒 Forever in sync',
         birthdate: '2000-01-01',
     },
@@ -154,6 +154,7 @@ interface AppContextType {
     sendTyping: (isTyping: boolean) => void;
     saveNote: (text: string) => Promise<void>;
     deleteNote: () => Promise<void>;
+    toggleHeart: (chatId: string, messageId: string) => Promise<void>;
     clearChatMessages: (partnerId: string) => Promise<void>;
 
     // Security
@@ -185,6 +186,16 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     // App State
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [messages, setMessages] = useState<Record<string, Message[]>>({});
+    const messagesRef = useRef<Record<string, Message[]>>({});
+
+    // Helper to keep both state and ref in sync synchronously
+    const syncSetMessages = useCallback((updater: (prev: Record<string, Message[]>) => Record<string, Message[]>) => {
+        setMessages(prev => {
+            const next = updater(prev);
+            messagesRef.current = next;
+            return next;
+        });
+    }, []);
     const [calls, setCalls] = useState<CallLog[]>([]);
     const [statuses, setStatuses] = useState<StatusUpdate[]>([]);
     const [theme, setThemeState] = useState<ThemeName>('midnight');
@@ -217,7 +228,6 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     const isSeekingRef = useRef(false);
     const pendingViewUpdatesRef = useRef<Set<string>>(new Set());
     
-    const messagesRef = useRef(messages);
     const statusesRef = useRef(statuses);
     const themeRef = useRef(theme);
     const biometricEnabledRef = useRef(biometricEnabled);
@@ -231,6 +241,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
 
     useEffect(() => { soundRef.current = sound; }, [sound]);
     useEffect(() => { musicStateRef.current = musicState; }, [musicState]);
+    // The main sync happens in syncSetMessages, this is a safety sync for background updates
     useEffect(() => { messagesRef.current = messages; }, [messages]);
     useEffect(() => { statusesRef.current = statuses; }, [statuses]);
     useEffect(() => { themeRef.current = theme; }, [theme]);
@@ -347,28 +358,9 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         };
     }, [currentUser, updatePresenceInSupabase]);
 
-    // Initialize Music Sync
+    // Initialize Music Sync (uses Socket.io via ChatService, not Supabase Realtime)
     useEffect(() => {
         if (currentUser) {
-            // Check realtime connectivity before initializing
-            import('../config/supabase')
-                .then(({ checkRealtimeConnectivity }) => {
-                    checkRealtimeConnectivity()
-                        .then((result) => {
-                            if (!result.ok) {
-                                console.warn('[MusicSync] Realtime unavailable, sync will not work:', result.error);
-                            } else {
-                                console.log('[MusicSync] Realtime connectivity confirmed');
-                            }
-                        })
-                        .catch(err => {
-                            console.error('[MusicSync] connectivity check CRASHED:', err);
-                        });
-                })
-                .catch(err => {
-                    console.error('[MusicSync] Failed to lazy load supabase config:', err);
-                });
-            
             musicSyncService.initialize(currentUser.id, async (remoteState) => {
                 try {
                     const currentMusicState = musicStateRef.current;
@@ -407,10 +399,10 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                         console.warn('[MusicSync] Remote update failed:', e);
                     }
                 }
-            });
+            }, otherUser?.id);
         }
         return () => musicSyncService.cleanup();
-    }, [currentUser]); 
+    }, [currentUser, otherUser]); 
 
     // Load session on mount
     useEffect(() => {
@@ -454,7 +446,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                         const localMessages = await offlineService?.getMessages(other.id) || [];
                         if (localMessages.length > 0) {
                             console.log('[AppContext] Loaded messages from local DB', localMessages.length);
-                            setMessages(prev => ({ ...prev, [other.id]: localMessages }));
+                            syncSetMessages(prev => ({ ...prev, [other.id]: localMessages }));
                         }
                         
                         const localStatusRows = await offlineService?.getStatuses() || [];
@@ -624,6 +616,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                         status: isFromMe ? 'sent' : 'delivered',
                         media: incomingMessage.media,
                         replyTo: incomingMessage.reply_to || undefined,
+                        reactions: incomingMessage.reactions || [],
                     };
                     
                     addMessageSafely(otherUser.id, newMsg);
@@ -637,6 +630,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                     ));
 
                     if (!isFromMe) {
+                        soundService.playNotification();
                         if (AppState.currentState !== 'active' || (otherUser && otherUser.id !== incomingMessage.sender_id)) {
                              const sender = contacts.find(c => c.id === incomingMessage.sender_id);
                              notificationService.showIncomingMessage({
@@ -651,7 +645,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                 },
                 (messageId: string, status: ChatMessage['status'], newId?: string) => {
                     if (otherUser) {
-                        setMessages(prev => {
+                        syncSetMessages(prev => {
                             const chatMessages = prev[otherUser.id] || [];
                             return {
                                 ...prev,
@@ -716,6 +710,27 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                 },
                 (online: boolean) => {
                     setIsCloudConnected(online);
+                },
+                (messageId: string, reaction: string, senderId?: string) => {
+                    // Try to find which chat this message belongs to by searching current state
+                    let chatId: string | undefined;
+                    const allMessages = messagesRef.current;
+                    for (const id in allMessages) {
+                        if (allMessages[id].some(m => m.id === messageId)) {
+                            chatId = id;
+                            break;
+                        }
+                    }
+
+                    // Fallback to partnerId logic if not found in current state
+                    if (!chatId) {
+                        const currentUserId = currentUserRef.current?.id;
+                        chatId = senderId === currentUserId ? otherUserRef.current?.id : senderId;
+                    }
+
+                    if (chatId) {
+                         addReaction(chatId, messageId, reaction || null, senderId);
+                    }
                 }
             );
         }
@@ -820,11 +835,13 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
 
     // Helper to add messages with deduplication
     const addMessageSafely = useCallback((partnerId: string, msg: Message) => {
-        setMessages(prev => {
-            const current = prev[partnerId] || [];
-            if (current.find(m => m.id === msg.id)) return prev;
+        syncSetMessages(prev => {
+            const chatMessages = prev[partnerId] || [];
+            if (chatMessages.some(m => m.id === msg.id)) return prev;
             
-            const newList = [...current, { ...msg, timestamp: msg.timestamp || new Date().toISOString() }];
+            // Ensure timestamp is set and sort the list
+            const messageWithTimestamp = { ...msg, timestamp: msg.timestamp || new Date().toISOString() };
+            const newList = [...chatMessages, messageWithTimestamp];
             return {
                 ...prev,
                 [partnerId]: newList.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
@@ -835,7 +852,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         if (offlineService && msg.sender !== 'me') {
             offlineService.saveMessage(partnerId, msg).catch(e => console.warn('saveMessage err:', e));
         }
-    }, []);
+    }, [syncSetMessages, offlineService]);
 
     // Real-time Subscriptions
     useEffect(() => {
@@ -962,6 +979,9 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                             unreadCount: (c.unreadCount || 0) + 1
                         } : c
                     ));
+
+                    // Play Notification Sound
+                    soundService.playNotification();
                 }
             })
             .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, async (payload) => {
@@ -976,7 +996,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
 
                 let mergedMessage: Message | null = null;
 
-                setMessages(prev => {
+                syncSetMessages(prev => {
                     const chatMessages = prev[partnerId] || [];
                     const idx = chatMessages.findIndex(m => m.id === updatedMsg.id.toString());
                     if (idx < 0) return prev;
@@ -1017,7 +1037,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                     await offlineService.deleteMessage(msgId);
                 }
 
-                setMessages(prev => {
+                syncSetMessages(prev => {
                     const next = { ...prev };
                     for (const [chatId, msgs] of Object.entries(next)) {
                         const filtered = msgs.filter(m => m.id !== msgId);
@@ -1043,7 +1063,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
             supabase.removeChannel(statusSub);
             supabase.removeChannel(messageSub);
         };
-    }, [currentUser?.id, otherUser]);
+    }, [currentUser?.id, otherUser, addMessageSafely, syncSetMessages, offlineService, setContacts]);
 
     // Helpers
 
@@ -1237,6 +1257,14 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         try {
             if (!song.url || song.url.trim() === '') return;
 
+            // ✅ INSTANTLY update currentSong so list highlight & header update immediately
+            // Don't wait for audio to load — this is what the user clicked
+            setMusicState(prev => ({ 
+                ...prev, 
+                currentSong: song, 
+                isPlaying: false  // will become true once audio loads
+            }));
+
             await Audio.setAudioModeAsync({
                 allowsRecordingIOS: false,
                 playsInSilentModeIOS: true,
@@ -1250,17 +1278,24 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
             }
             const { sound: newSound, status } = await Audio.Sound.createAsync(
                 { uri: song.url },
-                { shouldPlay: true, volume: 1.0, progressUpdateIntervalMillis: 500 },
+                { shouldPlay: true, volume: 1.0, progressUpdateIntervalMillis: 1000 },
                 (playbackStatus) => {
                     if (!playbackStatus.isLoaded) return;
-                    setMusicState(prev => ({ ...prev, isPlaying: playbackStatus.isPlaying }));
+                    
+                    // Only update state if isPlaying actually changed to prevent high-frequency re-renders
+                    setMusicState(prev => {
+                        if (prev.isPlaying !== playbackStatus.isPlaying) {
+                            return { ...prev, isPlaying: playbackStatus.isPlaying };
+                        }
+                        return prev;
+                    });
+
                     if (playbackStatus.didJustFinish) {
                         setMusicState(prev => ({ ...prev, isPlaying: false }));
                         if (broadcast) {
                             musicSyncService.broadcastUpdate({
                                 currentSong: song,
-                                isPlaying: false,
-                                updatedBy: currentUserRef.current?.id || ''
+                                isPlaying: false
                             });
                         }
                     }
@@ -1275,7 +1310,12 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
             ]);
 
             setSound(newSound);
-            setMusicState(prev => ({ ...prev, currentSong: song, isPlaying: true }));
+            // Mark as playing now that audio is ready
+            setMusicState(prev => ({ 
+                ...prev, 
+                currentSong: song,   // keep in sync (song might have changed during load)
+                isPlaying: true 
+            }));
 
             if (currentUserRef.current) {
                 AsyncStorage.setItem(`ss_last_song_${currentUserRef.current.id}`, JSON.stringify(song));
@@ -1416,10 +1456,10 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         }
 
         await chatService.sendMessage(text, media, replyTo);
-    }, [addMessageSafely]);
+    }, [addMessageSafely, offlineService, chatService, setContacts]);
 
     const updateMessage = useCallback(async (chatId: string, messageId: string, updates: Partial<Message>) => {
-        setMessages(prev => {
+        syncSetMessages(prev => {
             const chatMsgs = prev[chatId] || [];
             if (!chatMsgs.find(m => m.id === messageId)) return prev;
             return {
@@ -1432,10 +1472,10 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
             const msg = messagesRef.current[chatId]?.find(m => m.id === messageId);
             if (msg) await offlineService.saveMessage(chatId, { ...msg, ...updates });
         }
-    }, []);
+    }, [syncSetMessages, offlineService]);
 
     const updateMessageStatus = useCallback(async (chatId: string, messageId: string, status: Message['status']) => {
-        setMessages(prev => {
+        syncSetMessages(prev => {
             const chatMsgs = prev[chatId] || [];
             if (!chatMsgs.find(m => m.id === messageId)) return prev;
             return {
@@ -1469,31 +1509,97 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
             }
             return c;
         }));
-
         try {
             await supabase.from('messages').delete().eq('id', messageId);
         } catch {}
     }, []);
 
-    const addReaction = useCallback(async (chatId: string, messageId: string, emoji: string) => {
-        setMessages(prev => {
+    // Guard: track recently changed reactions to prevent incoming socket events from overriding
+    const recentLocalReactions = useRef<Map<string, number>>(new Map());
+
+    const addReaction = useCallback(async (chatId: string, messageId: string, emoji: string | null, senderId?: string) => {
+        const reactions = emoji ? [emoji] : [];
+        const isMe = !senderId || senderId === currentUserRef.current?.id;
+        
+        console.log(`[AppContext] addReaction: [${emoji || 'REMOVE'}] msg=${messageId} chat=${chatId} isMe=${isMe} senderId=${senderId || 'none'}`);
+
+        // If this is a REMOTE event, check if we recently modified this message locally
+        if (senderId) {
+            const lastLocal = recentLocalReactions.current.get(messageId);
+            if (lastLocal && Date.now() - lastLocal < 3000) {
+                console.log(`[AppContext] IGNORING remote reaction for ${messageId} — local change was <3s ago`);
+                return;
+            }
+        }
+
+        // --- CRITICAL FIX: Update REF instantly (synchronously) ---
+        // This ensures the next immediate call (e.g. from a second double-tap)
+        // sees the updated state even before React re-renders.
+        const currentMsgs = messagesRef.current[chatId] || [];
+        if (currentMsgs.some(m => m.id === messageId)) {
+            messagesRef.current = {
+                ...messagesRef.current,
+                [chatId]: currentMsgs.map(m => m.id === messageId ? { ...m, reactions } : m)
+            };
+        }
+
+        // Update React State
+        syncSetMessages(prev => {
             const chatMsgs = prev[chatId] || [];
+            if (!chatMsgs.some(m => m.id === messageId)) return prev;
             return {
                 ...prev,
-                [chatId]: chatMsgs.map(m => m.id === messageId ? { ...m, reactions: [emoji] } : m)
+                [chatId]: chatMsgs.map(m => m.id === messageId ? { ...m, reactions } : m)
             };
         });
 
-        if (offlineService) {
-            const msg = messagesRef.current[chatId]?.find(m => m.id === messageId);
-            if (msg) await offlineService.saveMessage(chatId, { ...msg, reactions: [emoji] });
+        // Only emit and persist if WE initiated the reaction (no senderId)
+        if (!senderId) {
+            recentLocalReactions.current.set(messageId, Date.now());
+
+            const socket = chatService.getSocket();
+            if (socket?.connected) {
+                socket.emit('message:reaction', {
+                    recipientId: chatId,
+                    messageId: messageId,
+                    reaction: emoji || ''
+                });
+            }
+
+            try {
+                await Promise.all([
+                    offlineService.updateMessageReaction(messageId, emoji || null),
+                    supabase.from('messages').update({ reaction: emoji || null }).eq('id', messageId)
+                ]);
+            } catch (e) {
+                console.error('[AppContext] Failed to persist reaction:', e);
+            }
+        }
+    }, [syncSetMessages]);
+
+    const toggleHeart = useCallback(async (chatId: string, messageId: string): Promise<void> => {
+        // Read directly from the ref (which we now keep 100% in sync)
+        const chatMsgs = messagesRef.current[chatId] || [];
+        const msg = chatMsgs.find(m => m.id === messageId);
+        
+        if (!msg) {
+            console.log(`[AppContext] toggleHeart: Message ${messageId} not found in chat ${chatId}`);
+            return;
         }
 
-        try {
-            const { error } = await supabase.from('messages').update({ reaction: emoji }).eq('id', messageId);
-            if (error) throw error;
-        } catch (e) { console.warn('Reaction sync error:', e); }
-    }, []);
+        const currentReactions = msg.reactions || [];
+        // Support multiple variants of heart emojis and handle non-string values gracefully
+        const heartVariants = ['❤️', '❤', '\u2764\uFE0F', '\u2764'];
+        const hasHeart = currentReactions.some(r => 
+            typeof r === 'string' && (heartVariants.includes(r) || r.includes('❤️') || r.includes('❤'))
+        );
+
+        const newEmoji = hasHeart ? null : '❤️';
+        console.log(`[AppContext] toggleHeart logic: msg=${messageId} hasHeart=${hasHeart} -> newEmoji=${newEmoji || 'REMOVE'}`);
+        
+        await addReaction(chatId, messageId, newEmoji);
+    }, [addReaction]);
+
 
     // --- CALL LOGIC ---
     const addCall = useCallback(async (call: Omit<CallLog, 'id'>) => {
@@ -1943,7 +2049,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                 if (uploaded) finalMediaUrl = uploaded;
             }
 
-            await fetch(`${SERVER_URL}/api/status/create`, {
+            await serverFetch(`${SERVER_URL}/api/status/create`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ status: { 
@@ -1984,7 +2090,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         setTimeout(() => pendingViewUpdatesRef.current.delete(statusId), 5000);
 
         try {
-            await fetch(`${SERVER_URL}/api/status/view`, {
+            await serverFetch(`${SERVER_URL}/api/status/view`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ statusId, viewerId: authId, ownerId: status.userId })
@@ -2142,7 +2248,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         addMessage, updateMessage, updateMessageStatus, deleteMessage, addReaction, addCall, deleteCall, clearCalls, addStatus, deleteStatus, setTheme,
         startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, playSong, togglePlayMusic, toggleFavoriteSong,
         seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView, toggleStatusLike,
-        typingUsers, sendTyping, saveNote, deleteNote, clearChatMessages,
+        typingUsers, sendTyping, saveNote, deleteNote, toggleHeart, clearChatMessages,
         biometricEnabled, pinEnabled, pin, isLocked, setBiometricEnabled, setPinEnabled, setPin, unlockApp,
         privacySettings, updatePrivacy,
     }), [
@@ -2150,7 +2256,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         login, logout, addMessage, updateMessage, updateMessageStatus, deleteMessage, addReaction, addCall, deleteCall, clearCalls, addStatus, deleteStatus, setTheme,
         startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, playSong, togglePlayMusic, toggleFavoriteSong,
         seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView, toggleStatusLike,
-        typingUsers, sendTyping, saveNote, deleteNote, clearChatMessages,
+        typingUsers, sendTyping, saveNote, deleteNote, toggleHeart, clearChatMessages,
         biometricEnabled, pinEnabled, pin, isLocked, setBiometricEnabled, setPinEnabled, setPin, unlockApp,
         privacySettings, updatePrivacy
     ]);

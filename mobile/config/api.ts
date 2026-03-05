@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 // Supabase Configuration
 export const SUPABASE_URL = 'https://xuipxbyvsawhuldopvjn.supabase.co';
 export const SUPABASE_ANON_KEY = 'sb_publishable_9cVY_6oQHMZnV9CaxmMs9Q_7QlUxqlD';
@@ -14,12 +16,43 @@ export function getSupabaseUrl(): string {
     return SUPABASE_ENDPOINT;
 }
 
-import { Platform } from 'react-native';
-
 // Node.js sync server (for R2 and real-time Socket.io)
-// Defaults to localhost for iOS simulator, 10.0.2.2 for Android emulator
-const DEFAULT_SERVER_URL = Platform.OS === 'android' ? 'http://10.0.2.2:3000' : 'http://localhost:3000';
-export const SERVER_URL = process.env.EXPO_PUBLIC_SERVER_URL || DEFAULT_SERVER_URL;
+const LOCAL_IP = '192.168.1.38';
+
+const getFinalServerUrl = () => {
+    // iOS Simulator is on the same Mac → always use localhost directly (bypass tunnel)
+    if (__DEV__ && Platform.OS === 'ios') {
+        console.log('[API Config] iOS Simulator detected — using localhost:3000');
+        return 'http://localhost:3000';
+    }
+
+    // Android Emulator: 10.0.2.2 maps to Mac's localhost
+    if (__DEV__ && Platform.OS === 'android') {
+        const envUrl = process.env.EXPO_PUBLIC_SERVER_URL;
+        if (envUrl) return envUrl;
+        
+        console.log('[API Config] Android detected — using 10.0.2.2/LAN IP');
+        return `http://10.0.2.2:3000`; // Standard for Android Emulator
+    }
+
+    // Physical devices (production or Expo Go on real phone): use tunnel
+    return process.env.EXPO_PUBLIC_SERVER_URL || `http://${LOCAL_IP}:3000`;
+};
+
+export const SERVER_URL = getFinalServerUrl();
+console.log('[API Config] Final SERVER_URL:', SERVER_URL);
+
+// Cloudflare Tunnel bypass — Cloudflare doesn't require headers for quick tunnels, 
+// but we'll keep the structure clean
+const isTunnel = SERVER_URL.includes('trycloudflare.com') || SERVER_URL.includes('.loca.lt');
+export const serverFetch = (url: string, init?: RequestInit): Promise<Response> =>
+    fetch(url, {
+        ...init,
+        headers: {
+            ...(isTunnel ? { 'bypass-tunnel-reminder': 'true' } : {}),
+            ...init?.headers,
+        },
+    });
 
 // JioSaavn API (Fallback to public instance as Supabase function is inactive)
 export const SAAVN_BASE_URL = 'https://saavn.sumit.co';

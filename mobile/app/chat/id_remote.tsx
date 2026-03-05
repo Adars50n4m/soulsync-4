@@ -12,6 +12,7 @@ import Animated, {
     useSharedValue, 
     useAnimatedStyle, 
     withSpring, 
+    withTiming,
     runOnJS, 
     interpolate, 
     Extrapolation 
@@ -19,6 +20,8 @@ import Animated, {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useApp } from '../../context/AppContext';
 import { MusicPlayerOverlay } from '../../components/MusicPlayerOverlay';
+
+const ENABLE_SHARED_TRANSITIONS = Platform.OS === 'ios';
 
 
 // Sanitize song title - remove metadata like "(From ...)" or "[Album Name]"
@@ -31,17 +34,58 @@ const sanitizeSongTitle = (title: string): string => {
         .trim();
 };
 
+const HeartPop = ({ active, onFinish }: { active: boolean, onFinish: () => void }) => {
+    const scale = useSharedValue(0);
+    const opacity = useSharedValue(0);
+
+    useEffect(() => {
+        if (active) {
+            scale.value = 0;
+            opacity.value = 1;
+            scale.value = withSpring(1.5, { damping: 10, stiffness: 100 }, () => {
+                scale.value = withTiming(0, { duration: 200 }, () => {
+                   runOnJS(onFinish)();
+                });
+                opacity.value = withTiming(0, { duration: 200 });
+            });
+        }
+    }, [active]);
+
+    const style = useAnimatedStyle(() => ({
+        transform: [{ scale: scale.value }],
+        opacity: opacity.value,
+        position: 'absolute',
+        alignSelf: 'center',
+        top: '30%',
+        zIndex: 100,
+    }));
+
+    return (
+        <Animated.View style={style} pointerEvents="none">
+            <MaterialIcons name="favorite" size={80} color="#ff0080" />
+        </Animated.View>
+    );
+};
+
 // Message Bubble with Liquid Glass UI
 const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quotedMessage, onDoubleTap }: any) => {
     const { activeTheme } = useApp();
     const translateX = useSharedValue(0);
+    const [showHeart, setShowHeart] = useState(false);
     const isMe = msg.sender === 'me';
 
     const doubleTapGesture = Gesture.Tap()
         .numberOfTaps(2)
-        .maxDuration(250)
+        .maxDuration(300)
         .onEnd(() => {
-            if (onDoubleTap) runOnJS(onDoubleTap)(msg.id);
+            if (onDoubleTap) {
+                const currentReactions = msg.reactions || [];
+                const hasHeart = currentReactions.some((r: string) => ['❤️', '❤', '\u2764\uFE0F', '\u2764'].includes(r) || r.includes('❤️'));
+                if (!hasHeart) {
+                    runOnJS(setShowHeart)(true);
+                }
+                runOnJS(onDoubleTap)(msg.id);
+            }
         });
 
     const longPressGesture = Gesture.LongPress()
@@ -72,7 +116,7 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
         transform: [
             { scale: interpolate(translateX.value, [0, 50], [0.5, 1], Extrapolation.CLAMP) },
             { translateX: interpolate(translateX.value, [0, 50], [-20, 0], Extrapolation.CLAMP) }
-        ]
+        ] as any,
     }));
 
     return (
@@ -161,6 +205,8 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
                             ))}
                         </View>
                     )}
+
+                    <HeartPop active={showHeart} onFinish={() => setShowHeart(false)} />
                 </Animated.View>
             </GestureDetector>
         </View>
@@ -168,7 +214,7 @@ const MessageBubble = ({ msg, onLongPress, onReply, isSelected, onReaction, quot
 };
 
 // Emoji Reaction Modal
-const ReactionModal = ({ visible, onClose, onSelect }: any) => {
+const ReactionModal = ({ visible, onClose, onSelect, hasReaction }: any) => {
     const emojis = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
 
     return (
@@ -182,10 +228,18 @@ const ReactionModal = ({ visible, onClose, onSelect }: any) => {
                             </Pressable>
                         ))}
                     </View>
-                    <Pressable style={styles.deleteButton} onPress={() => onSelect('delete')}>
-                        <MaterialIcons name="delete" size={20} color="#ef4444" />
-                        <Text style={styles.deleteText}>Delete</Text>
-                    </Pressable>
+                    <View style={styles.reactionActionsRow}>
+                        {hasReaction && (
+                            <Pressable style={[styles.reactionActionButton, styles.removeReactionButton]} onPress={() => onSelect('remove_reaction')}>
+                                <MaterialIcons name="clear" size={18} color="rgba(255,255,255,0.6)" />
+                                <Text style={styles.removeReactionText}>Remove</Text>
+                            </Pressable>
+                        )}
+                        <Pressable style={[styles.reactionActionButton, styles.deleteMsgButton]} onPress={() => onSelect('delete_msg')}>
+                            <MaterialIcons name="delete" size={18} color="#ef4444" />
+                            <Text style={styles.deleteMsgText}>Delete Message</Text>
+                        </Pressable>
+                    </View>
                 </GlassView>
             </Pressable>
         </Modal>
@@ -197,7 +251,7 @@ export default function RemoteChat() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
     const navigation = useNavigation();
-    const { contacts, messages, sendChatMessage, startCall, activeCall, addReaction, deleteMessage, musicState } = useApp();
+    const { contacts, messages, sendChatMessage, startCall, activeCall, addReaction, toggleHeart, deleteMessage, musicState } = useApp();
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
     const [replyingTo, setReplyingTo] = useState<any>(null);
@@ -257,22 +311,24 @@ export default function RemoteChat() {
         sendChatMessage(id, content, undefined);
     };
 
-    const handleReaction = (emoji: string) => {
+    const handleReaction = (action: string) => {
         if (selectedMsgId && id) {
-            if (emoji === 'delete') {
+            if (action === 'delete_msg') {
                 deleteMessage(id, selectedMsgId);
+            } else if (action === 'remove_reaction') {
+                addReaction(id, selectedMsgId, null);
             } else {
-                addReaction(id, selectedMsgId, emoji);
+                addReaction(id, selectedMsgId, action);
             }
         }
         setSelectedMsgId(null);
     };
 
-    const handleDoubleTap = (msgId: string) => {
+    const handleDoubleTap = useCallback((msgId: string) => {
         if (id) {
-            addReaction(id, msgId, '❤️');
+            toggleHeart(id, msgId);
         }
-    };
+    }, [id, toggleHeart]);
 
     const renderMessage = useCallback(({ item }: { item: any }) => (
         <MessageBubble
@@ -302,8 +358,13 @@ export default function RemoteChat() {
         >
             <StatusBar barStyle="light-content" />
 
-            {/* Header */}
-            <GlassView intensity={35} tint="dark" style={styles.header} >
+            {/* Header - Pill Shape for Morphing shared element transition */}
+            <Animated.View 
+                {...(ENABLE_SHARED_TRANSITIONS ? { sharedTransitionTag: `pill-${id}` } : {})}
+                style={styles.header}
+            >
+               <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
+                
                 <Pressable 
                     onPress={() => {
                         if (navigation.canGoBack()) navigation.goBack();
@@ -345,7 +406,7 @@ export default function RemoteChat() {
                         <MaterialIcons name="call" size={20} color="#f43f5e" />
                     </Pressable>
                 </View>
-            </GlassView>
+            </Animated.View>
 
             {/* Messages */}
             <FlatList
@@ -427,6 +488,7 @@ export default function RemoteChat() {
                 visible={!!selectedMsgId}
                 onClose={() => setSelectedMsgId(null)}
                 onSelect={handleReaction}
+                hasReaction={!!chatMessages.find(m => m.id === selectedMsgId)?.reactions?.length}
             />
 
             {/* Call Options Dropdown */}
@@ -486,15 +548,22 @@ const styles = StyleSheet.create({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingTop: 50,
-        paddingBottom: 12,
+        marginTop: Platform.OS === 'ios' ? 44 : 24, // Floating pill
+        marginHorizontal: 12,
+        height: 64,
         paddingHorizontal: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.08)',
-        gap: 8,
+        borderRadius: 32, // Pill shape!
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.22)',
+        gap: 2,
+        overflow: 'hidden',
+        zIndex: 10,
     },
     backButton: {
-        padding: 8,
+        width: 36,
+        height: 36,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     avatarWrapper: {
         position: 'relative',
@@ -504,22 +573,22 @@ const styles = StyleSheet.create({
         height: 40,
         borderRadius: 20,
         borderWidth: 1,
-        borderColor: '#f43f5e',
+        borderColor: 'rgba(255, 255, 255, 0.22)',
     },
     onlineIndicator: {
         position: 'absolute',
         bottom: 0,
         right: 0,
-        width: 12,
-        height: 12,
-        borderRadius: 6,
+        width: 10,
+        height: 10,
+        borderRadius: 5,
         backgroundColor: '#22c55e',
-        borderWidth: 2,
-        borderColor: '#09090b',
+        borderWidth: 1.5,
+        borderColor: '#000',
     },
     headerInfo: {
         flex: 1,
-        marginLeft: 8,
+        marginLeft: 4,
     },
     contactName: {
         color: '#ffffff',
@@ -527,11 +596,11 @@ const styles = StyleSheet.create({
         fontWeight: '800',
     },
     statusText: {
-        color: '#f43f5e',
+        color: 'rgba(255,255,255,0.5)',
         fontSize: 8,
         fontWeight: '900',
         letterSpacing: 2,
-        marginTop: 2,
+        marginTop: 1,
     },
     headerButton: {
         width: 40,
@@ -546,8 +615,8 @@ const styles = StyleSheet.create({
     },
     messagesContent: {
         paddingHorizontal: 16,
-        paddingTop: 16,
-        paddingBottom: 16,
+        paddingTop: Platform.OS === 'ios' ? 120 : 100, // Account for floating pill header
+        paddingBottom: 20,
         flexGrow: 1,
     },
     messageWrapper: {
@@ -828,19 +897,38 @@ const styles = StyleSheet.create({
     emojiText: {
         fontSize: 24,
     },
-    deleteButton: {
+    deleteMsgButton: {
+        backgroundColor: 'rgba(239, 68, 68, 0.15)',
+        flex: 1,
+    },
+    deleteMsgText: {
+        color: '#ef4444',
+        fontSize: 12,
+        fontWeight: '700',
+    },
+    reactionActionsRow: {
+        flexDirection: 'row',
+        gap: 8,
+        width: '100%',
+    },
+    reactionActionButton: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 8,
-        paddingVertical: 12,
-        backgroundColor: 'rgba(239, 68, 68, 0.15)',
-        borderRadius: 20,
+        gap: 6,
+        paddingVertical: 10,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.08)',
     },
-    deleteText: {
-        color: '#ef4444',
-        fontSize: 13,
-        fontWeight: '700',
+    removeReactionButton: {
+        backgroundColor: 'rgba(255,255,255,0.05)',
+        paddingHorizontal: 12,
+    },
+    removeReactionText: {
+        color: 'rgba(255,255,255,0.6)',
+        fontSize: 12,
+        fontWeight: '600',
     },
     // Call Modal
     modalOverlay: {

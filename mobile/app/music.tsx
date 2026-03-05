@@ -240,11 +240,11 @@ export default function MusicScreen() {
     }));
 
     const backgroundStyle = useAnimatedStyle(() => ({
-        opacity: interpolate(slideY.value, [0, height], [1, 0]),
+        opacity: interpolate(slideY.value, [0, height], [1, 1], Extrapolation.CLAMP), // Keep base backdrop stable
     }));
 
     const backdropBlurOpacity = useAnimatedStyle(() => ({
-        opacity: interpolate(slideY.value, [0, height], [1, 0]),
+        opacity: interpolate(slideY.value, [0, height], [1, 0], Extrapolation.CLAMP),
     }));
 
     // Real Progress Sync
@@ -530,22 +530,17 @@ export default function MusicScreen() {
         <View style={styles.container}>
             <StatusBar barStyle="light-content" />
             
-            <Animated.View style={[StyleSheet.absoluteFill, backgroundStyle]}>
-                <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
-            </Animated.View>
-
+            {/* Combined Backdrop: Single layer of glass + subtle tint */}
             <Animated.View style={[StyleSheet.absoluteFill, backdropBlurOpacity, { zIndex: 40 }]}>
-                {Platform.OS === 'ios' && (
-                    <GlassView 
-                        intensity={35} 
-                        tint="dark" 
-                        style={StyleSheet.absoluteFill}
-                    />
-                )}
+                <GlassView 
+                    intensity={20} 
+                    tint="dark" 
+                    style={StyleSheet.absoluteFill}
+                />
                 <View 
                     style={[
                         StyleSheet.absoluteFill, 
-                        Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.7)' }
+                        { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.3)' }
                     ]} 
                 />
             </Animated.View>

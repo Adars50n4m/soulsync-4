@@ -22,6 +22,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.get('/', (req, res) => res.send('<html><body style="background: white; display: flex; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif;"><h1>✅ SoulSync sync server running</h1></body></html>'));
+
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: { origin: '*' }
@@ -91,7 +93,12 @@ app.post('/api/messages/send', async (req, res) => {
             });
         }
         
-        io.to(recipientId).emit('message:receive', message);
+        const outgoingMessage = {
+            ...message,
+            sender_id: message.sender_id || message.sender,
+            receiver_id: message.receiver_id || recipientId,
+        };
+        io.to(recipientId).emit('message:receive', outgoingMessage);
         res.json({ success: true, localMessageId: message.id });
     } catch (err) {
         console.error('Error in /api/messages/send:', err);
@@ -215,13 +222,45 @@ app.post('/api/status/view', async (req, res) => {
         res.status(500).json({ error: 'Failed' });
     }
 });
+// Track active socket ID per user to prevent duplicate room members
+const userSocketMap = new Map(); // userId -> socketId
+
 io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.id}`);
+    console.log(`📡 New Socket Connection: ${socket.id} (Total: ${io.engine.clientsCount})`);
 
     // User authenticates/identifies themselves
     socket.on('register', (userId) => {
+        if (!userId) {
+            console.warn(`⚠️ Register event received with no userId from socket ${socket.id}`);
+            return;
+        }
+
+        // If another socket is already registered for this user, kick it out of the room
+        // This prevents duplicate deliveries when the client reconnects
+        const existingSocketId = userSocketMap.get(userId);
+        if (existingSocketId && existingSocketId !== socket.id) {
+            const existingSocket = io.sockets.sockets.get(existingSocketId);
+            if (existingSocket) {
+                existingSocket.leave(userId);
+                console.log(`🔄 Ejected stale socket ${existingSocketId} from room "${userId}"`);
+            }
+        }
+
+        socket.userId = userId;
+        userSocketMap.set(userId, socket.id);
         socket.join(userId);
-        console.log(`User ${userId} registered to socket ${socket.id}`);
+        console.log(`👤 User "${userId}" registered to socket ${socket.id}`);
+    });
+
+    // Clean up when socket disconnects
+    socket.on('disconnect', () => {
+        if (socket.userId) {
+            // Only remove from map if this is still the current socket for this user
+            if (userSocketMap.get(socket.userId) === socket.id) {
+                userSocketMap.delete(socket.userId);
+                console.log(`👋 User "${socket.userId}" disconnected (socket ${socket.id})`);
+            }
+        }
     });
 
     // Chat events
@@ -250,8 +289,13 @@ io.on('connection', (socket) => {
                 }
             }
 
-            // 2. Emit to recipient
-            io.to(data.recipientId).emit('message:receive', data.message);
+            // 2. Emit to recipient with normalized payload shape for all clients
+            const outgoingMessage = {
+                ...data.message,
+                sender_id: data.message.sender_id || data.message.sender,
+                receiver_id: data.message.receiver_id || data.recipientId,
+            };
+            io.to(data.recipientId).emit('message:receive', outgoingMessage);
             console.log(`💬 Message from ${data.message.sender_id} to ${data.recipientId} broadcasted`);
             
             // 3. Confirm to sender it was processed
@@ -282,6 +326,35 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Real-time Reactions
+    socket.on('message:reaction', async (data) => {
+        // data: { recipientId, messageId, reaction }
+        if (data.recipientId && data.messageId) {
+            const senderId = socket.userId || 'Unknown';
+            console.log(`✨ Reaction [${data.reaction}] from ${senderId} on ${data.messageId} -> Recipient: ${data.recipientId}`);
+            
+            // Sync to DB
+            if (supabase) {
+                try {
+                    const { error } = await supabase.from('messages').update({ reaction: data.reaction || null }).eq('id', data.messageId);
+                    if (error && error.code !== '22P02') console.error('DB Reaction error:', error.message);
+                } catch (err) {}
+            }
+
+            // Verify if recipient is in room
+            const room = io.sockets.adapter.rooms.get(data.recipientId);
+            const isConnected = room && room.size > 0;
+            console.log(`📡 Broadcast status: ${isConnected ? 'Recipient Online' : 'Recipient Offline (Queued)'}`);
+
+            // Forward to recipient
+            io.to(data.recipientId).emit('message:reaction', {
+                messageId: data.messageId,
+                reaction: data.reaction,
+                senderId: senderId
+            });
+        }
+    });
+
     // New Status broadcast
     socket.on('status:new', (statusData) => {
         // Broadcast new status to all clients (in prod, limit to contacts)
@@ -301,8 +374,15 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('disconnect', () => {
-        console.log(`User disconnected: ${socket.id}`);
+    // Music playback sync
+    socket.on('music:playback_update', (data) => {
+        // Broadcast to specific recipient if provided, otherwise broadcast to everyone
+        if (data.recipientId) {
+            console.log(`🎵 Syncing music to ${data.recipientId}`);
+            io.to(data.recipientId).emit('music:playback_update', data);
+        } else {
+            socket.broadcast.emit('music:playback_update', data);
+        }
     });
 });
 
@@ -370,6 +450,8 @@ setInterval(async () => {
 }, 60 * 1000); // Check every minute
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`SoulSync sync server running on port ${PORT}`);
+const HOST = '0.0.0.0'; // Listen on all interfaces so physical devices can connect
+server.listen(PORT, HOST, () => {
+    console.log(`SoulSync sync server running on ${HOST}:${PORT}`);
+    console.log(`Local network URL: http://192.168.1.38:${PORT}`);
 });

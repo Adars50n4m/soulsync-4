@@ -7,14 +7,15 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
+const DEFAULT_AVATAR = '';
 import * as ImagePicker from 'expo-image-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useApp } from '../context/AppContext';
+import { SoulAvatar } from '../components/SoulAvatar';
 import { storageService } from '../services/StorageService';
 import Animated, {
-    interpolate,
-    useAnimatedStyle,
-    useSharedValue,
+    Easing,
+    SharedTransition,
     withTiming,
 } from 'react-native-reanimated';
 
@@ -34,7 +35,38 @@ const SettingRow = ({ label, value, icon, onPress }: {
     </Pressable>
 );
 
+const profileMorphTransition = SharedTransition.custom((values) => {
+    'worklet';
+    const morph = {
+        duration: 400,
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+    };
+    return {
+        originX: withTiming(values.targetOriginX, morph),
+        originY: withTiming(values.targetOriginY, morph),
+        width: withTiming(values.targetWidth, morph),
+        height: withTiming(values.targetHeight, morph),
+        borderRadius: withTiming(values.targetBorderRadius, morph),
+    };
+}).duration(400);
+
+const profileBoundsTransition = SharedTransition.custom((values) => {
+    'worklet';
+    const morph = {
+        duration: 400,
+        easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+    };
+    return {
+        originX: withTiming(values.targetOriginX, morph),
+        originY: withTiming(values.targetOriginY, morph),
+        width: withTiming(values.targetWidth, morph),
+        height: withTiming(values.targetHeight, morph),
+        borderRadius: withTiming(values.targetBorderRadius, morph),
+    };
+}).duration(400);
+
 export default function ProfileEditScreen() {
+    const enableSharedMorph = Platform.OS === 'ios';
     const { width } = useWindowDimensions();
     const router = useRouter();
     const { currentUser, updateProfile, activeTheme } = useApp();
@@ -64,28 +96,6 @@ export default function ProfileEditScreen() {
     }, [currentUser?.birthdate, currentUser?.name, currentUser?.bio, isEditing, showDatePicker]);
 
     const slideAnim = useRef(new RNAnimated.Value(0)).current;
-    const heroProgress = useSharedValue(0);
-
-    useEffect(() => {
-        heroProgress.value = withTiming(1, {
-            duration: 500,
-        });
-    }, [heroProgress]);
-
-    const avatarMorphStyle = useAnimatedStyle(() => ({
-        borderRadius: 70,
-        transform: [
-            { scale: interpolate(heroProgress.value, [0, 1], [0.92, 1]) },
-        ],
-    }));
-
-    const contentEntranceStyle = useAnimatedStyle(() => ({
-        opacity: interpolate(heroProgress.value, [0, 1], [0.92, 1]),
-        transform: [
-            { translateY: interpolate(heroProgress.value, [0, 1], [16, 0]) },
-        ],
-    }));
-
     const handleBack = () => {
         router.back();
     };
@@ -197,7 +207,7 @@ export default function ProfileEditScreen() {
                     text: 'Delete',
                     style: 'destructive',
                     onPress: () => {
-                        const defaultAvatar = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200';
+                        const defaultAvatar = '';
                         setAvatar(defaultAvatar);
                         updateProfile({ avatar: defaultAvatar });
                     }
@@ -267,7 +277,7 @@ export default function ProfileEditScreen() {
             <StatusBar barStyle="light-content" />
 
             {/* Header */}
-            <View style={styles.header}>
+            <Animated.View style={styles.header}>
                 <Pressable 
                     style={styles.backButton} 
                     onPress={handleBack}
@@ -278,7 +288,7 @@ export default function ProfileEditScreen() {
                 <Pressable style={styles.backButton} onPress={showModal}>
                     <MaterialIcons name="edit" size={22} color="#ffffff" />
                 </Pressable>
-            </View>
+            </Animated.View>
 
             <KeyboardAvoidingView
                 style={{ flex: 1 }}
@@ -290,12 +300,26 @@ export default function ProfileEditScreen() {
                     showsVerticalScrollIndicator={false}
                 >
                     {/* Profile Photo Section */}
-                    <Animated.View style={[styles.avatarSection, contentEntranceStyle]} collapsable={false}>
-                        <Pressable onPress={() => setShowFullImage(true)}>
+                    <Animated.View style={styles.avatarSection} collapsable={false}>
+                        <Pressable onPress={() => setShowFullImage(true)} collapsable={false}>
                             <Animated.View
-                                style={[styles.avatarMorphShell, avatarMorphStyle]}
+                                style={styles.avatarMorphShell}
+                                {...(enableSharedMorph
+                                    ? {
+                                        sharedTransitionTag: 'profile-avatar-bounds',
+                                        sharedTransitionStyle: profileBoundsTransition,
+                                    }
+                                    : {})}
+                                collapsable={false}
                             >
-                                <Animated.Image source={{ uri: avatar }} style={styles.avatarMorphImage} />
+                                <SoulAvatar
+                                    sharedTransitionTag={enableSharedMorph ? 'profile-avatar' : undefined}
+                                    sharedTransitionStyle={enableSharedMorph ? profileMorphTransition : undefined}
+                                    uri={avatar}
+                                    style={styles.avatarMorphImage}
+                                    size={120}
+                                    iconSize={60}
+                                />
                             </Animated.View>
                         </Pressable>
                         <Animated.View>
@@ -306,7 +330,7 @@ export default function ProfileEditScreen() {
                     </Animated.View>
 
                     {/* Settings Rows */}
-                    <View style={styles.section}>
+                    <Animated.View style={styles.section}>
                         <Text style={styles.sectionLabel}>About</Text>
                         <View style={styles.settingsGroup}>
                             {isEditing === 'bio' ? (
@@ -338,9 +362,9 @@ export default function ProfileEditScreen() {
                                 />
                             )}
                         </View>
-                    </View>
+                    </Animated.View>
 
-                    <View style={styles.section}>
+                    <Animated.View style={styles.section}>
                         <Text style={styles.sectionLabel}>Name</Text>
                         <View style={styles.settingsGroup}>
                             {isEditing === 'name' ? (
@@ -371,9 +395,9 @@ export default function ProfileEditScreen() {
                                 />
                             )}
                         </View>
-                    </View>
+                    </Animated.View>
 
-                    <View style={styles.section}>
+                    <Animated.View style={styles.section}>
                         <Text style={styles.sectionLabel}>Birthdate</Text>
                         <View style={styles.settingsGroup}>
                             <SettingRow
@@ -392,7 +416,7 @@ export default function ProfileEditScreen() {
                                 }}
                             />
                         </View>
-                    </View>
+                    </Animated.View>
 
                     {/* Smart Birthday Picker Modal */}
                     <Modal
@@ -547,6 +571,7 @@ const styles = StyleSheet.create({
     avatarMorphImage: {
         width: '100%',
         height: '100%',
+        borderRadius: 70,
     },
     editButton: {
         marginTop: 12,

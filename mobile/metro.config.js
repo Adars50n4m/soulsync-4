@@ -1,5 +1,6 @@
 const { getDefaultConfig } = require("expo/metro-config");
 const { wrapWithReanimatedMetroConfig } = require("react-native-reanimated/metro-config");
+const path = require("path");
 
 module.exports = (() => {
     const config = getDefaultConfig(__dirname);
@@ -46,6 +47,9 @@ module.exports = (() => {
         // Ensure proper module resolution for WebSocket-related packages
         extraNodeModules: {
             ...config.resolver?.extraNodeModules,
+        },
+        alias: {
+            "@": path.resolve(__dirname),
         },
     };
     
