@@ -186,7 +186,10 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
             onRequestClose={onClose}
         >
             {/* Backdrop with Dynamic Transparency */}
-            <Animated.View style={[StyleSheet.absoluteFill, { opacity: backdropOpacity }]}>
+            <Animated.View 
+                style={[StyleSheet.absoluteFill, { opacity: backdropOpacity }]}
+                pointerEvents={isOpen ? 'auto' : 'none'}
+            >
                 <GlassView 
                     intensity={25} 
                     tint="dark" 
@@ -195,7 +198,7 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                 <Pressable 
                     style={[
                         styles.backdrop, 
-                        Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.45)' }
+                        Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.3)' }
                     ]} 
                     onPress={onClose} 
                 />

@@ -107,6 +107,8 @@ export interface ActiveCall {
     callerName?: string;
     callerAvatar?: string;
     roomId?: string; // Added for debugging and signaling
+    remoteMuted?: boolean;
+    remoteVideoOff?: boolean;
 }
 
 export interface Song {

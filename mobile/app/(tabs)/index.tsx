@@ -167,7 +167,7 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }
           </View>
         {/* Subtle dark tint overlay */}
         <Animated.View
-            style={[StyleSheet.absoluteFill, { borderRadius: 36, backgroundColor: 'rgba(15, 15, 20, 0.4)' }]}
+            style={[StyleSheet.absoluteFill, { borderRadius: 36, backgroundColor: 'rgba(0, 0, 0, 0.15)' }]}
         />
             
         {/* Content rendered safely as an overlay, decoupled from Reanimated's snapshot engine */}
@@ -396,6 +396,7 @@ export default function HomeScreen() {
     setIsMediaPickerVisible(false);
     setIsNoteModalVisible(false);
     setStatusMediaPreview(null);
+    setSelectedStatusContact(null);
   }, []);
 
   const handleSendStatus = async (mediaList: { uri: string; type: 'image' | 'video' | 'audio' }[], caption?: string) => {
@@ -561,7 +562,13 @@ export default function HomeScreen() {
                     <>
                       <Image source={{ uri: myStoryPreviewUrl }} style={styles.myStatusPreviewBgFull} />
                       <View style={styles.myStatusAvatarBadgeCorner} pointerEvents="none">
-                        <Image source={{ uri: proxySupabaseUrl(currentUser?.avatar) || '' }} style={styles.myStatusAvatarSmall} />
+                        {!!currentUser?.avatar ? (
+                           <Image source={{ uri: proxySupabaseUrl(currentUser.avatar) }} style={styles.myStatusAvatarSmall} />
+                        ) : (
+                           <View style={[styles.myStatusAvatarSmall, { backgroundColor: '#1c1c1e', alignItems: 'center', justifyContent: 'center' }]}>
+                               <MaterialIcons name="person" size={14} color="rgba(255,255,255,0.4)" />
+                           </View>
+                        )}
                         <View style={styles.myStatusAddBadgeBlue}>
                           <MaterialIcons name="add" size={14} color="#fff" />
                         </View>
@@ -571,7 +578,13 @@ export default function HomeScreen() {
                   ) : (
                     <>
                       <View style={styles.myStatusAvatarContainer} pointerEvents="none">
-                        <Image source={{ uri: proxySupabaseUrl(currentUser?.avatar) || '' }} style={styles.myStatusAvatar} />
+                        {!!currentUser?.avatar ? (
+                           <Image source={{ uri: proxySupabaseUrl(currentUser.avatar) }} style={styles.myStatusAvatar} />
+                        ) : (
+                           <View style={[styles.myStatusAvatar, { backgroundColor: '#1c1c1e', alignItems: 'center', justifyContent: 'center' }]}>
+                               <MaterialIcons name="person" size={24} color="rgba(255,255,255,0.4)" />
+                           </View>
+                        )}
                         <View style={styles.myStatusAddBadge}><MaterialIcons name="add" size={16} color="#fff" /></View>
                       </View>
                       <Text style={styles.startStoryText}>
@@ -710,7 +723,7 @@ const styles = StyleSheet.create({
   statusRail: { marginTop: 60, marginBottom: 0, overflow: 'visible' },
   statusContent: { paddingHorizontal: 20, paddingVertical: 12, paddingTop: 8, gap: 12, overflow: 'visible' },
   statusCard: { width: 140, height: 200, borderRadius: 28, backgroundColor: '#1a1a1a', zIndex: 10, overflow: 'hidden' },
-  myStatusBackground: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#262626', borderRadius: 28, overflow: 'hidden' },
+  myStatusBackground: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#121212', borderRadius: 28, overflow: 'hidden' },
   myStatusPreviewBg: { ...StyleSheet.absoluteFillObject, opacity: 0.42 },
   myStatusPreviewBgFull: { ...StyleSheet.absoluteFillObject, opacity: 1 },
   myStatusAvatarContainer: { position: 'relative', marginBottom: 16 },
@@ -755,7 +768,7 @@ const styles = StyleSheet.create({
   },
   // Removed overflow: 'hidden' to let shared elements escape during flight
   chatPillContainer: { flex: 1, borderRadius: 36, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.22)', overflow: 'hidden' },
-  pillBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15, 15, 20, 0.4)', opacity: 0.95 },
+  pillBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0, 0, 0, 0.15)', opacity: 0.95 },
   pillBlur: { ...StyleSheet.absoluteFillObject },
   pillContent: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 12 },
   avatarContainer: { position: 'relative' },

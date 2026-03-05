@@ -57,7 +57,13 @@ const SongItem = memo(({
             onPress={() => onPress(item)}
             style={[styles.songItem, isCurrent && styles.songItemActive]}
         >
-            <Image source={{ uri: item.image }} style={styles.songThumb} />
+            {!!item.image ? (
+                <Image source={{ uri: item.image }} style={styles.songThumb} />
+            ) : (
+                <View style={[styles.songThumb, { backgroundColor: '#111', alignItems: 'center', justifyContent: 'center' }]}>
+                    <MaterialIcons name="music-note" size={20} color="rgba(255,255,255,0.2)" />
+                </View>
+            )}
             <View style={styles.songInfo}>
                 <Text style={styles.songName} numberOfLines={1}>{item.name}</Text>
                 <Text style={styles.songArtistName} numberOfLines={1}>{item.artist}</Text>
@@ -91,7 +97,7 @@ const ListHeader = memo(({
         <View style={[styles.overlayHeader, isKeyboardVisible && { paddingBottom: 0 }]}>
             <View style={[styles.playerInfoRow, isKeyboardVisible && { marginBottom: 16 }]}>
                 <View style={[styles.artworkWrapper, isKeyboardVisible && { width: 60, height: 60, borderRadius: 12 }]}>
-                    {currentSong ? (
+                    {currentSong && currentSong.image ? (
                         <Image source={{ uri: currentSong.image }} style={styles.artwork} />
                     ) : (
                         <View style={[styles.artwork, { backgroundColor: '#1a1a1a', alignItems: 'center', justifyContent: 'center' }]}>

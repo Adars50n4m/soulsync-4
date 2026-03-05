@@ -28,6 +28,10 @@ function RootContent() {
         // Wait for everything to be ready before attempting any navigation
         if (!context || !isReady || !segments || (segments as any[]).length === 0) return;
 
+        // Skip auth guard redirections if there is an active call that needs the screen
+        const isCallActive = !!activeCall && (!activeCall.isIncoming || activeCall.isAccepted);
+        if (isCallActive) return;
+
         const inAuthGroup = segments[0] === 'login';
 
         // Use a small timeout to let the navigation state settle on Android
@@ -42,23 +46,43 @@ function RootContent() {
         }, 100);
 
         return () => clearTimeout(timer);
-    }, [currentUser, isReady, segments, router]);
+    }, [currentUser, isReady, segments, router, !!activeCall]);
 
     // --- TRAFFIC CONTROLLER FOR CALLS ---
     useEffect(() => {
-        if (!activeCall || !segments) return;
+        if (!activeCall || !segments || !isReady) return;
 
-        const path = segments.join('/');
-        const inCallScreen = path.includes('call');
+        const handleNavigation = () => {
+            const path = segments.join('/');
+            const inCallScreen = path.includes('call');
 
-        // 1. If call is outgoing (just initiated) or accepted, navigate to call screen
-        const shouldBeInCallScreen = !activeCall.isIncoming || activeCall.isAccepted;
+            // 1. If call is outgoing (just initiated) or accepted, navigate to call screen
+            const shouldBeInCallScreen = !activeCall.isIncoming || activeCall.isAccepted;
 
-        if (shouldBeInCallScreen && !activeCall.isMinimized && !inCallScreen) {
-            console.log('[TrafficController] Navigating to Call Screen. Path:', path);
-            router.push('/call');
-        }
-    }, [activeCall?.isAccepted, activeCall?.isIncoming, activeCall?.isMinimized, segments, context]);
+            if (shouldBeInCallScreen && !activeCall.isMinimized && !inCallScreen) {
+                console.log(`[TrafficController] Navigating to Call Screen. Current: ${path}, Should: /call`);
+                // Force a slightly longer delay on Android to ensure UI stack is ready
+                const delay = Platform.OS === 'android' ? 250 : 100;
+                setTimeout(() => {
+                    // Re-check condition before pushing
+                    if (!activeCall.isMinimized) {
+                        router.push('/call');
+                    }
+                }, delay);
+            }
+        };
+
+        handleNavigation();
+
+        // Re-check navigation when app comes to foreground (important for CallKit/lock screen answer)
+        const subscription = AppState.addEventListener('change', (nextAppState) => {
+            if (nextAppState === 'active') {
+                handleNavigation();
+            }
+        });
+
+        return () => subscription.remove();
+    }, [activeCall?.isAccepted, activeCall?.isIncoming, activeCall?.isMinimized, segments, isReady]);
 
   if (!context) {
     return (

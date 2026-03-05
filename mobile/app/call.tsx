@@ -57,7 +57,7 @@ export default function CallScreen() {
     const { width, height } = useWindowDimensions();
     const router = useRouter();
     const navigation = useNavigation();
-    const { activeCall, contacts, currentUser, otherUser, activeTheme, endCall: endAppCall, acceptCall: acceptAppCall, toggleMute: toggleAppMute, toggleMinimizeCall } = useApp();
+    const { activeCall, contacts, currentUser, otherUser, activeTheme, endCall: endAppCall, acceptCall: acceptAppCall, toggleMute: toggleAppMute, toggleVideo, toggleMinimizeCall } = useApp();
     useKeepAwake(); // Prevents screen from sleeping during call
 
     const [callDuration, setCallDuration] = useState(0);
@@ -65,7 +65,6 @@ export default function CallScreen() {
     const [localStream, setLocalStream] = useState<any>(null);
     const [remoteStream, setRemoteStream] = useState<any>(null);
     // const [isMuted, setIsMuted] = useState(false); // Managed by activeCall
-    const [isVideoOff, setIsVideoOff] = useState(false);
     const [isSpeaker, setIsSpeaker] = useState(false);
 
     // Picture-in-Picture (Android) State
@@ -208,30 +207,23 @@ export default function CallScreen() {
         })();
     }, [activeCall?.type, router]);
 
+    const hasInitiated = useRef(false);
+
     // Initialize WebRTC
     useEffect(() => {
         if (!activeCall || !currentUser || !otherUser) return;
 
-        if (!webRTCService) {
-            Alert.alert(
-                "Development Build Required",
-                "Real calls require 'react-native-webrtc' which does not work in Expo Go.\n\nPlease run: npx expo run:android"
-            );
-            if (navigation.canGoBack()) navigation.goBack();
-            return;
-        }
-
-        console.log('Initializing WebRTC for call...');
+        console.log('Initializing WebRTC for call screen...');
 
         const initCall = async () => {
             try {
+                // 1. Initialize logic (attach callbacks and set role)
                 webRTCService.initialize({
                     onStateChange: (state: CallState) => {
                         console.log('[CallScreen] WebRTC state changed:', state);
                         if (state === 'connecting' && callState === 'connected') return;
                         setCallState(state);
 
-                        // If WebRTC ended internally (ICE/connection failure), trigger app-level end
                         if (state === 'ended') {
                             console.log('[CallScreen] WebRTC ended internally — triggering app-level endCall');
                             if (endAppCallRef.current) endAppCallRef.current();
@@ -249,11 +241,19 @@ export default function CallScreen() {
                         console.error('WebRTC error:', error);
                         Alert.alert('Call Error', error);
                     },
-                });
+                }, !activeCall.isIncoming);
 
-                // If call is already active (e.g. returning from PiP), just restore streams
+                // 2. PROTOCOL ENGINE: Only start or answer ONCE per session
+                // This prevents re-running logic if UI re-renders (e.g. state change to ringing)
+                if (hasInitiated.current) {
+                    console.log('[CallScreen] Protocol already initiated, skipping re-init.');
+                    return;
+                }
+                
+                // If it's a completely existing call (PiP return), just sync state
                 if (webRTCService.isCallActive()) {
                     console.log('Restoring active call view...');
+                    hasInitiated.current = true;
                     const currentLocal = webRTCService.getLocalStream();
                     const currentRemote = webRTCService.getRemoteStream();
                     if (currentLocal) setLocalStream(currentLocal);
@@ -262,26 +262,23 @@ export default function CallScreen() {
                     return;
                 }
 
-                // Prepare media for everyone
+                hasInitiated.current = true;
+
+                // Prepare media and start signaling protocol
                 await webRTCService.prepareCall(activeCall.type);
 
-                // Logic to Start or Answer
                 if (activeCall.isIncoming) {
-                    // We are the Receiver
-                    if (activeCall.isAccepted) {
-                        // We accepted the call, now wait for Offer from Caller
-                        // webRTCService.answerCall will be triggered by handleSignal('offer')
-                        console.log('Waiting for offer from Caller...');
-                    }
+                    // Receiver: wait for Offer signal from Caller (handled by webRTCService internally)
+                    console.log('[CallScreen] Waiting for offer as Receiver...');
                 } else {
-                    // We are the Caller
-                    console.log('Starting call as Initiator...');
+                    // Caller: Start signaling protocol (Create and Send Offer)
+                    console.log('[CallScreen] Starting signaling as Caller...');
                     await webRTCService.startCall();
                 }
 
             } catch (e) {
                 console.warn('WebRTC initialization failed:', e);
-                Alert.alert("Call Failed", "Could not initialize Real WebRTC connection.");
+                Alert.alert("Call Failed", "Could not initialize WebRTC connection.");
                 handleEndCall();
             }
         };
@@ -406,13 +403,8 @@ export default function CallScreen() {
     };
 
     const handleToggleVideo = () => {
-        if (webRTCService) {
-            try {
-                const nowOff = webRTCService.toggleVideo();
-                setIsVideoOff(nowOff);
-            } catch (e) { setIsVideoOff(!isVideoOff); }
-        } else {
-            setIsVideoOff(!isVideoOff);
+        if (toggleVideo) {
+            toggleVideo();
         }
     };
 
@@ -459,7 +451,16 @@ export default function CallScreen() {
 
                     {/* 1. Background Layer (Remote Video or Blurred Avatar) */}
                     <View style={StyleSheet.absoluteFill}>
-                        {isVideo && RTCView && remoteStream && activeCall.isAccepted ? (
+                        {/* Always show blurred avatar base for a smooth experience (even during a live video) */}
+                        <Image
+                            source={{ uri: contact.avatar }}
+                            style={[styles.backgroundImage, { width, height }]}
+                            blurRadius={isVideo ? 60 : 50}
+                        />
+                        <View style={styles.overlay} />
+
+                        {/* Remote Video Stream - On top of the blurred avatar */}
+                        {isVideo && RTCView && remoteStream && activeCall.isAccepted && !activeCall.remoteVideoOff && (
                             <RTCView
                                 streamURL={typeof remoteStream.toURL === 'function' ? remoteStream.toURL() : remoteStream}
                                 style={styles.remoteVideo}
@@ -467,20 +468,21 @@ export default function CallScreen() {
                                 mirror={false}
                                 zOrder={0}
                             />
-                        ) : (
-                            <>
-                                <Image
-                                    source={{ uri: contact.avatar }}
-                                    style={[styles.backgroundImage, { width, height }]}
-                                    blurRadius={50}
-                                />
-                                <View style={styles.overlay} />
-                            </>
+                        )}
+
+                        {/* Video Toggled Off Overlay (Remote Side) */}
+                        {isVideo && activeCall.remoteVideoOff && (
+                            <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.3)' }]}>
+                                <SoulAvatar uri={contact.avatar || ''} size={150} />
+                                <View style={{ marginTop: 20, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 }}>
+                                    <Text style={{ color: 'white', fontWeight: '600' }}>{contact.name}'s Video is Off</Text>
+                                </View>
+                            </View>
                         )}
                         
                         {/* Connecting Overlay for Video */}
                         {(callState !== 'connected' && isVideo && activeCall.isAccepted) && (
-                            <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 5 }]}>
+                            <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 10 }]}>
                                 <ActivityIndicator size="small" color="#fff" style={{ marginBottom: 12 }} />
                                 <Text style={{ color: 'white', fontSize: 16, fontWeight: '500' }}>Connecting Soul Video...</Text>
                             </View>
@@ -516,31 +518,42 @@ export default function CallScreen() {
                                         <Text style={styles.contactName}>{contact.name}</Text>
                                         <Text style={styles.callStatus}>
                                             {callState === 'connected' ? formatDuration(callDuration) : 
-                                             callState === 'ringing' ? (activeCall.isIncoming ? 'Incoming Soul Call...' : 'Ringing...') : 
-                                             callState === 'connecting' ? 'Connecting...' : 'Ending...'}
+                                             callState === 'ended' ? 'Ending...' :
+                                             (activeCall.isIncoming && !activeCall.isAccepted) ? 'Incoming Soul Call...' : 
+                                             (callState === 'ringing' && !activeCall.isIncoming) ? 'Ringing...' : 
+                                             'Connecting...'}
                                         </Text>
                                     </View>
                                 </View>
                             )}
 
-                            {/* Self Video (Draggable) */}
-                            {isVideo && localStream && !isVideoOff && (
+                            {/* Self Video (Draggable) - Replaces the conditional check to ensure PiP stability */}
+                            {isVideo && (
                                 <GestureDetector gesture={panGesture}>
                                     <Animated.View style={[styles.selfVideoContainer, selfVideoStyle]}>
-                                        <RTCView
-                                            streamURL={typeof localStream.toURL === 'function' ? localStream.toURL() : localStream}
-                                            style={styles.selfVideo}
-                                            objectFit="cover"
-                                            mirror={true}
-                                            zOrder={1}
-                                        />
+                                        {localStream && !activeCall.isVideoOff ? (
+                                            <RTCView
+                                                streamURL={typeof localStream.toURL === 'function' ? localStream.toURL() : localStream}
+                                                style={styles.selfVideo}
+                                                objectFit="cover"
+                                                mirror={true}
+                                                zOrder={1}
+                                            />
+                                        ) : (
+                                            <View style={styles.selfVideoPlaceholder}>
+                                                <SoulAvatar uri={currentUser?.avatar} size={50} />
+                                                <View style={styles.videoOffIndicator}>
+                                                    <MaterialIcons name="videocam-off" size={14} color="white" />
+                                                </View>
+                                            </View>
+                                        )}
                                     </Animated.View>
                                 </GestureDetector>
                             )}
 
                             {/* Footer Controls */}
                             <GlassView intensity={35} tint="dark" style={[styles.controlsBar, { marginBottom: Math.max(insets.bottom, 40) }]}>
-                                {callState !== 'connected' && activeCall.isIncoming ? (
+                                {callState !== 'connected' && activeCall.isIncoming && !activeCall.isAccepted ? (
                                     <View style={styles.incomingActionsRow}>
                                         <View style={styles.incomingAction}>
                                             <Pressable style={[styles.actionButton, { backgroundColor: '#ef4444' }]} onPress={handleEndCall}>
@@ -562,8 +575,8 @@ export default function CallScreen() {
                                         </Pressable>
 
                                         {isVideo && (
-                                            <Pressable style={[styles.controlBtn, isVideoOff && styles.controlBtnActive]} onPress={handleToggleVideo}>
-                                                <MaterialIcons name={isVideoOff ? "videocam-off" : "videocam"} size={28} color={isVideoOff ? "#000" : "white"} />
+                                            <Pressable style={[styles.controlBtn, activeCall.isVideoOff && styles.controlBtnActive]} onPress={handleToggleVideo}>
+                                                <MaterialIcons name={activeCall.isVideoOff ? "videocam-off" : "videocam"} size={28} color={activeCall.isVideoOff ? "#000" : "white"} />
                                             </Pressable>
                                         )}
 
@@ -652,7 +665,15 @@ const styles = StyleSheet.create({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: '#333',
+        backgroundColor: '#1f1f1f',
+    },
+    videoOffIndicator: {
+        position: 'absolute',
+        bottom: 8,
+        right: 8,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        padding: 4,
+        borderRadius: 10,
     },
     content: {
         flex: 1,

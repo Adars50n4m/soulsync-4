@@ -830,10 +830,17 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     }, []);
 
     const openCallModal = () => {
-        // Measure call button position
-        callButtonRef.current?.measure((x, y, width, height, pageX, pageY) => {
-            setCallOptionsPosition({ x: pageX - 80, y: pageY + height + 8 });
-        });
+        // Measure call button position safely
+        if (callButtonRef.current) {
+            callButtonRef.current.measure((x, y, width, height, pageX, pageY) => {
+                const safeY = (typeof pageY === 'number' && !isNaN(pageY) && pageY > 0) ? pageY : 50;
+                const safeHeight = (typeof height === 'number' && !isNaN(height) && height > 0) ? height : 40;
+                setCallOptionsPosition({ x: 0, y: safeY + safeHeight + 8 });
+            });
+        } else {
+            setCallOptionsPosition({ x: 0, y: 100 }); // Safe generic fallback
+        }
+        
         setShowCallModal(true);
         RNAnimated.spring(modalAnim, {
             toValue: 1,
@@ -1513,42 +1520,44 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             />
 
             {/* Call Options Dropdown */}
-            <Modal visible={showCallModal} transparent animationType="none" onRequestClose={closeCallModal}>
-                <Pressable style={styles.modalOverlay} onPress={closeCallModal}>
-                    <RNAnimated.View
-                        style={[
-                            styles.callDropdown,
-                            {
-                                top: callOptionsPosition.y,
-                                right: 16,
-                                opacity: modalAnim,
-                                transform: [{
-                                    scale: modalAnim.interpolate({
-                                        inputRange: [0, 1],
-                                        outputRange: [0.9, 1],
-                                    })
-                                }]
-                            }
-                        ]}
-                    >
-                        <GlassView intensity={35} tint="dark" style={styles.callDropdownBlur} >
-                            <Pressable style={styles.callDropdownItem} onPress={() => handleCall('audio')}>
-                                <View style={[styles.callDropdownIcon, { backgroundColor: 'rgba(34, 197, 94, 0.15)' }]}>
-                                    <MaterialIcons name="call" size={20} color="#22c55e" />
-                                </View>
-                                <Text style={styles.callDropdownText}>Audio</Text>
-                            </Pressable>
-                            <View style={styles.callDropdownDivider} />
-                            <Pressable style={styles.callDropdownItem} onPress={() => handleCall('video')}>
-                                <View style={[styles.callDropdownIcon, { backgroundColor: 'rgba(244, 63, 94, 0.15)' }]}>
-                                    <MaterialIcons name="videocam" size={20} color="#f43f5e" />
-                                </View>
-                                <Text style={styles.callDropdownText}>Video</Text>
-                            </Pressable>
-                        </GlassView>
-                    </RNAnimated.View>
-                </Pressable>
-            </Modal>
+            {showCallModal && (
+                <View style={[StyleSheet.absoluteFill, { zIndex: 100, elevation: 100 }]}>
+                    <Pressable style={styles.modalOverlay} onPress={closeCallModal}>
+                        <RNAnimated.View
+                            style={[
+                                styles.callDropdown,
+                                {
+                                    top: callOptionsPosition.y,
+                                    right: 16,
+                                    opacity: modalAnim,
+                                    transform: [{
+                                        scale: modalAnim.interpolate({
+                                            inputRange: [0, 1],
+                                            outputRange: [0.9, 1],
+                                        })
+                                    }]
+                                }
+                            ]}
+                        >
+                            <GlassView intensity={35} tint="dark" style={styles.callDropdownBlur} >
+                                <Pressable style={styles.callDropdownItem} onPress={() => handleCall('audio')}>
+                                    <View style={[styles.callDropdownIcon, { backgroundColor: 'rgba(34, 197, 94, 0.15)' }]}>
+                                        <MaterialIcons name="call" size={20} color="#22c55e" />
+                                    </View>
+                                    <Text style={styles.callDropdownText}>Audio</Text>
+                                </Pressable>
+                                <View style={styles.callDropdownDivider} />
+                                <Pressable style={styles.callDropdownItem} onPress={() => handleCall('video')}>
+                                    <View style={[styles.callDropdownIcon, { backgroundColor: 'rgba(244, 63, 94, 0.15)' }]}>
+                                        <MaterialIcons name="videocam" size={20} color="#f43f5e" />
+                                    </View>
+                                    <Text style={styles.callDropdownText}>Video</Text>
+                                </Pressable>
+                            </GlassView>
+                        </RNAnimated.View>
+                    </Pressable>
+                </View>
+            )}
 
             {/* Music Player Overlay */}
             <MusicPlayerOverlay

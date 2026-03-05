@@ -143,6 +143,7 @@ interface AppContextType {
     endCall: () => Promise<void>;
     toggleMinimizeCall: (val: boolean) => void;
     toggleMute: () => void;
+    toggleVideo: () => void;
     playSong: (song: Song) => Promise<void>;
     togglePlayMusic: () => Promise<void>;
     toggleFavoriteSong: (song: Song) => Promise<void>;
@@ -1732,7 +1733,12 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
             nativeCallBridge.initialize(currentUser.id, {
                 onCallAnswered: (callId, payload) => {
                     console.log('[AppContext] Native call answered:', callId);
+                    soundService.stopAll(); // Instantly kill ringing sound
+                    // Dismiss the duplicate local notification we sent in fallback if answering native
+                    notificationService.dismissCallNotification(callId).catch(() => {});
+                    
                     const caller = contactsRef.current.find((c: Contact) => c.id === payload.callerId);
+                    
                     setActiveCall({
                         callId: payload.callId,
                         contactId: payload.callerId,
@@ -1747,9 +1753,38 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                         callerName: caller?.name || payload.callerName || 'Unknown',
                         callerAvatar: caller?.avatar,
                     });
+
+                    // Send accept signal back to caller so WebRTC handshake starts
+                    const currentAuthUser = currentUserRef.current;
+                    if (currentAuthUser) {
+                        callService.acceptCall({
+                            type: 'call-accept',
+                            callId: payload.callId,
+                            roomId: payload.roomId || payload.callId,
+                            callerId: payload.callerId,
+                            calleeId: currentAuthUser.id,
+                            callType: payload.callType,
+                            timestamp: new Date().toISOString()
+                        }).catch(err => console.error('[AppContext] Failed to broadcast accept from native answer:', err));
+                    }
                 },
                 onCallDeclined: (callId) => {
                     console.log('[AppContext] Native call declined:', callId);
+                    notificationService.dismissCallNotification(callId).catch(() => {});
+                    
+                    const currentActive = activeCallRef.current;
+                    const currentAuthUser = currentUserRef.current;
+                    if (currentActive && currentAuthUser) {
+                        callService.rejectCall({
+                            type: 'call-reject',
+                            callId: currentActive.callId,
+                            roomId: currentActive.callId,
+                            callerId: currentActive.contactId,
+                            calleeId: currentAuthUser.id,
+                            callType: currentActive.type,
+                            timestamp: new Date().toISOString()
+                        }).catch(e => console.error('[AppContext] Failed to broadcast reject from native decline:', e));
+                    }
                     setActiveCall(null);
                 },
                 onCallConnected: (callId) => {
@@ -1810,8 +1845,9 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                                         callType: signal.callType,
                                         roomId: signal.roomId || signal.callId,
                                     });
-                                } else if (__DEV__) {
-                                    console.log('[AppContext] Simulator/Dev mode: Triggering local notification fallback');
+                                } else {
+                                    // Fallback for Simulators or if Native Module is missing
+                                    console.log('[AppContext] Simulator/Dev mode or No Native Module: Triggering local push notification');
                                     notificationService.showIncomingCall({
                                         callId: signal.callId,
                                         callerId: signal.callerId,
@@ -1820,13 +1856,6 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                                     });
                                 }
 
-                                // Also show the in-app notification (for foreground state)
-                                notificationService.showIncomingCall({
-                                    callId: signal.callId,
-                                    callerId: signal.callerId,
-                                    callerName: caller?.name || "Unknown User",
-                                    callType: signal.callType
-                                });
                                 callService.notifyRinging(signal.roomId || signal.callId, signal.callerId, signal.callType);
                                 // The native call UI (displayIncomingCall) will play the system ringtone.
                                 // We no longer play a custom MP3 here to avoid double ringing.
@@ -1843,8 +1872,12 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                     case 'call-accept':
                         if (currentActiveCall && !currentActiveCall.isIncoming) {
                             setActiveCall(prev => prev ? { ...prev, isAccepted: true, isRinging: false, startTime: Date.now() } : null);
-                            const { webRTCService } = require('../services/WebRTCService');
-                            await webRTCService.onCallAccepted();
+                            const { webRTCService: wrtc } = require('../services/WebRTCService');
+                            
+                            // IDENTIFY ROLE IMMEDIATELY TO UNBLOCK SIGNALING
+                            wrtc.setInitiator(true);
+                            await wrtc.onCallAccepted();
+                            
                             // Report connected to native UI
                             nativeCallBridge.reportCallConnected(signal.callId);
                             // Stop sound when accepted
@@ -1877,6 +1910,16 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                         // End native call UI
                         nativeCallBridge.reportCallEnded(signal.callId);
                         await notificationService.dismissCallNotification(signal.callId);
+                        break;
+                    case 'video-toggle':
+                        if (currentActiveCall && currentActiveCall.callId === signal.callId) {
+                            setActiveCall(prev => prev ? { ...prev, remoteVideoOff: signal.payload?.isVideoOff } : null);
+                        }
+                        break;
+                    case 'audio-toggle':
+                        if (currentActiveCall && currentActiveCall.callId === signal.callId) {
+                            setActiveCall(prev => prev ? { ...prev, remoteMuted: signal.payload?.isMuted } : null);
+                        }
                         break;
                 }
             };
@@ -1940,6 +1983,9 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
             callerName: contact?.name,
             callerAvatar: contact?.avatar
         });
+
+        const { webRTCService: wrtc } = require('../services/WebRTCService');
+        wrtc.setInitiator(true);
 
         if (callId) {
             nativeCallBridge.sendCallPush(
@@ -2020,9 +2066,46 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     }, []);
 
     const toggleMute = useCallback(() => {
+        const active = activeCallRef.current;
+        const currentUserId = currentUserRef.current?.id;
+        if (!active || !currentUserId) return;
+
         const { webRTCService } = require('../services/WebRTCService');
         const isMuted = webRTCService.toggleMute();
         setActiveCall(prev => prev ? { ...prev, isMuted } : null);
+
+        // Sync with partner
+        callService.sendSignal({
+            type: 'audio-toggle',
+            callId: active.callId!,
+            callerId: currentUserId,
+            calleeId: active.contactId,
+            callType: active.type,
+            payload: { isMuted },
+            timestamp: new Date().toISOString()
+        }).catch(err => console.warn('[AppContext] Failed to sync mute state:', err));
+    }, []);
+
+    const toggleVideo = useCallback(() => {
+        const active = activeCallRef.current;
+        const currentUserId = currentUserRef.current?.id;
+        if (!active || !currentUserId || active.type !== 'video') return;
+
+        const { webRTCService } = require('../services/WebRTCService');
+        // webRTCService.toggleVideo returns true if the track was enabled (is now off)
+        const isNowOff = webRTCService.toggleVideo();
+        setActiveCall(prev => prev ? { ...prev, isVideoOff: isNowOff } : null);
+
+        // Sync with partner
+        callService.sendSignal({
+            type: 'video-toggle',
+            callId: active.callId!,
+            callerId: currentUserId,
+            calleeId: active.contactId,
+            callType: active.type,
+            payload: { isVideoOff: isNowOff },
+            timestamp: new Date().toISOString()
+        }).catch(err => console.warn('[AppContext] Failed to sync video state:', err));
     }, []);
 
     // --- STATUS LOGIC ---
@@ -2246,7 +2329,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         currentUser, otherUser, isLoggedIn: !!currentUser, login, logout,
         contacts, messages, calls, statuses, theme, activeTheme: THEMES[theme], activeCall, musicState, isReady, isCloudConnected, onlineUsers,
         addMessage, updateMessage, updateMessageStatus, deleteMessage, addReaction, addCall, deleteCall, clearCalls, addStatus, deleteStatus, setTheme,
-        startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, playSong, togglePlayMusic, toggleFavoriteSong,
+        startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, toggleVideo, playSong, togglePlayMusic, toggleFavoriteSong,
         seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView, toggleStatusLike,
         typingUsers, sendTyping, saveNote, deleteNote, toggleHeart, clearChatMessages,
         biometricEnabled, pinEnabled, pin, isLocked, setBiometricEnabled, setPinEnabled, setPin, unlockApp,
@@ -2254,7 +2337,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     }), [
         currentUser, otherUser, contacts, messages, calls, statuses, theme, activeCall, musicState, isReady, isCloudConnected, onlineUsers,
         login, logout, addMessage, updateMessage, updateMessageStatus, deleteMessage, addReaction, addCall, deleteCall, clearCalls, addStatus, deleteStatus, setTheme,
-        startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, playSong, togglePlayMusic, toggleFavoriteSong,
+        startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, toggleVideo, playSong, togglePlayMusic, toggleFavoriteSong,
         seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView, toggleStatusLike,
         typingUsers, sendTyping, saveNote, deleteNote, toggleHeart, clearChatMessages,
         biometricEnabled, pinEnabled, pin, isLocked, setBiometricEnabled, setPinEnabled, setPin, unlockApp,

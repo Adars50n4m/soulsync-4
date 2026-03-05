@@ -300,7 +300,7 @@ export const StatusViewerModal = ({
             currentStory.type === 'text' && { backgroundColor: currentStory.backgroundColor || '#151515' }
           ]}
         >
-          {currentStory.type === 'image' && !mediaLoadFailed && (
+          {currentStory.type === 'image' && !mediaLoadFailed && !!currentStory.url && (
             <Image
               source={{ uri: currentStory.url }}
               style={styles.mediaBackdrop}
@@ -325,7 +325,7 @@ export const StatusViewerModal = ({
                  {currentStory.caption || currentStory.url} 
                </Text>
              </View>
-          ) : currentStory.type === 'image' && !mediaLoadFailed ? (
+          ) : currentStory.type === 'image' && !mediaLoadFailed && !!currentStory.url ? (
             <Image
               source={{ uri: currentStory.url }}
               style={[styles.media, { width: width }]}
@@ -510,7 +510,14 @@ export const StatusViewerModal = ({
   // Android: use a full-screen View overlay instead of Modal to avoid
   // Android Dialog bugs where Modal silently fails to re-show after dismiss.
   if (Platform.OS === 'android') {
-    return <View style={styles.androidOverlay}>{content}</View>;
+    return (
+      <View 
+        style={styles.androidOverlay} 
+        pointerEvents={visible ? 'auto' : 'none'}
+      >
+        {content}
+      </View>
+    );
   }
 
   // iOS: use native Modal for proper window layering

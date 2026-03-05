@@ -105,11 +105,16 @@ class ChatService {
         if (!this.socket) {
             console.log(`[ChatService] Connecting to ${SERVER_URL} as ${userId}`);
             this.socket = io(SERVER_URL, {
-                // Allow polling fallback for better iOS/Localtunnel compatibility
+                // Must use polling first so that 'extraHeaders' are correctly sent.
+                // Raw WebSockets in RN often fail to attach custom headers for tunnel bypass.
                 transports: ['polling', 'websocket'],
-                extraHeaders: { 'bypass-tunnel-reminder': 'true' },
-                reconnectionAttempts: 10,
-                reconnectionDelay: 2000,
+                extraHeaders: { 
+                    'bypass-tunnel-reminder': 'true',
+                    'User-Agent': 'PostmanRuntime/7.28.4' // Sometimes helps bypass strict tunnels
+                },
+                reconnectionAttempts: 20,
+                reconnectionDelay: 1000,
+                timeout: 30000,
             });
             
             const doRegister = () => {

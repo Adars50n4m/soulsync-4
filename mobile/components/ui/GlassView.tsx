@@ -29,7 +29,7 @@ export const GlassView = ({
             experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
             style={[
                 styles.container, 
-                { backgroundColor: tint === 'dark' ? 'rgba(15, 15, 20, 0.4)' : 'rgba(255, 255, 255, 0.2)' },
+                { backgroundColor: tint === 'dark' ? 'rgba(0, 0, 0, 0.2)' : 'rgba(255, 255, 255, 0.1)' },
                 style
             ]} 
             {...rest}

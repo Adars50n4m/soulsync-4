@@ -91,8 +91,12 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
       setIsLoading(false);
   };
 
+  // Internal state to handle the animation-unmount dance
+  const [renderState, setRenderState] = useState(visible);
+
   useEffect(() => {
     if (visible) {
+      setRenderState(true);
       // Defer state updates to avoid synchronous setState in effect warning
       Promise.resolve().then(() => {
         if (viewMode === 'photos') {
@@ -110,7 +114,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
         }),
         Animated.timing(opacityAnim, {
           toValue: 1,
-          duration: 200,
+          duration: 250,
           useNativeDriver: true,
         }),
       ]).start();
@@ -118,35 +122,23 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
       Animated.parallel([
         Animated.timing(slideAnim, {
           toValue: sheetHeight,
-          duration: 200,
+          duration: 250,
           useNativeDriver: true,
         }),
         Animated.timing(opacityAnim, {
           toValue: 0,
-          duration: 200,
+          duration: 250,
           useNativeDriver: true,
         }),
-      ]).start();
+      ]).start(() => {
+         setRenderState(false);
+      });
     }
   }, [visible]);
 
   const handleClose = () => {
-    Animated.parallel([
-      Animated.timing(slideAnim, {
-        toValue: sheetHeight,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-      Animated.timing(opacityAnim, {
-        toValue: 0,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      onClose();
-      slideAnim.setValue(0);
-      opacityAnim.setValue(0);
-    });
+    // Just trigger the prop; the useEffect will handle the animation
+    onClose();
   };
 
   const handleHaptic = () => {
@@ -228,7 +220,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
       return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
   };
 
-  if (!visible) return null;
+  if (!renderState) return null;
 
   // Combined data: First item is a dummy for "Camera" if not in album, rest are photos
   const gridData = viewMode === 'albums' 
@@ -236,7 +228,10 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
     : (selectedAlbum ? photos : [ { id: 'camera-tile' }, ...photos ]);
 
   return (
-    <Animated.View style={[styles.overlay, { opacity: opacityAnim }]}>
+    <Animated.View 
+        style={[styles.overlay, { opacity: opacityAnim }]} 
+        pointerEvents={visible ? 'auto' : 'none'}
+    >
       <Pressable style={styles.backdrop} onPress={handleClose} />
       <Animated.View
         style={[

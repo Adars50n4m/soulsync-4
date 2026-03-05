@@ -20,47 +20,9 @@ try {
 }
 
 // STUN/TURN servers for NAT traversal
-// STUN/TURN servers for NAT traversal
 // IMPORTANT: For production (4G/5G), you MUST add a TURN server.
 const ICE_SERVERS: RTCIceServer[] = [
-    // Google STUN servers (Good for testing, but not for 4G/5G symmetric NAT)
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-
-    // OpenRelay Free TURN Servers (Fixes 4G/5G connection issues)
-    {
-        urls: 'turn:openrelay.metered.ca:80',
-        username: 'openrelayproject',
-        credential: 'openrelayproject'
-    },
-    {
-        urls: 'turn:openrelay.metered.ca:443',
-        username: 'openrelayproject',
-        credential: 'openrelayproject'
-    },
-    {
-        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-        username: 'openrelayproject',
-        credential: 'openrelayproject'
-    },
-    // Add a public TURN server if possible, or ensure you are testing on WiFi.
-    // For 4G/5G, you strictly need a TURN server.
-    // --- PRODUCTION CONFIGURATION START ---
-    // Uncomment and replace with your credentials (e.g. from Metered.ca or OpenRelay)
-    /*
-    {
-        urls: 'turn:global.turn.metered.ca:80',
-        username: 'YOUR_USERNAME',
-        credential: 'YOUR_PASSWORD'
-    },
-    {
-        urls: 'turn:global.turn.metered.ca:443',
-        username: 'YOUR_USERNAME',
-        credential: 'YOUR_PASSWORD'
-    },
-    */
-    // --- PRODUCTION CONFIGURATION END ---
 ];
 
 type CallType = 'audio' | 'video';
@@ -81,22 +43,31 @@ class WebRTCService {
     private callState: CallState = 'idle';
     private callbacks: WebRTCCallbacks | null = null;
     private isInitiator: boolean = false;
+    private partnerHasAccepted: boolean = false;
     private pendingCandidates: RTCIceCandidate[] = [];
 
     /**
      * Initialize WebRTC service with callbacks
      */
-    initialize(callbacks: WebRTCCallbacks): void {
+    initialize(callbacks: WebRTCCallbacks, isInitiator: boolean): void {
         this.callbacks = callbacks;
+        this.isInitiator = isInitiator;
         
-        // If we already have a peer connection, we are re-attaching (e.g. returning from PiP)
+        console.log(`[WebRTCService] Initializing. Role: ${isInitiator ? 'Initiator' : 'Receiver'}, CurrentPC: ${!!this.peerConnection}`);
+
+        // If we already have a peer connection, we are re-attaching callbacks
         if (this.peerConnection) {
             console.log('[WebRTCService] Re-attaching callbacks to existing call');
             this.callbacks.onStateChange(this.callState);
             if (this.localStream) this.callbacks.onLocalStream(this.localStream);
             if (this.remoteStream) this.callbacks.onRemoteStream(this.remoteStream);
         } else {
+            // Fresh call
+            this.localStream = null;
+            this.remoteStream = null;
+            this.partnerHasAccepted = false;
             this.setState('idle');
+            this.pendingCandidates = [];
         }
     }
 
@@ -105,6 +76,13 @@ class WebRTCService {
      */
     setCallbacks(callbacks: WebRTCCallbacks | null): void {
         this.callbacks = callbacks;
+    }
+
+    /**
+     * Set the role of this device (initiator/caller or receiver/callee)
+     */
+    setInitiator(val: boolean): void {
+        this.isInitiator = val;
     }
 
     /**
@@ -137,11 +115,14 @@ class WebRTCService {
         await this.getMediaStream();
     }
 
-    /**
-     * Start a call (as initiator)
-     */
     async startCall(): Promise<void> {
+        if (this.isCallActive() && this.isInitiator) {
+            console.log('[WebRTCService] startCall ignored: Call already active as Initiator.');
+            return;
+        }
+
         try {
+            console.log('[WebRTCService] Starting call as Initiator');
             this.isInitiator = true;
             this.setState('ringing');
 
@@ -155,6 +136,12 @@ class WebRTCService {
 
             // We wait for 'call-accepted' from the partner.
             console.log('[WebRTCService] ✅ Call initiated, waiting for partner to accept...');
+            
+            // If the partner accepted the call so fast that we received it before startCall finished:
+            if (this.partnerHasAccepted) {
+                console.log('[WebRTCService] ⚡ Partner already accepted before startCall finished. Generating offer instantly.');
+                await this.onCallAccepted();
+            }
         } catch (error: any) {
             console.error('[WebRTCService] ❌ Failed to start call:', error);
             this.callbacks?.onError(`Failed to start call: ${error.message}`);
@@ -166,13 +153,21 @@ class WebRTCService {
      * Triggered when the initiator receives 'call-accepted'
      */
     async onCallAccepted(): Promise<void> {
+        this.partnerHasAccepted = true;
         console.log(`[WebRTCService] onCallAccepted called. peerConnection: ${!!this.peerConnection}, isInitiator: ${this.isInitiator}`);
+        
         if (this.isInitiator && this.peerConnection) {
+            // Guard: don't create multiple offers if it gets called twice somehow
+            if (this.peerConnection.signalingState !== 'stable') {
+                console.log('[WebRTCService] Already creating offer or not stable, ignoring duplicate onCallAccepted.');
+                return;
+            }
+            
             console.log('[WebRTCService] Partner accepted call, creating offer...');
             this.setState('connecting');
             await this.createOffer();
-        } else if (this.isInitiator) {
-            console.warn('[WebRTCService] ⚠️ Partner accepted but peerConnection is not ready yet');
+        } else {
+            console.log('[WebRTCService] ⏳ Partner accepted but we are not ready. Offer will generate when startCall completes.');
         }
     }
 
@@ -305,6 +300,8 @@ class WebRTCService {
 
         this.remoteStream = null;
         this.pendingCandidates = [];
+        this.partnerHasAccepted = false;
+        this.isInitiator = false;
 
         // Notify callbacks
         if (this.callbacks) {
@@ -382,6 +379,7 @@ class WebRTCService {
     // Private methods
 
     private async getMediaStream(): Promise<void> {
+        let timer: NodeJS.Timeout | null = null;
         try {
             console.log('Getting media stream for', this.callType);
 
@@ -389,32 +387,55 @@ class WebRTCService {
                 audio: true,
                 video: this.callType === 'video' ? {
                     facingMode: 'user',
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 },
-                    frameRate: { ideal: 30 },
                 } : false,
             };
 
-            this.localStream = await mediaDevices.getUserMedia(constraints) as MediaStream;
+            const mediaPromise = (mediaDevices.getUserMedia(constraints) as Promise<MediaStream>).then(res => {
+                if (timer) clearTimeout(timer);
+                return res;
+            });
+            
+            const timeoutPromise = new Promise<MediaStream>((_, reject) => {
+                timer = setTimeout(() => reject(new Error('getUserMedia timed out after 3 seconds')), 3000);
+            });
+
+            this.localStream = await Promise.race([mediaPromise, timeoutPromise]);
             this.callbacks?.onLocalStream(this.localStream);
             console.log('Local stream obtained successfully');
 
         } catch (error: any) {
+            if (timer) clearTimeout(timer);
             console.warn('[WebRTCService] ⚠️ getMediaStream failed:', error.message);
             
-            // Simulator Fallback: If camera fails but it's a simulator, don't crash
-            if (Platform.OS === 'ios' && error.message?.includes('found')) {
-                console.log('[WebRTCService] 🛡️ Simulator detected or no camera found, proceeding with audio-only or black stream');
-                // Try audio only as last resort
+            // If the failure was a timeout or missing hardware, try audio-only fallback
+            if ((Platform.OS === 'ios' || Platform.OS === 'android') && 
+                (error.message?.includes('found') || error.message?.includes('time') || error.message?.includes('device'))) {
+                
+                console.log('[WebRTCService] 🛡️ Proceeding with audio-only fallback stream...');
+                let audioTimer: NodeJS.Timeout | null = null;
                 try {
-                    this.localStream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
+                    const audioOnlyPromise = (mediaDevices.getUserMedia({ audio: true, video: false }) as Promise<MediaStream>).then(res => {
+                        if (audioTimer) clearTimeout(audioTimer);
+                        return res;
+                    });
+                    const audioTimeout = new Promise<MediaStream>((_, reject) => {
+                        audioTimer = setTimeout(() => reject(new Error('Audio-only fallback also timed out')), 5000);
+                    });
+                    
+                    this.localStream = await Promise.race([audioOnlyPromise, audioTimeout]);
                     this.callbacks?.onLocalStream(this.localStream);
                     return;
-                } catch (e) {
-                    console.error('[WebRTCService] ❌ Audio also failed:', e);
+                } catch (e: any) {
+                    if (audioTimer) clearTimeout(audioTimer);
+                    console.warn('[WebRTCService] ⚠️ Audio fallback also failed or timed out:', e.message);
                 }
             }
-            throw new Error(`Media access denied: ${error.message}`);
+            
+            // Critical fail-soft: even if NO media is available (Simulator/Busy Hardware), 
+            // do NOT crash. Let signaling proceed so the call can at least connect.
+            this.localStream = null;
+            this.callbacks?.onLocalStream(null);
+            console.log('[WebRTCService] ⚠️ Proceeding with NO local stream. Signaling will still attempt to connect.');
         }
     }
 
@@ -491,7 +512,7 @@ class WebRTCService {
                 // 'disconnected' is transient – ICE will attempt to repair. Do NOT end call.
                 console.warn('[WebRTCService] ICE transiently disconnected. Waiting for recovery...');
             } else if (iceState === 'failed') {
-                console.error('[WebRTCService] ICE failed permanently. If on 4G/5G, a TURN server is required.');
+                console.warn('[WebRTCService] ICE failed permanently. If on 4G/5G, a TURN server is required.');
                 this.endCall();
             } else if (iceState === 'closed') {
                 console.log('[WebRTCService] ICE closed.');
@@ -520,10 +541,15 @@ class WebRTCService {
     private async createAnswer(): Promise<void> {
         if (!this.peerConnection) return;
 
-        const answer = await this.peerConnection.createAnswer();
+        const answerOptions = {
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: this.callType === 'video',
+        };
+
+        const answer = await this.peerConnection.createAnswer(answerOptions);
         await this.peerConnection.setLocalDescription(answer);
 
-        console.log('Sending answer...');
+        console.log('[WebRTCService] Sending answer...');
         callService.sendAnswer(answer);
     }
 

@@ -56,8 +56,9 @@ function loadCallKeep(): any {
   }
 
   try {
-    // Uncomment the line below AFTER running: npx expo install react-native-callkeep
-    return require('react-native-callkeep').default;
+    const CallKeepModule = require('react-native-callkeep');
+    // Try both .default and direct object for maximum compatibility with different Metro versions
+    return CallKeepModule.default || CallKeepModule;
   } catch (e) {
     console.log('[NativeCallService] react-native-callkeep JS loading failed');
     return null;
