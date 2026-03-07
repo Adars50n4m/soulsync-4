@@ -216,8 +216,7 @@ Join couples building deeper connections:
 
 ---
 
-**Made with 💕 by Adars50n4m**
-
+**Made with 💕 by Adarsh (Founder & Owner)**
 *"The greatest gift you can give to another person is your presence, your authentic self, and your time. Soul makes that easier."*
 
 ⭐ **If you love Soul, please give us a star and share with your partner!**
