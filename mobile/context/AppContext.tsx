@@ -417,39 +417,43 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     useEffect(() => {
         if (!currentUser) return;
 
+        let isRunning = false; // guard against concurrent polls
+
         const pollOtherUserStatus = async () => {
+            // Only poll when app is in foreground to avoid RCTNetworking crashes
+            if (AppState.currentState !== 'active') return;
+            if (isRunning) return;
+            isRunning = true;
+
             const otherId = otherUserRef.current?.id;
-            if (!otherId) return;
-            
-            console.log(`[Presence] Polling status for: ${otherId}`);
+            if (!otherId) { isRunning = false; return; }
+
             try {
                 const { data, error } = await supabase
                     .from('profiles')
-                    .select('is_online, last_seen, name')
+                    .select('is_online, last_seen')
                     .eq('id', otherId)
                     .single();
 
                 if (!error && data) {
-                    console.log(`[Presence] Poll result for ${otherId}: is_online=${data.is_online}`);
                     setContacts(prev => prev.map(c => c.id === otherId ? {
                         ...c,
                         status: data.is_online ? 'online' : 'offline',
                         lastSeen: data.last_seen || c.lastSeen,
                     } : c));
-                } else if (error) {
-                    console.warn('[Presence] Polling error response:', error.message);
                 }
-            } catch (err) {
-                console.warn('[Presence] Polling exception:', err);
+            } catch (_) {
+            } finally {
+                isRunning = false;
             }
         };
 
-        // Poll immediately and then every 15 seconds
+        // Poll immediately then every 30s (was 15s — reduced to ease RCTNetworking load)
         pollOtherUserStatus();
-        const pollInterval = setInterval(pollOtherUserStatus, 15_000);
+        const pollInterval = setInterval(pollOtherUserStatus, 30_000);
 
         return () => clearInterval(pollInterval);
-    }, [currentUser]);
+    }, [currentUser?.id]);  // depend only on ID, not full object (avoids channel flap)
 
     // Initialize Music Sync (uses Socket.io via ChatService, not Supabase Realtime)
     useEffect(() => {

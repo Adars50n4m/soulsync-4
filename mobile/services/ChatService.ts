@@ -94,6 +94,8 @@ class ChatService {
   // Polling fallback (when Realtime WebSocket is blocked by ISP)
   private pollTimer:            ReturnType<typeof setInterval> | null = null;
   private lastPollAt:           string | null = null;
+  private isPolling:            boolean = false;   // guard against concurrent polls
+  private appStateListener:     any = null;
 
   // ── PUBLIC: initialize() ────────────────────────────────────────────────
   //
@@ -709,7 +711,20 @@ class ChatService {
   private startMessagePolling(): void {
     if (this.pollTimer) return;
     this.lastPollAt = new Date().toISOString();
-    this.pollTimer = setInterval(() => this.pollForNewMessages(), 10_000) as any;
+    // 30s interval — less aggressive, avoids hammering RCTNetworking
+    this.pollTimer = setInterval(() => {
+      // Only poll when app is in foreground to avoid RCTNetworking crashes
+      if (AppState.currentState === 'active') {
+        this.pollForNewMessages();
+      }
+    }, 30_000) as any;
+
+    // Resume poll immediately when app comes back to foreground
+    this.appStateListener = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        this.pollForNewMessages();
+      }
+    });
   }
 
   private stopMessagePolling(): void {
@@ -717,10 +732,18 @@ class ChatService {
       clearInterval(this.pollTimer as any);
       this.pollTimer = null;
     }
+    if (this.appStateListener) {
+      this.appStateListener.remove();
+      this.appStateListener = null;
+    }
   }
 
   private async pollForNewMessages(): Promise<void> {
     if (!this.userId || !this.partnerId || !this.lastPollAt) return;
+    // Guard: skip if a poll is already in-flight
+    if (this.isPolling) return;
+    this.isPolling = true;
+
     const since = this.lastPollAt;
     this.lastPollAt = new Date().toISOString();
     try {
@@ -755,7 +778,10 @@ class ChatService {
           this.updateMessageStatusOnServer(msg.id, 'delivered');
         }
       }
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      this.isPolling = false;
+    }
   }
 
   // ── PUBLIC: cleanup() ────────────────────────────────────────────────────
