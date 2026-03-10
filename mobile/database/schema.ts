@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ⬆️  Bump this number every time you change the schema.
-const DB_TARGET_VERSION = 4;
+const DB_TARGET_VERSION = 7;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper — read the stored schema version (returns 0 if brand-new install)
@@ -95,6 +95,7 @@ async function migration_v1(db: any): Promise<void> {
       media_type     TEXT,
       media_url      TEXT,
       media_caption  TEXT,
+      media_thumbnail TEXT,
       reply_to_id    TEXT,
       timestamp      TEXT    NOT NULL,
       status         TEXT    DEFAULT 'pending',
@@ -173,8 +174,11 @@ async function migration_v2(db: any): Promise<void> {
   const safeAlter = async (sql: string) => {
     try {
       await db.execAsync(sql);
-    } catch (_) {
-      // Column already exists on fresh installs — ignore.
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      if (!msg.includes('duplicate column name') && !msg.includes('already exists')) {
+          console.warn(`[SQLite] Migration helper WARN for "${sql}":`, msg);
+      }
     }
   };
 
@@ -198,7 +202,12 @@ async function migration_v2(db: any): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 async function migration_v3(db: any): Promise<void> {
   const safeAlter = async (sql: string) => {
-    try { await db.execAsync(sql); } catch (_) { /* column already exists */ }
+    try { await db.execAsync(sql); } catch (e: any) { 
+        const msg = e?.message || String(e);
+        if (!msg.includes('duplicate column name') && !msg.includes('already exists')) {
+            console.warn(`[SQLite] Migration helper WARN v3:`, msg);
+        }
+    }
   };
 
   // Columns added in the new schema that old installations never had
@@ -225,6 +234,46 @@ async function migration_v4(db: any): Promise<void> {
   await safeAlter(`ALTER TABLE messages ADD COLUMN retry_count INTEGER DEFAULT 0;`);
   await safeAlter(`ALTER TABLE messages ADD COLUMN last_retry_at TEXT;`);
   await safeAlter(`ALTER TABLE messages ADD COLUMN error_message TEXT;`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION v5 — Add missing `about` column to `contacts` table
+// ─────────────────────────────────────────────────────────────────────────────
+async function migration_v5(db: any): Promise<void> {
+  const safeAlter = async (sql: string) => {
+    try { await db.execAsync(sql); } catch (_) { /* already exists */ }
+  };
+  await safeAlter(`ALTER TABLE contacts ADD COLUMN about TEXT DEFAULT '';`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION v6 — Add `last_seen` column to `contacts` table
+// ─────────────────────────────────────────────────────────────────────────────
+async function migration_v6(db: any): Promise<void> {
+  const safeAlter = async (sql: string) => {
+    try { await db.execAsync(sql); } catch (e: any) {
+        const msg = e?.message || String(e);
+        if (!msg.includes('duplicate column name') && !msg.includes('already exists')) {
+            console.warn(`[SQLite] Migration helper WARN v6:`, msg);
+        }
+    }
+  };
+  await safeAlter(`ALTER TABLE contacts ADD COLUMN last_seen TEXT;`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION v7 — Add `media_thumbnail` column to `messages` table
+// ─────────────────────────────────────────────────────────────────────────────
+async function migration_v7(db: any): Promise<void> {
+  const safeAlter = async (sql: string) => {
+    try { await db.execAsync(sql); } catch (e: any) {
+        const msg = e?.message || String(e);
+        if (!msg.includes('duplicate column name') && !msg.includes('already exists')) {
+            console.warn(`[SQLite] Migration helper WARN v7:`, msg);
+        }
+    }
+  };
+  await safeAlter(`ALTER TABLE messages ADD COLUMN media_thumbnail TEXT;`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -260,6 +309,15 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
         case 4:
           await migration_v4(db);
           break;
+        case 5:
+          await migration_v5(db);
+          break;
+        case 6:
+          await migration_v6(db);
+          break;
+        case 7:
+          await migration_v7(db);
+          break;
         // ── Add future cases here ──────────────────────────────────────────
         // case 3:
         //   await migration_v3(db);
@@ -278,6 +336,29 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
       // The app will retry the same migration on next launch.
       throw error;
     }
+  }
+
+  // --- REPAIR BLOCK (Phase 3 Hardening) ---
+  // If migrations v5 or v6 failed silently or were skipped, ensure columns exist.
+  console.log('[SQLite] Running schema repair check...');
+  const repairSteps = [
+      `ALTER TABLE contacts ADD COLUMN about TEXT DEFAULT '';`,
+      `ALTER TABLE contacts ADD COLUMN last_seen TEXT;`,
+      `ALTER TABLE messages ADD COLUMN reaction TEXT;`,
+      `ALTER TABLE messages ADD COLUMN media_thumbnail TEXT;`
+  ];
+  for (const sql of repairSteps) {
+      try {
+          await db.execAsync(sql);
+          console.log(`[SQLite] Repair: Executed "${sql.substring(0, 30)}..."`);
+      } catch (e: any) {
+          const msg = e?.message || String(e);
+          if (msg.includes('duplicate column name') || msg.includes('already exists')) {
+              // This is GOOD - means column is already there.
+          } else {
+              console.warn('[SQLite] Repair check warning:', msg);
+          }
+      }
   }
 
   console.log('[SQLite] All migrations complete. App is ready.');

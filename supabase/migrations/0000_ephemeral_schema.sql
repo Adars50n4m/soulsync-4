@@ -21,6 +21,10 @@ CREATE TABLE public.messages (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Index for Realtime filters
+CREATE INDEX idx_messages_sender ON public.messages(sender);
+CREATE INDEX idx_messages_receiver ON public.messages(receiver);
+
 -- RLS Policies
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 
@@ -59,3 +63,4 @@ CREATE POLICY "Enable delete access for authenticated users" ON public.statuses 
 
 -- Enable Realtime
 ALTER PUBLICATION supabase_realtime ADD TABLE public.statuses;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;

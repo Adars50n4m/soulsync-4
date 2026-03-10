@@ -173,6 +173,8 @@ export default function ProfileEditScreen() {
                     allowsEditing: true,
                     aspect: [1, 1],
                     quality: 0.8,
+                    legacy: true,
+                    preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
                 });
 
                 if (!result.canceled && result.assets[0]) {
@@ -264,7 +266,7 @@ export default function ProfileEditScreen() {
         if (!dateString) return '';
         const parts = dateString.split('-');
         if (parts.length === 3) {
-            return `${parts[2]}/${parts[1]}/${parts[0]}`; // DD/MM/YYYY
+            return `${parts[2]}-${parts[1]}-${parts[0]}`; // DD-MM-YYYY
         }
         return dateString;
     };
@@ -361,6 +363,18 @@ export default function ProfileEditScreen() {
                                     onPress={() => setIsEditing('bio')}
                                 />
                             )}
+                        </View>
+                    </Animated.View>
+
+                    <Animated.View style={styles.section}>
+                        <Text style={styles.sectionLabel}>Soul ID</Text>
+                        <View style={styles.settingsGroup}>
+                            <SettingRow
+                                label=""
+                                value={`@${currentUser?.username || 'user'}`}
+                                icon="alternate-email"
+                                onPress={() => {}} // Read-only for now as per plan
+                            />
                         </View>
                     </Animated.View>
 

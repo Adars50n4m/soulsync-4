@@ -21,8 +21,39 @@ export const SUPABASE_ANON_KEY = getEnvVar('EXPO_PUBLIC_SUPABASE_ANON_KEY', 'sb_
 export const SUPABASE_PROXY_URL = getEnvVar('EXPO_PUBLIC_SUPABASE_PROXY_URL', 'https://soulsync-supabase-proxy.adarshark.workers.dev');
 
 // 3. App Server (Node.js/Localtunnel)
-const DEFAULT_TUNNEL = 'https://soulsync-v3-1772996787.loca.lt';
-export const SERVER_URL = getEnvVar('EXPO_PUBLIC_SERVER_URL', DEFAULT_TUNNEL);
+export const IS_DEV = __DEV__;
+const DEFAULT_TUNNEL = 'http://localhost:3000';
+let resolvedServerUrl = getEnvVar('EXPO_PUBLIC_SERVER_URL', DEFAULT_TUNNEL);
+
+// In dev mode, intelligently resolve the server URL to the developer's machine.
+if (IS_DEV) {
+  // hostUri is available in Expo Go and dev clients to point back to the dev machine.
+  const debuggerHost = Constants.expoConfig?.hostUri || (Constants.expoConfig as any)?.debuggerHost;
+  
+  if (debuggerHost) {
+    const host = debuggerHost.split(':')[0];
+    const localUrl = `http://${host}:3000`;
+
+    // Overwrite localhost/10.0.2.2 with the real host IP so physical devices can reach it.
+    if (resolvedServerUrl.includes('localhost') || resolvedServerUrl.includes('10.0.2.2')) {
+      console.log(`[Env] Resolving SERVER_URL for ${Platform.OS}: ${localUrl} (from debuggerHost)`);
+      resolvedServerUrl = localUrl;
+    }
+  } else {
+    // Fallback for older Expo versions or when the debugger host is not available.
+    if (resolvedServerUrl.includes('localhost') || resolvedServerUrl.includes('10.0.2.2')) {
+      // Physical iOS devices will FAIL with localhost. 
+      // We log a warning to nudge the user toward using a tunnel or their IP.
+      resolvedServerUrl = Platform.OS === 'android' ? 'http://10.0.2.2:3000' : 'http://localhost:3000';
+      if (Platform.OS === 'ios' && !Constants.appOwnership) { // appOwnership missing usually means physical/standalone
+         console.warn('[Env] WARNING: Using localhost on iOS physical device will likely fail. Use a tunnel (localtunnel/ngrok).');
+      }
+    }
+  }
+}
+export const SERVER_URL = resolvedServerUrl;
+console.log(`[Env] FINAL SERVER_URL: ${SERVER_URL}`);
+
 
 // 4. Music API (JioSaavn)
 export const MUSIC_API_URL = getEnvVar('EXPO_PUBLIC_MUSIC_API_URL', 'https://saavn.sumit.co/api');
@@ -41,7 +72,6 @@ export const TURN_USERNAME_2 = getEnvVar('EXPO_PUBLIC_TURN_USERNAME_2', '');
 export const TURN_PASSWORD_2 = getEnvVar('EXPO_PUBLIC_TURN_PASSWORD_2', '');
 
 // 7. Feature Flags
-export const IS_DEV = __DEV__;
 export const USE_R2 = getEnvVar('EXPO_PUBLIC_USE_R2', 'false') === 'true';
 
 // 7. Connectivity Constants

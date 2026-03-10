@@ -8,20 +8,19 @@
  * - Handles sending media with optimistic local save
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
-  Image,
   Text,
   Pressable,
   ActivityIndicator,
   StyleSheet,
   useWindowDimensions,
+  Platform,
 } from 'react-native';
+import { Image } from 'expo-image'; // expo-image has built-in disk+memory cache — no flicker
 import { MaterialIcons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import GlassView from './ui/GlassView';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { mediaDownloadService, formatBytes } from '../services/MediaDownloadService';
 import { offlineService, MediaStatus } from '../services/LocalDBService';
 import { Message } from '../types';
@@ -29,7 +28,7 @@ import { Message } from '../types';
 
 interface MediaBubbleProps {
   message: Message;
-  isOwn: boolean; // true if sent by current user
+  isOwn: boolean;
   onMediaTap?: (message: Message) => void;
   theme?: {
     primary: string;
@@ -47,22 +46,40 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
   const { width: SCREEN_WIDTH } = useWindowDimensions();
   const MAX_MEDIA_WIDTH = SCREEN_WIDTH * 0.65;
 
-  const [mediaStatus, setMediaStatus] = useState<MediaStatus>(message.mediaStatus || 'not_downloaded');
+  // Initialise from message props so the first render is correct (no flicker)
+  const [mediaStatus, setMediaStatus] = useState<MediaStatus>(
+    message.localFileUri ? 'downloaded' : (message.mediaStatus || 'not_downloaded')
+  );
   const [localUri, setLocalUri] = useState<string | null>(message.localFileUri || null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
+  // Prevent re-checking on every re-render — only do it once per message.id
+  const checkedRef = useRef(false);
+
   const media = message.media;
   const mediaWidth = MAX_MEDIA_WIDTH;
   const mediaHeight = media?.type === 'video' ? mediaWidth * 0.75 : mediaWidth;
 
-  // Check if media is available locally
+  // Check if media is available locally — runs only once per message
   useEffect(() => {
+    if (checkedRef.current) return;
+    checkedRef.current = true;
     checkLocalMedia();
-  }, [message.id, message.localFileUri]);
+  }, [message.id]);
+
+  // Also respond to localFileUri prop changes (e.g. after download completes elsewhere)
+  useEffect(() => {
+    if (message.localFileUri && message.localFileUri !== localUri) {
+      setLocalUri(message.localFileUri);
+      setMediaStatus('downloaded');
+      checkedRef.current = true;
+    }
+  }, [message.localFileUri]);
 
   const checkLocalMedia = async () => {
+    // If we already have a URI, just verify it still exists
     if (message.localFileUri) {
       const exists = await mediaDownloadService.localFileExists(message.localFileUri);
       if (exists) {
@@ -78,11 +95,16 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
       if (exists) {
         setLocalUri(msg.localFileUri);
         setMediaStatus('downloaded');
+        return;
       }
+    }
+    // If nothing found, stay as not_downloaded
+    if (mediaStatus === 'downloaded') {
+      setMediaStatus('not_downloaded');
+      setLocalUri(null);
     }
   };
 
-  // Handle download button press
   const handleDownload = useCallback(async () => {
     if (isDownloading || !media?.url) return;
 
@@ -115,61 +137,58 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
     }
   }, [message.id, media?.url, isDownloading]);
 
-  // Handle media tap
-  const handleTap = useCallback(() => {
-    if (mediaStatus === 'downloaded' && localUri) {
-      onMediaTap?.({ ...message, localFileUri: localUri });
-    } else if (mediaStatus === 'not_downloaded' || mediaStatus === 'download_failed') {
-      handleDownload();
-    }
-  }, [mediaStatus, localUri, message, onMediaTap, handleDownload]);
-
-  // Render based on media status
   const renderContent = () => {
     if (!media) return null;
-    // Media is downloaded and available locally
+
+    // ── Downloaded ───────────────────────────────────────────────────────────
     if (mediaStatus === 'downloaded' && localUri) {
       return (
-        <Animated.View entering={FadeIn.duration(200)}>
-          <Pressable onPress={() => onMediaTap?.({ ...message, localFileUri: localUri })}>
-            {media.type === 'image' || media.type === 'status_reply' ? (
+        // No Reanimated FadeIn here — that re-triggers on every list re-render
+        // causing flicker. expo-image handles its own smooth fade internally.
+        <Pressable onPress={() => onMediaTap?.({ ...message, localFileUri: localUri })}>
+          {media.type === 'image' || media.type === 'status_reply' ? (
+            <Image
+              source={{ uri: localUri }}
+              style={[styles.media, { width: mediaWidth, height: mediaHeight }]}
+              contentFit="cover"
+              // expo-image caches by URI — no reload, no flicker
+              cachePolicy="disk"
+              transition={150}
+              // Placeholder while image loads from disk (shouldn't be long)
+              placeholder={{ color: '#111' }}
+            />
+          ) : media.type === 'video' ? (
+            <View style={[styles.videoContainer, { width: mediaWidth, height: mediaHeight }]}>
               <Image
                 source={{ uri: localUri }}
-                style={[styles.media, { width: mediaWidth, height: mediaHeight }]}
-                resizeMode="cover"
+                style={StyleSheet.absoluteFill}
+                contentFit="cover"
+                cachePolicy="disk"
               />
-            ) : media.type === 'video' ? (
-              <View style={[styles.videoContainer, { width: mediaWidth, height: mediaHeight }]}>
-                <Image
-                  source={{ uri: localUri }}
-                  style={styles.videoThumbnail}
-                  resizeMode="cover"
-                />
-                <View style={styles.playOverlay}>
-                  <MaterialIcons name="play-circle-fill" size={48} color="white" />
-                </View>
+              <View style={styles.playOverlay}>
+                <MaterialIcons name="play-circle-fill" size={48} color="white" />
               </View>
-            ) : (
-              <View style={[styles.fileContainer, { width: mediaWidth }]}>
-                <MaterialIcons name="insert-drive-file" size={32} color={theme.primary} />
-                <Text style={styles.fileName} numberOfLines={1}>
-                  {media.name || 'File'}
-                </Text>
-              </View>
-            )}
-          </Pressable>
+            </View>
+          ) : (
+            <View style={[styles.fileContainer, { width: mediaWidth }]}>
+              <MaterialIcons name="insert-drive-file" size={32} color={theme.primary} />
+              <Text style={styles.fileName} numberOfLines={1}>
+                {media.name || 'File'}
+              </Text>
+            </View>
+          )}
           {media.caption && (
             <Text style={styles.caption}>{media.caption}</Text>
           )}
-        </Animated.View>
+        </Pressable>
       );
     }
 
-    // Media is downloading
+    // ── Downloading ──────────────────────────────────────────────────────────
     if (mediaStatus === 'downloading' || isDownloading) {
       return (
         <View style={[styles.placeholder, { width: mediaWidth, height: mediaHeight }]}>
-          <GlassView intensity={80} style={styles.blurOverlay} >
+          <GlassView intensity={80} style={styles.blurOverlay}>
             <ActivityIndicator size="large" color={theme.primary} />
             <Text style={styles.downloadingText}>
               {downloadProgress > 0 ? `${downloadProgress}%` : 'Downloading...'}
@@ -179,11 +198,11 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
       );
     }
 
-    // Media download failed
+    // ── Download failed ──────────────────────────────────────────────────────
     if (mediaStatus === 'download_failed') {
       return (
         <Pressable onPress={handleDownload} style={[styles.placeholder, { width: mediaWidth, height: mediaHeight }]}>
-          <GlassView intensity={80} style={styles.blurOverlay} >
+          <GlassView intensity={80} style={styles.blurOverlay}>
             <MaterialIcons name="error-outline" size={40} color="#FF3B30" />
             <Text style={styles.errorText}>{error || 'Download failed'}</Text>
             <Text style={styles.retryText}>Tap to retry</Text>
@@ -192,15 +211,17 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
       );
     }
 
-    // Media not downloaded yet - show download button
+    // ── Not downloaded ───────────────────────────────────────────────────────
     return (
       <Pressable onPress={handleDownload} style={[styles.placeholder, { width: mediaWidth, height: mediaHeight }]}>
-        <GlassView intensity={80} style={styles.blurOverlay} >
+        <GlassView intensity={80} style={styles.blurOverlay}>
           {message.thumbnailUri ? (
             <Image
               source={{ uri: message.thumbnailUri }}
-              style={styles.thumbnailBg}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
               blurRadius={20}
+              cachePolicy="memory-disk"
             />
           ) : null}
           <View style={styles.downloadButton}>
@@ -246,10 +267,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: '#000',
   },
-  videoThumbnail: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 16,
-  },
   playOverlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
@@ -279,10 +296,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
-  },
-  thumbnailBg: {
-    ...StyleSheet.absoluteFillObject,
-    opacity: 0.5,
   },
   downloadButton: {
     width: 56,

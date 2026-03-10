@@ -29,6 +29,7 @@ export interface QueuedMessage {
     url: string;
     name?: string;
     caption?: string;
+    thumbnail?: string;
   };
   replyTo?: string;
   retryCount: number;
@@ -80,6 +81,7 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
           media_type    TEXT,
           media_url     TEXT,
           media_caption TEXT,
+          media_thumbnail TEXT,
           media_name    TEXT,
           reply_to_id   TEXT,
           timestamp     TEXT NOT NULL,
@@ -150,6 +152,7 @@ function rowToQueuedMessage(row: any): QueuedMessage {
       url: row.media_url ?? '',
       name: row.media_name ?? undefined,
       caption: row.media_caption ?? undefined,
+      thumbnail: row.media_thumbnail ?? undefined,
     };
   }
   return {
@@ -174,14 +177,15 @@ class OfflineService {
     await db.runAsync(
       `INSERT INTO messages
          (id, chat_id, sender, receiver, text,
-          media_type, media_url, media_caption,
+          media_type, media_url, media_caption, media_thumbnail,
           reply_to_id, timestamp, status, local_file_uri, is_unsent)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
        ON CONFLICT(id) DO UPDATE SET
          status = excluded.status,
          media_url = COALESCE(excluded.media_url, messages.media_url),
+         media_thumbnail = COALESCE(excluded.media_thumbnail, messages.media_thumbnail),
          local_file_uri = COALESCE(messages.local_file_uri, excluded.local_file_uri);`,
-      [msg.id, chatId, msg.sender, msg.sender === 'me' ? chatId : 'me', msg.text ?? '', msg.media?.type ?? null, msg.media?.url ?? null, msg.media?.caption ?? null, msg.replyTo ?? null, msg.timestamp, msg.status ?? 'delivered', msg.localFileUri ?? null]
+      [msg.id, chatId, msg.sender, msg.sender === 'me' ? chatId : 'me', msg.text ?? '', msg.media?.type ?? null, msg.media?.url ?? null, msg.media?.caption ?? null, msg.media?.thumbnail ?? null, msg.replyTo ?? null, msg.timestamp, msg.status ?? 'delivered', msg.localFileUri ?? null]
     );
   }
 
@@ -190,11 +194,16 @@ class OfflineService {
     await db.runAsync(
       `INSERT INTO messages
          (id, chat_id, sender, receiver, text,
-          media_type, media_url, media_caption,
+          media_type, media_url, media_caption, media_thumbnail,
           reply_to_id, timestamp, status, retry_count, local_file_uri, is_unsent)
-       VALUES (?, ?, 'me', ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, 1)
-       ON CONFLICT(id) DO UPDATE SET status = 'pending', is_unsent = 1;`,
-      [msg.id, chatId, chatId, msg.text ?? '', msg.media?.type ?? null, msg.media?.url ?? null, msg.media?.caption ?? null, msg.replyTo ?? null, msg.timestamp, msg.localFileUri ?? null]
+       VALUES (?, ?, 'me', ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, 1)
+       ON CONFLICT(id) DO UPDATE SET 
+         status = 'pending', 
+         is_unsent = 1,
+         media_url = COALESCE(excluded.media_url, messages.media_url),
+         media_thumbnail = COALESCE(excluded.media_thumbnail, messages.media_thumbnail),
+         local_file_uri = COALESCE(messages.local_file_uri, excluded.local_file_uri);`,
+      [msg.id, chatId, chatId, msg.text ?? '', msg.media?.type ?? null, msg.media?.url ?? null, msg.media?.caption ?? null, msg.media?.thumbnail ?? null, msg.replyTo ?? null, msg.timestamp, msg.localFileUri ?? null]
     );
   }
 
@@ -206,7 +215,7 @@ class OfflineService {
 
   async getPendingMessages(): Promise<QueuedMessage[]> {
     const db = await getDb();
-    const rows = await db.getAllAsync(`SELECT * FROM messages WHERE status = 'pending' ORDER BY timestamp ASC;`);
+    const rows = await db.getAllAsync(`SELECT * FROM messages WHERE status = 'pending' OR status = 'failed' ORDER BY timestamp ASC;`);
     return (rows as any[]).map(rowToQueuedMessage);
   }
 
@@ -233,7 +242,23 @@ class OfflineService {
 
   async updateMessageId(oldId: string, newId: string): Promise<void> {
     const db = await getDb();
-    await db.runAsync(`UPDATE messages SET id = ? WHERE id = ?;`, [newId, oldId]);
+    if (oldId === newId) return;
+
+    // Check if newId already exists (race condition with Realtime broadcast)
+    const existing = await db.getFirstAsync(`SELECT id, local_file_uri FROM messages WHERE id = ? LIMIT 1;`, [newId]) as any;
+    
+    if (existing) {
+        // Realtime won the race. We need to merge our local metadata (local_file_uri) into the newId row.
+        const oldRow = await db.getFirstAsync(`SELECT local_file_uri FROM messages WHERE id = ? LIMIT 1;`, [oldId]) as any;
+        if (oldRow?.local_file_uri) {
+            await db.runAsync(`UPDATE messages SET local_file_uri = ? WHERE id = ?;`, [oldRow.local_file_uri, newId]);
+        }
+        // Delete the temp entry since the real one exists
+        await db.runAsync(`DELETE FROM messages WHERE id = ?;`, [oldId]);
+    } else {
+        // Safe update
+        await db.runAsync(`UPDATE messages SET id = ? WHERE id = ?;`, [newId, oldId]);
+    }
   }
 
   async updateMessageRetry(messageId: string, retryCount: number, errorMessage?: string): Promise<void> {
@@ -264,7 +289,17 @@ class OfflineService {
 
   async updateMessageReaction(messageId: string, emoji: string | null): Promise<void> {
     const db = await getDb();
-    await db.runAsync(`UPDATE messages SET reaction = ? WHERE id = ?;`, [emoji ?? null, messageId]);
+    await db.runAsync('UPDATE messages SET reaction = ? WHERE id = ?', [emoji, messageId]);
+  }
+
+  async deleteMessage(messageId: string): Promise<void> {
+    const db = await getDb();
+    await db.runAsync('DELETE FROM messages WHERE id = ?', [messageId]);
+  }
+
+  async deleteChat(chatId: string): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(`DELETE FROM messages WHERE chat_id = ?;`, [chatId]);
   }
 
   async getContacts(): Promise<any[]> {

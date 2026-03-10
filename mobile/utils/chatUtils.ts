@@ -6,6 +6,7 @@ export interface ChatMediaItem {
     caption?: string;
     name?: string;
     localFileUri?: string;
+    thumbnail?: string;
 }
 
 export const getMessageMediaItems = (msg: Message | any): ChatMediaItem[] => {
@@ -14,15 +15,27 @@ export const getMessageMediaItems = (msg: Message | any): ChatMediaItem[] => {
     const hasSource = (m: any) => !!(m?.url || msg.localFileUri);
 
     if (Array.isArray(msg.media)) {
-        return msg.media.filter(hasSource).map((m: any) => ({ ...m, localFileUri: msg.localFileUri }));
+        return msg.media.filter(hasSource).map((m: any) => ({ 
+            ...m, 
+            localFileUri: msg.localFileUri,
+            thumbnail: m.thumbnail || msg.media?.thumbnail 
+        }));
     }
 
     if (Array.isArray(msg.media?.items)) {
-        return msg.media.items.filter(hasSource).map((m: any) => ({ ...m, localFileUri: msg.localFileUri }));
+        return msg.media.items.filter(hasSource).map((m: any) => ({ 
+            ...m, 
+            localFileUri: msg.localFileUri,
+            thumbnail: m.thumbnail || msg.media?.thumbnail
+        }));
     }
 
     if (msg.media?.url || msg.localFileUri) {
-        return [{ ...msg.media, localFileUri: msg.localFileUri }];
+        return [{ 
+            ...msg.media, 
+            localFileUri: msg.localFileUri,
+            thumbnail: msg.media.thumbnail
+        }];
     }
 
     return [];

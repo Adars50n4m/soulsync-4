@@ -59,6 +59,8 @@ export default function ProfileSetupScreen() {
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.8,
+      legacy: true,
+      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
     });
     if (!result.canceled) {
       setAvatarUri(result.assets[0].uri);

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Platform } from 'react-native';
-import { useNavigation, useRouter } from 'expo-router';
-import { SERVER_URL, serverFetch, proxySupabaseUrl } from '../config/api';
+import { View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Platform } from 'react-native';
+import { useRouter } from 'expo-router';
+import { SERVER_URL, safeFetchJson, proxySupabaseUrl } from '../config/api';
 import { useApp } from '../context/AppContext';
 import { MaterialIcons } from '@expo/vector-icons';
 import GlassView from '../components/ui/GlassView';
@@ -14,27 +14,37 @@ export default function SearchScreen() {
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [searchError, setSearchError] = useState<string | null>(null);
     const router = useRouter();
 
     const searchUsers = useCallback(async (text: string) => {
         if (text.length < 2) {
             setResults([]);
+            setSearchError(null);
             return;
         }
         setLoading(true);
+        setSearchError(null);
         try {
-            // Using currentUserId in both header (mock auth) and query
-            const resp = await serverFetch(`${SERVER_URL}/api/users/search?query=${encodeURIComponent(text)}`, {
-                headers: {
-                    'x-user-id': currentUser?.id || ''
+            const { success, data, error } = await safeFetchJson<any>(
+                `${SERVER_URL}/api/users/search?query=${encodeURIComponent(text)}`,
+                {
+                    headers: {
+                        'x-user-id': currentUser?.id || ''
+                    }
                 }
-            });
-            const data = await resp.json() as any;
-            if (data.success) {
+            );
+
+            if (success && data?.success) {
                 setResults(data.users);
+            } else {
+                const msg = error || 'Search failed';
+                console.warn('[Search] Search failed:', msg);
+                setSearchError(msg);
             }
-        } catch (err) {
-            console.error('Search failed:', err);
+        } catch (err: any) {
+            console.warn('[Search] Unexpected error:', err);
+            setSearchError(err?.message || 'Network error');
         } finally {
             setLoading(false);
         }
@@ -49,21 +59,26 @@ export default function SearchScreen() {
 
     const sendRequest = async (receiverId: string) => {
         try {
-            const resp = await serverFetch(`${SERVER_URL}/api/connections/request`, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'x-user-id': currentUser?.id || ''
-                },
-                body: JSON.stringify({ receiverId })
-            });
-            const data = await resp.json() as any;
-            if (data.success) {
+            const { success, data, error } = await safeFetchJson<any>(
+                `${SERVER_URL}/api/connections/request`, 
+                {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'x-user-id': currentUser?.id || ''
+                    },
+                    body: JSON.stringify({ receiverId })
+                }
+            );
+
+            if (success && data?.success) {
                 // Update local status optimistically
                 setResults(prev => prev.map(u => u.id === receiverId ? { ...u, connectionStatus: 'request_sent' } : u));
+            } else if (error) {
+                console.warn('[Search] Request failed:', error);
             }
         } catch (err) {
-            console.error('Request failed:', err);
+            console.warn('[Search] Unexpected request error:', err);
         }
     };
 
@@ -141,18 +156,23 @@ export default function SearchScreen() {
                 keyExtractor={item => item.id}
                 contentContainerStyle={styles.list}
                 ListEmptyComponent={
-                    !loading && query.length >= 2 ? (
-                        <View style={styles.emptyContainer}>
-                            <MaterialIcons name="person-search" size={60} color="rgba(255,255,255,0.1)" />
-                            <Text style={styles.emptyText}>No users found named "{query}"</Text>
-                        </View>
-                    ) : (
-                        !loading && query.length < 2 && (
+                    !loading ? (
+                        searchError ? (
+                            <View style={styles.emptyContainer}>
+                                <MaterialIcons name="wifi-off" size={60} color="rgba(255,255,255,0.1)" />
+                                <Text style={styles.emptyText}>Could not connect to server</Text>
+                            </View>
+                        ) : query.length >= 2 ? (
+                            <View style={styles.emptyContainer}>
+                                <MaterialIcons name="person-search" size={60} color="rgba(255,255,255,0.1)" />
+                                <Text style={styles.emptyText}>No users found named "{query}"</Text>
+                            </View>
+                        ) : (
                             <View style={styles.emptyContainer}>
                                 <Text style={styles.hintText}>Type at least 2 characters to search</Text>
                             </View>
                         )
-                    )
+                    ) : null
                 }
             />
         </View>

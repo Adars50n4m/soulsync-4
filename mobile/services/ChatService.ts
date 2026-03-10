@@ -46,6 +46,7 @@ export interface ChatMessage {
     url: string;
     name?: string;
     caption?: string;
+    thumbnail?: string;
   };
   reply_to?: string;
   reactions?: string[];
@@ -86,8 +87,17 @@ class ChatService {
   private onNetworkStatusChange:NetworkStatusCallback | null = null;
   private onUploadProgressCb:   UploadProgressCallback| null = null;
 
-  private isInitialized:        boolean = false;
-  private isOnline:             boolean = true;
+  private isInitialized      = false;
+  private isDeviceOnline     = true;   // Physical network connection
+  private isServerReachable  = true;   // Can we actually ping our server?
+  private isRealtimeConnected = false;  // WebSocket channel status
+  private isQueuePaused      = false;
+
+  private get isActuallyOnline(): boolean {
+    return this.isDeviceOnline && this.isServerReachable;
+  }
+  private realtimeRetryCount:   number = 0;
+  private realtimeRetryTimer:   ReturnType<typeof setTimeout> | null = null;
 
   // Queue management
   private processQueueTimer:    ReturnType<typeof setInterval> | null = null;
@@ -159,12 +169,14 @@ class ChatService {
           event:  'INSERT',
           schema: 'public',
           table:  'messages',
-          // [FIX BUG 3] Filter on receiver so we only get OUR messages,
-          // not every INSERT in the entire messages table.
-          filter: `receiver=eq.${this.userId}`,
+          // [HARDENING] Removing filter=receiver=eq.X to avoid binding mismatch.
+          // We filter locally in the callback instead.
         },
         async (payload) => {
           const incoming = this.mapDbRowToChatMessage(payload.new);
+          
+          // Verify it's actually for ME
+          if (incoming.receiver_id !== this.userId) return;
 
           // WhatsApp rule: ALWAYS write to SQLite before touching the UI
           await offlineService.saveMessage(incoming.sender_id, {
@@ -193,11 +205,13 @@ class ChatService {
           event:  'UPDATE',
           schema: 'public',
           table:  'messages',
-          // [FIX BUG 3] Only listen to updates on messages I sent
-          filter: `sender=eq.${this.userId}`,
+          // Removing filter to avoid binding mismatch. Local filter below.
         },
         async (payload) => {
           const updated = payload.new as any;
+          
+          // Verify I am the sender of this message
+          if (updated.sender !== this.userId) return;
           if (updated.status) {
             // Sync the new status to local DB
             await offlineService.updateMessageStatus(
@@ -212,16 +226,59 @@ class ChatService {
       .subscribe((status, err) => {
         if (status === 'SUBSCRIBED') {
           this.isInitialized = true;
-          this.updateNetworkStatus(true);
-          console.log('[ChatService] Realtime subscribed');
+          this.isRealtimeConnected = true;
+          this.realtimeRetryCount = 0;
+          this.syncConnectivityState();
+          console.log(`[ChatService] Messages Realtime SUBSCRIBED for userId=${this.userId} (Channel: ${channelName})`);
           this.startQueueProcessing();
+          // Re-fetch missed messages now that the Supabase connection is confirmed live.
+          // The initial fetchMissedMessages() at init may have failed if the connection
+          // wasn't ready yet (visible as "CONNECTING..." in the header).
+          this.fetchMissedMessages();
         } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-          console.warn('[ChatService] Realtime offline:', status);
-          this.updateNetworkStatus(false);
-          this.stopQueueProcessing();
+          this.isRealtimeConnected = false;
+          console.warn(`[ChatService] Realtime status: ${status} for channel: ${channelName}. Attempting reconnect...`);
+          this.syncConnectivityState();
+          this.handleRealtimeReconnect();
         }
-        if (err) console.warn('[ChatService] Subscription warning:', err);
+        if (err) {
+            console.warn(`[ChatService] Subscription warning (Channel: ${channelName}):`, err);
+            // If we get a binding mismatch, it's often because the filter value is unexpected
+            if (err.message?.includes('mismatch between server and client bindings')) {
+                console.warn(`[ChatService] Filter binding check (non-fatal): userId=${this.userId} (type=${typeof this.userId})`);
+            }
+        }
       });
+  }
+
+  private handleRealtimeReconnect() {
+    if (this.realtimeRetryTimer) clearTimeout(this.realtimeRetryTimer);
+    
+    // [FIX] Clean up existing channel completely before retrying to avoid multiple active watchers
+    if (this.channel) {
+        console.log('[ChatService] Removing old channel before reconnect');
+        supabase.removeChannel(this.channel);
+        this.channel = null;
+    }
+
+    // Exponential backoff: 2s, 4s, 8s, 16s, max 30s
+    const delay = Math.min(Math.pow(2, this.realtimeRetryCount) * 1000, 30_000);
+    this.realtimeRetryCount++;
+
+    console.log(`[ChatService] Reconnecting Realtime in ${delay}ms (attempt ${this.realtimeRetryCount})...`);
+    this.realtimeRetryTimer = setTimeout(() => {
+      this.subscribeToRealtime();
+    }, delay);
+  }
+
+  // ── PUBLIC STATE GETTERS ────────────────────────────────────────────────
+  
+  public getConnectivityState() {
+    return {
+      isDeviceOnline: this.isDeviceOnline,
+      isServerReachable: this.isServerReachable,
+      isRealtimeConnected: this.isRealtimeConnected
+    };
   }
 
   // ── PRIVATE: Network monitoring ─────────────────────────────────────────
@@ -252,55 +309,63 @@ class ChatService {
       const controller = new AbortController();
       const timeoutId  = setTimeout(() => controller.abort(), 8_000);
 
-      await fetch(SUPABASE_ENDPOINT, {
-        method: 'HEAD',
+      // Use GET instead of HEAD for better proxy compatibility
+      const response = await fetch(SUPABASE_ENDPOINT, {
+        method: 'GET',
         signal: controller.signal,
         mode:   'no-cors',
+        headers: {
+          'Cache-Control': 'no-cache'
+        }
       });
 
       clearTimeout(timeoutId);
 
-      // Fetch succeeded → we are online
-      this.updateNetworkStatus(true);
+      // If we got ANY response (even opaque), the server is reachable
+      this.isDeviceOnline = true;
+      this.isServerReachable = true;
+      this.syncConnectivityState();
       this.startQueueProcessing();
       return true;
 
     } catch (error: any) {
-      // [FIX BUG 1] AbortError means the request TIMED OUT → we are OFFLINE.
-      // The old code treated AbortError as online — completely backwards!
+      this.isServerReachable = false;
       if (error?.name === 'AbortError') {
-        console.warn('[ChatService] Connectivity check timed out → offline');
-        this.updateNetworkStatus(false);
-        this.stopQueueProcessing();
-        return false;
+        console.warn('[ChatService] Connectivity check timed out → false');
       }
-
-      // Any other fetch error (DNS fail, no network, etc.) → offline
-      this.updateNetworkStatus(false);
+      this.syncConnectivityState();
       this.stopQueueProcessing();
       return false;
     }
   }
 
-  private updateNetworkStatus(online: boolean): void {
-    const wasOnline = this.isOnline;
-    this.isOnline   = online;
+  private syncConnectivityState(): void {
+    const isActuallyOnline = this.isDeviceOnline && this.isServerReachable;
+    
+    // [FIX] Consider WebSocket state too. If device is online but WS is CLOSED, we are not fully synced.
+    const isFullyConnected = isActuallyOnline && this.isRealtimeConnected;
+    
+    // We notify listeners of general "online" status 
+    this.onNetworkStatusChange?.(isActuallyOnline);
 
-    if (wasOnline !== online) {
-      console.log(`[ChatService] Network status: ${online ? 'ONLINE' : 'OFFLINE'}`);
-      this.onNetworkStatusChange?.(online);
+    if (isActuallyOnline) {
+      this.processQueue();
+    }
+  }
 
-      // Went back online → drain the queue immediately
-      if (online) {
-        this.processQueue();
-      }
+  // [NEW] Call this whenever any REAL supabase call succeeds to force-clear 'Connecting...'
+  private syncConnected(): void {
+    if (!this.isServerReachable || !this.isDeviceOnline) {
+      this.isDeviceOnline = true;
+      this.isServerReachable = true;
+      this.syncConnectivityState();
     }
   }
 
   // ── PRIVATE: Queue processing ────────────────────────────────────────────
 
   private startQueueProcessing(): void {
-    if (this.processQueueTimer || !this.isOnline) return;
+    if (this.processQueueTimer || !this.isActuallyOnline) return;
 
     // Run once immediately when we (re-)connect
     this.processQueue();
@@ -314,7 +379,7 @@ class ChatService {
       clearTimeout(this.processQueueTimer);
       this.processQueueTimer = null;
     }
-    if (!this.isOnline) return;
+    if (!this.isActuallyOnline) return;
 
     // Will be called after processQueue() finishes each cycle
     // (see processQueue's finally block)
@@ -332,7 +397,7 @@ class ChatService {
   private isProcessingQueue:          boolean = false;
 
   private async processQueue(): Promise<void> {
-    if (!this.isOnline) return;
+    if (!this.isActuallyOnline) return;
     if (this.isProcessingQueue) return;
 
     this.isProcessingQueue = true;
@@ -352,7 +417,18 @@ class ChatService {
         // Skip if already in-flight
         if (this.sendingIds.has(message.id)) continue;
 
-        // Permanently failed — mark and notify UI
+        // If a message was previously marked as 'failed', and we are back online processing the queue,
+        // it means we caught it on a reconnect. We should reset its retry state and treat it as 'pending'
+        // so it has a fresh chance to send.
+        if (message.status === 'failed') {
+          console.log(`[ChatService] Auto-retrying previously failed message: ${message.id}`);
+          message.status = 'pending';
+          message.retryCount = 0;
+          await offlineService.updateMessageRetry(message.id, 0);
+          await offlineService.updateMessageStatus(message.id, 'pending');
+        }
+
+        // Permanently failed — mark and notify UI (Only triggers if it fails max times *during this active session*)
         if (message.retryCount >= MAX_RETRY_COUNT) {
           await offlineService.markMessageAsFailed(
             message.id,
@@ -381,7 +457,7 @@ class ChatService {
       }
 
       // Schedule the next poll cycle now that we know the queue size
-      if (this.isOnline) {
+      if (this.isActuallyOnline) {
         this.processQueueTimer = setTimeout(
           () => this.processQueue(),
           nextInterval
@@ -391,7 +467,7 @@ class ChatService {
     } catch (error) {
       console.error('[ChatService] processQueue error:', error);
       // Still schedule next poll even after an unexpected error
-      if (this.isOnline) {
+      if (this.isActuallyOnline) {
         this.processQueueTimer = setTimeout(
           () => this.processQueue(),
           IDLE_POLL_INTERVAL
@@ -430,11 +506,13 @@ class ChatService {
            // PERSIST IMMEDIATELY so we don't re-upload if the message INSERT fails
            await offlineService.updateMessageMediaUrl(message.id, finalMediaUrl);
         } catch (uploadErr: any) {
-           console.error('[ChatService] Media upload failed:', uploadErr.message);
+           // We use console.warn here to avoid the React Native "Red Box" crash overlay in DEV mode.
+           // The error is still thrown to trigger the queue retry mechanism.
+           console.warn('[ChatService] Media upload failed:', uploadErr.message);
            if (uploadErr.message?.includes('R2 Service not configured')) {
               console.warn('CRITICAL: Your server R2 credentials are not set in server/.env!');
            }
-           throw uploadErr; // Caught below to trigger retry mechanism
+           throw uploadErr; // Caught in processQueue to trigger retry mechanism
         }
       }
 
@@ -450,6 +528,7 @@ class ChatService {
           media_type:    message.media?.type    ?? null,
           media_url:     finalMediaUrl          ?? null,
           media_caption: message.media?.caption ?? null,
+          media_thumbnail: message.media?.thumbnail ?? null,
           reply_to_id:   message.replyTo        ?? null,
           created_at:    message.timestamp,
         })
@@ -457,6 +536,7 @@ class ChatService {
         .single();
 
       if (error) throw error;
+      this.syncConnected();
 
       const serverId = data.id.toString();
 
@@ -471,6 +551,7 @@ class ChatService {
       }
       
       await offlineService.updateMessageStatus(serverId, 'sent');
+      // Pass the original client ID as message.id, and the new server ID as the third param
       this.onStatusUpdate?.(message.id, 'sent', serverId);
 
       // Push notification — best-effort, non-critical
@@ -528,6 +609,7 @@ class ChatService {
         .limit(50);
 
       if (error || !data) return;
+      this.syncConnected();
 
       for (const row of data) {
         const msg = this.mapDbRowToChatMessage(row);
@@ -601,7 +683,7 @@ class ChatService {
     this.onNewMessage?.(uiMessage);
 
     // Step 3: Sync (non-blocking — don't await, let the queue handle it)
-    if (this.isOnline) {
+    if (this.isActuallyOnline) {
       // Push to the queue instead of bypassing it to prevent concurrent SQLite DB queries
       // that trigger "Shared object released" crashes.
       this.processQueue();
@@ -619,6 +701,7 @@ class ChatService {
   ): Promise<void> {
     try {
       await supabase.from('messages').update({ status }).eq('id', messageId);
+      this.syncConnected();
     } catch (_) {}
   }
 
@@ -627,6 +710,7 @@ class ChatService {
     if (!messageIds.length) return;
     try {
       await supabase.from('messages').update({ status: 'read' }).in('id', messageIds);
+      this.syncConnected();
       for (const id of messageIds) {
         await offlineService.updateMessageStatus(id, 'read');
       }
@@ -644,14 +728,14 @@ class ChatService {
     await offlineService.updateMessageRetry(messageId, 0);
     await offlineService.updateMessageStatus(messageId, 'pending');
 
-    if (this.isOnline) {
+    if (this.isActuallyOnline) {
       this.processQueue();
     }
   }
 
   // ── PUBLIC: getNetworkStatus() ───────────────────────────────────────────
   getNetworkStatus(): boolean {
-    return this.isOnline;
+    return this.isActuallyOnline;
   }
 
   // ── PUBLIC: getPendingMessageCount() ─────────────────────────────────────
@@ -689,9 +773,10 @@ class ChatService {
             type:    row.media_type ?? 'image',
             url:     row.media_url,
             caption: row.media_caption,
+            thumbnail: row.media_thumbnail,
           }
         : undefined,
-      reply_to:    row.reply_to_id?.toString(),
+      reply_to:    row.reply_to_id ? row.reply_to_id.toString() : undefined,
       reactions:   row.reaction ? [row.reaction] : undefined,
     };
   }
@@ -736,6 +821,7 @@ class ChatService {
     if (!this.userId || !this.partnerId || !this.lastPollAt) return;
     // Guard: skip if a poll is already in-flight
     if (this.isPolling) return;
+    if (!this.isActuallyOnline) return;
     this.isPolling = true;
 
     const since = this.lastPollAt;
@@ -798,7 +884,8 @@ class ChatService {
     this.isInitialized = false;
     this.userId        = null;
     this.partnerId     = null;
-    this.isOnline      = true;
+    this.isDeviceOnline = true;
+    this.isServerReachable = true;
     this.lastPollAt    = null;
 
     console.log('[ChatService] Cleaned up.');

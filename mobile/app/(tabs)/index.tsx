@@ -27,7 +27,6 @@ import { proxySupabaseUrl } from '../../config/api';
 
 import { useApp } from '../../context/AppContext';
 import { SoulAvatar } from '../../components/SoulAvatar';
-import { SoulLogo } from '../../components/SoulLogo';
 import { StatusViewerModal } from '../../components/StatusViewerModal';
 import { MediaPreviewModal } from '../../components/MediaPreviewModal';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
@@ -108,10 +107,12 @@ interface ChatListItemProps {
   lastMsg: { text?: string; timestamp?: string };
   onSelect: (contact: Contact, y: number) => void;
   isTyping: boolean;
+  onlineUsers: string[];
+  connectivity: { isDeviceOnline: boolean; isServerReachable: boolean; isRealtimeConnected: boolean };
   isHidden?: boolean;
 }
 
-const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }: ChatListItemProps) => {
+const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, onlineUsers, connectivity, isHidden }: ChatListItemProps) => {
   const scaleAnim = useSharedValue(1);
   const opacityAnim = useSharedValue(1);
   const itemRef = useRef<View>(null);
@@ -191,7 +192,7 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, isHidden }
                 }
               ]}
             />
-            {item.status === 'online' && <View style={styles.onlineIndicator} />}
+            {(item.status === 'online' || onlineUsers.includes(item.id)) && connectivity.isRealtimeConnected && <View style={styles.onlineIndicator} />}
           </Animated.View>
 
           <View style={styles.chatContent}>
@@ -253,6 +254,8 @@ export default function HomeScreen() {
     toggleStatusLike,
     sendChatMessage,
     addStatusView,
+    connectivity,
+    onlineUsers,
   } = useApp();
   const navigation = useNavigation();
   const router = useRouter();
@@ -501,6 +504,8 @@ export default function HomeScreen() {
         mediaTypes: ImagePicker.MediaTypeOptions.All,
         allowsEditing: true,
         videoMaxDuration: 60,
+        legacy: true,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
       });
       await createStatus(result);
   };
@@ -542,6 +547,8 @@ export default function HomeScreen() {
           lastMsg={lastMsg} 
           onSelect={handleUserSelect} 
           isTyping={isTyping}
+          onlineUsers={onlineUsers}
+          connectivity={connectivity}
       />
     );
   }, [lastMessagesMap, typingUsers, handleUserSelect, contactStoriesMap]);
@@ -553,7 +560,6 @@ export default function HomeScreen() {
   const renderHeader = useCallback(() => (
     <View style={styles.homeHeaderWrapper}>
       <View style={styles.topHeader}>
-        <SoulLogo width={32} height={32} />
         <View style={styles.headerActions}>
            <TouchableOpacity 
              onPress={() => router.push('/requests')} 
@@ -760,7 +766,7 @@ const styles = StyleSheet.create({
   topHeader: { 
     flexDirection: 'row', 
     alignItems: 'center', 
-    justifyContent: 'space-between', 
+    justifyContent: 'flex-end', 
     paddingHorizontal: 20,
     paddingVertical: 10,
     height: 60

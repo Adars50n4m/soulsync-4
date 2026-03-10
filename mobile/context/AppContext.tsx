@@ -60,6 +60,7 @@ interface User {
     name: string;
     avatar: string;
     bio: string;
+    username?: string;
     birthdate?: string;
     note?: string; // New field for Soul Notes
     noteTimestamp?: string; // ISO date string
@@ -90,6 +91,7 @@ export const USERS: Record<string, User> = {
     'shri': {
         id: SHRI_ID,
         name: 'SHRI',
+        username: 'shri',
         avatar: '',
         bio: '✨ Connected through the stars',
         birthdate: '2000-01-01',
@@ -97,6 +99,7 @@ export const USERS: Record<string, User> = {
     'hari': {
         id: HARI_ID,
         name: 'HARI',
+        username: 'hari',
         avatar: '',
         bio: '🔗 Forever in sync',
         birthdate: '2000-01-01',
@@ -105,6 +108,7 @@ export const USERS: Record<string, User> = {
     [SHRI_ID]: {
         id: SHRI_ID,
         name: 'SHRI',
+        username: 'shri',
         avatar: '',
         bio: '✨ Connected through the stars',
         birthdate: '2000-01-01',
@@ -112,6 +116,7 @@ export const USERS: Record<string, User> = {
     [HARI_ID]: {
         id: HARI_ID,
         name: 'HARI',
+        username: 'hari',
         avatar: '',
         bio: '🔗 Forever in sync',
         birthdate: '2000-01-01',
@@ -131,6 +136,11 @@ interface AppContextType {
     isLoggedIn: boolean;
     isReady: boolean;
     isCloudConnected: boolean;
+    connectivity: {
+        isDeviceOnline: boolean;
+        isServerReachable: boolean;
+        isRealtimeConnected: boolean;
+    };
     login: (username: string, password: string) => Promise<boolean>;
     setSession: (userId: string) => Promise<void>;
     logout: () => Promise<void>;
@@ -157,6 +167,7 @@ interface AppContextType {
     addCall: (call: Omit<CallLog, 'id'>) => Promise<void>;
     deleteCall: (id: string) => Promise<void>;
     clearCalls: () => Promise<void>;
+    addStatus: (status: Omit<StatusUpdate, 'id' | 'likes' | 'views'> & { localUri?: string }) => Promise<void>;
     deleteStatus: (id: string) => Promise<void>;
     toggleStatusLike: (statusId: string) => Promise<void>;
     setTheme: (theme: ThemeName) => void;
@@ -229,6 +240,11 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
     const [isReady, setIsReady] = useState(false);
     const [isCloudConnected, setIsCloudConnected] = useState(true);
+    const [connectivity, setConnectivity] = useState({
+        isDeviceOnline: true,
+        isServerReachable: true,
+        isRealtimeConnected: true
+    });
     const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
     const [typingUsers, setTypingUsers] = useState<string[]>([]);
     const appStateRef = useRef<AppStateStatus>(AppState.currentState as AppStateStatus);
@@ -352,20 +368,39 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         // Presence sync — fires whenever the presence state changes
         channel.on('presence', { event: 'sync' }, () => {
             const state = channel.presenceState();
-            const onlineIds = Object.keys(state);
-            setOnlineUsers(onlineIds);
+            const users = new Set<string>();
+            Object.values(state).forEach((presences: any) => {
+                presences.forEach((p: any) => {
+                   // Ensure we only track UUIDs in the onlineUsers list
+                   const rawId = p.user_id || p.userId;
+                   if (rawId) {
+                       const resolved = resolveUserId(rawId);
+                       users.add(resolved);
+                   }
+                });
+            });
+            const uniqueUsers = Array.from(users);
+            console.log('[Presence] Sync. Online count:', uniqueUsers.length, uniqueUsers);
+            setOnlineUsers(uniqueUsers);
             
-            // NOTE: We no longer force-offline users here because Supabase Realtime 
-            // is often blocked by ISPs. We rely on the polling function below for 
-            // the primary status, and only use this as a 'fast-path' for online status.
-            if (onlineIds.length > 0) {
-                setContacts(prev => prev.map(c => {
-                    if (onlineIds.includes(c.id)) {
+            // Re-map ALL contacts. We use UUIDs exclusively.
+            setContacts(prev => {
+                const updated = prev.map(c => {
+                    const isNowOnline = uniqueUsers.includes(c.id);
+                    if (isNowOnline && c.status !== 'online') {
+                        console.log(`[Presence] Contact ${c.name} (${c.id}) -> ONLINE`);
                         return { ...c, status: 'online' as const };
+                    } else if (!isNowOnline && c.status === 'online') {
+                        console.log(`[Presence] Contact ${c.name} (${c.id}) -> OFFLINE`);
+                        return { ...c, status: 'offline' as const };
                     }
                     return c;
-                }));
-            }
+                });
+                return updated;
+            });
+            
+            // Cleanup typing users for those who are no longer online
+            setTypingUsers(prev => prev.filter(tid => uniqueUsers.includes(tid)));
         });
 
         // Typing broadcast listener
@@ -397,10 +432,8 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                 await channel.untrack();
                 updatePresenceInSupabase(currentUser.id, false);
             }
-            appStateRef.current = nextAppState;
         };
 
-        updatePresenceInSupabase(currentUser.id, true);
         const subscription = AppState.addEventListener('change', handleAppStateChange);
 
         return () => {
@@ -408,9 +441,30 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
             channel.untrack();
             supabase.removeChannel(channel);
             presenceChannelRef.current = null;
+        };
+    }, [currentUser?.id, updatePresenceInSupabase]);
+
+    // Separate Heartbeat Effect (Keeps 'is_online' true in DB while app is active)
+    useEffect(() => {
+        if (!currentUser) return;
+
+        const heartbeat = async () => {
+             if (AppState.currentState === 'active') {
+                 updatePresenceInSupabase(currentUser.id, true);
+             }
+        };
+
+        // Heartbeat every 15s to prevent staleness
+        const interval = setInterval(heartbeat, 15_000);
+        
+        // Initial heartbeat
+        heartbeat();
+
+        return () => {
+            clearInterval(interval);
             updatePresenceInSupabase(currentUser.id, false);
         };
-    }, [currentUser, updatePresenceInSupabase]);
+    }, [currentUser?.id, updatePresenceInSupabase]);
 
     // Separate Reliable Polling Effect (Works even if Realtime is blocked)
     useEffect(() => {
@@ -447,9 +501,9 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
             }
         };
 
-        // Poll immediately then every 30s (was 15s — reduced to ease RCTNetworking load)
+        // Poll immediately then every 10s (increased frequency for better UX)
         pollOtherUserStatus();
-        const pollInterval = setInterval(pollOtherUserStatus, 30_000);
+        const pollInterval = setInterval(pollOtherUserStatus, 10_000);
 
         return () => clearInterval(pollInterval);
     }, [currentUser?.id]);  // depend only on ID, not full object (avoids channel flap)
@@ -500,6 +554,25 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         return () => musicSyncService.cleanup();
     }, [currentUser, otherUser]); 
 
+    // Helper to keep contacts deduplicated and IDs resolved
+    const syncSetContacts = useCallback((updateFn: (prev: Contact[]) => Contact[]) => {
+        setContacts(prev => {
+            const next = updateFn(prev);
+            // Deduplicate by ID and resolve legacy IDs to UUIDs
+            const seen = new Set<string>();
+            const deduplicatedAndResolved = next.filter(c => {
+                const resolvedId = resolveUserId(c.id);
+                if (!resolvedId || seen.has(resolvedId)) return false;
+                seen.add(resolvedId);
+                return true;
+            }).map(c => ({
+                ...c,
+                id: resolveUserId(c.id)
+            }));
+            return deduplicatedAndResolved;
+        });
+    }, []);
+
     // Load session on mount
     useEffect(() => {
         const loadSession = async () => {
@@ -507,25 +580,50 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                 const userId = await AsyncStorage.getItem('ss_current_user');
                 console.log('[AppContext] Loading session for user:', userId);
                 
-                if (userId) {
-                    const storedProfileStr = await AsyncStorage.getItem(`@profile_${userId}`);
-                    let userObj = USERS[userId];
-                    if (storedProfileStr) {
-                        try { userObj = JSON.parse(storedProfileStr); } catch (e) {}
-                    }
-                    
-                    const otherId = userObj.id === SHRI_ID ? 'hari' : 'shri';
-                    const other = USERS[otherId];
-                    
-                    setCurrentUser(userObj);
-                    setOtherUser(other);
+                    if (userId) {
+                        const storedProfileStr = await AsyncStorage.getItem(`@profile_${userId}`);
+                        let userObj = USERS[userId] || USERS['shri']; // Fallback
+                        
+                        if (storedProfileStr) {
+                            try { 
+                                const parsed = JSON.parse(storedProfileStr);
+                                userObj = { ...userObj, ...parsed };
+                            } catch (e) {}
+                        }
+                        
+                        // [HARDENING] Force UUID on currentUser
+                        if (userObj.id === 'shri') userObj.id = SHRI_ID;
+                        if (userObj.id === 'hari') userObj.id = HARI_ID;
+                        
+                        const otherId = userObj.id === SHRI_ID ? 'hari' : 'shri';
+                        const other = USERS[otherId];
+                        
+                        setCurrentUser(userObj);
+                        setOtherUser(other);
                     
                     // 1. Load from Local DB (Instant)
                     try {
-                        const localContacts = await offlineService?.getContacts() || [];
+                        let localContacts = await offlineService?.getContacts() || [];
+                        
+                        // [Phase 3 HARDENING] Map legacy IDs in local DB to UUIDs
+                        localContacts = localContacts.map(c => {
+                            if (c.id === 'shri') return { ...c, id: SHRI_ID };
+                            if (c.id === 'hari') return { ...c, id: HARI_ID };
+                            return c;
+                        });
+
+                        // Deduplicate by ID (keep first occurrence)
+                        // This deduplication is now handled by syncSetContacts
+                        // const seenIds = new Set();
+                        // localContacts = localContacts.filter(c => {
+                        //     if (!c.id || seenIds.has(c.id)) return false;
+                        //     seenIds.add(c.id);
+                        //     return true;
+                        // });
+
                         if (localContacts.length > 0) {
-                            console.log('[AppContext] Loaded contacts from local DB');
-                            setContacts(localContacts);
+                            console.log('[AppContext] Loaded contacts from local DB (ID resolved)');
+                            syncSetContacts(prev => localContacts); // Use syncSetContacts for deduplication and ID resolution
                         } else {
                              // Fallback for first run
                             setContacts([{
@@ -539,10 +637,12 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                             }]);
                         }
 
-                        const localMessages = await offlineService?.getMessages(other.id) || [];
+                        // Resolve IDs for messages too
+                        const resolvedOtherId = resolveUserId(other.id);
+                        const localMessages = await offlineService?.getMessages(resolvedOtherId) || [];
                         if (localMessages.length > 0) {
-                            console.log('[AppContext] Loaded messages from local DB', localMessages.length);
-                            syncSetMessages(prev => ({ ...prev, [other.id]: localMessages }));
+                            console.log('[AppContext] Loaded messages from local DB for:', resolvedOtherId, localMessages.length);
+                            syncSetMessages(prev => ({ ...prev, [resolvedOtherId]: localMessages }));
                         }
                         
                         const localStatusRows = await offlineService?.getStatuses() || [];
@@ -796,6 +896,8 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
                 },
                 (online: boolean) => {
                     setIsCloudConnected(online);
+                    const state = chatService.getConnectivityState();
+                    setConnectivity(state);
                 },
                 (messageId: string, progress: number) => {
                     // Update the localized upload progress state
@@ -915,9 +1017,22 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     const addMessageSafely = useCallback((partnerId: string, msg: Message) => {
         syncSetMessages(prev => {
             const chatMessages = prev[partnerId] || [];
-            if (chatMessages.some(m => m.id === msg.id)) return prev;
-            
-            // Ensure timestamp is set and sort the list
+            const existingIdx = chatMessages.findIndex(m => m.id === msg.id);
+
+            if (existingIdx !== -1) {
+                // Message already in state. Update it if the incoming version has media
+                // that the stored copy is missing (e.g. stored before upload completed,
+                // or loaded from SQLite before fetchMissedMessages ran).
+                const existing = chatMessages[existingIdx];
+                if (msg.media && !existing.media) {
+                    const updated = [...chatMessages];
+                    updated[existingIdx] = { ...existing, media: msg.media };
+                    return { ...prev, [partnerId]: updated };
+                }
+                return prev;
+            }
+
+            // New message — add and keep list sorted by timestamp
             const messageWithTimestamp = { ...msg, timestamp: msg.timestamp || new Date().toISOString() };
             const newList = [...chatMessages, messageWithTimestamp];
             return {
@@ -1283,7 +1398,24 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
     }, [updatePresenceInSupabase, configureAudioMode]);
 
     // ... (Keep existing profile fetchers) ...
-     const fetchProfileFromSupabase = async (userId: string) => {
+    const resolveUserId = useCallback((input: string): string | null => {
+        if (!input) return null;
+        // If it's the legacy short ID, map it to UUID
+        if (input === 'shri') return SHRI_ID;
+        if (input === 'hari') return HARI_ID;
+        
+        // Simple regex to check if it's a valid UUID format before sending to Postgres
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        if (uuidRegex.test(input)) return input;
+        
+        console.warn(`[AppContext] resolveUserId: "${input}" is not a valid UUID or legacy name.`);
+        return null;
+    }, []);
+
+     const fetchProfileFromSupabase = async (inputId: string) => {
+        const userId = resolveUserId(inputId);
+        if (!userId) return;
+
         try {
             const { data, error } = await supabase
                 .from('profiles')
@@ -1310,7 +1442,10 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         }
     };
 
-    const fetchOtherUserProfile = async (userId: string) => {
+    const fetchOtherUserProfile = async (inputId: string) => {
+        const userId = resolveUserId(inputId);
+        if (!userId) return;
+
         try {
             const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
             if (data) {
@@ -2394,7 +2529,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
 
     const contextValue = useMemo(() => ({
         currentUser, otherUser, isLoggedIn: !!currentUser, login, setSession, logout,
-        contacts, messages, calls, statuses, theme, activeTheme: THEMES[theme], activeCall, musicState, isReady, isCloudConnected, onlineUsers,
+        contacts, messages, calls, statuses, theme, activeTheme: THEMES[theme], activeCall, musicState, isReady, isCloudConnected, connectivity, onlineUsers,
         addMessage, updateMessage, updateMessageStatus, deleteMessage, addReaction, addCall, deleteCall, clearCalls, addStatus, deleteStatus, setTheme,
         startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, toggleVideo, playSong, togglePlayMusic, toggleFavoriteSong,
         seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView, toggleStatusLike,
@@ -2402,7 +2537,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
         biometricEnabled, pinEnabled, pin, isLocked, setBiometricEnabled, setPinEnabled, setPin, unlockApp,
         privacySettings, updatePrivacy, uploadProgressTracker
     }), [
-        currentUser, otherUser, contacts, messages, calls, statuses, theme, activeCall, musicState, isReady, isCloudConnected, onlineUsers,
+        currentUser, otherUser, contacts, messages, calls, statuses, theme, activeCall, musicState, isReady, isCloudConnected, connectivity, onlineUsers,
         login, setSession, logout, addMessage, updateMessage, updateMessageStatus, deleteMessage, addReaction, addCall, deleteCall, clearCalls, addStatus, deleteStatus, setTheme,
         startCall, acceptCall, endCall, toggleMinimizeCall, toggleMute, toggleVideo, playSong, togglePlayMusic, toggleFavoriteSong,
         seekTo, getPlaybackPosition, sendChatMessage, updateProfile, addStatusView, toggleStatusLike,

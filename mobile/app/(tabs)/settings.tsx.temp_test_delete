@@ -114,7 +114,6 @@ export default function SettingsScreen() {
                     subtitle={currentUser?.bio}
                     username={currentUser?.username || 'user'}
                     onEditPress={openProfileEdit}
-                    scrollY={scrollY}
                 />
 
                 {/* Theme Section */}

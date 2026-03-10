@@ -87,6 +87,7 @@ app.post('/api/messages/send', async (req, res) => {
                 media_type: message.media?.type || null,
                 media_url: message.media?.url || null,
                 media_caption: message.media?.caption || null,
+                media_thumbnail: message.media?.thumbnail || null,
                 reply_to_id: message.reply_to || null,
                 created_at: message.timestamp || new Date().toISOString(),
                 status: 'sent'
@@ -249,8 +250,8 @@ app.get('/api/users/search', authenticateUser, async (req, res) => {
 
         // Fetch users matching query
         const { data: users, error } = await supabase
-            .from('users')
-            .select('id, username, full_name, avatar_url, is_online, last_seen')
+            .from('profiles')
+            .select('id, username, display_name, avatar_url, is_online, last_seen')
             .ilike('username', `%${query}%`)
             .neq('id', currentUserId)
             .limit(20);
@@ -335,7 +336,7 @@ app.post('/api/connections/request', authenticateUser, async (req, res) => {
         if (error) throw error;
 
         // Fetch sender username for notification
-        const { data: sender } = await supabase.from('users').select('username').eq('id', senderId).single();
+        const { data: sender } = await supabase.from('profiles').select('username').eq('id', senderId).single();
 
         // Emit socket notification to receiver
         io.to(receiverId).emit('connection:request_received', {
@@ -437,7 +438,7 @@ app.put('/api/connections/request/:requestId/accept', authenticateUser, async (r
         if (connErr) throw connErr;
         
         // Fetch receiver (me) username for notification
-        const { data: receiver } = await supabase.from('users').select('username').eq('id', userId).single();
+        const { data: receiver } = await supabase.from('profiles').select('username').eq('id', userId).single();
 
         // 4. Notify sender
         io.to(request.sender_id).emit('connection:request_accepted', {
@@ -519,7 +520,7 @@ app.get('/api/connections', authenticateUser, async (req, res) => {
 
         // Fetch user profiles manually for now (to avoid complex joins in one go)
         const otherUserIds = conns.map(c => c.user_1_id === userId ? c.user_2_id : c.user_1_id);
-        const { data: profiles } = await supabase.from('users').select('id, username, full_name, avatar_url, is_online').in('id', otherUserIds);
+        const { data: profiles } = await supabase.from('profiles').select('id, username, display_name, avatar_url, is_online').in('id', otherUserIds);
 
         // Flatten: return the "other" user
         const connections = conns.map(c => {
@@ -599,7 +600,8 @@ io.on('connection', (socket) => {
                         media_type: data.message.media?.type || null,
                         media_url: data.message.media?.url || null,
                         media_caption: data.message.media?.caption || null,
-                        reply_to_id: data.message.reply_to || null,
+                        media_thumbnail: data.message.media?.thumbnail || null,
+                        reply_to_id: data.message.media?.reply_to || data.message.reply_to || null,
                         created_at: data.message.timestamp || new Date().toISOString(),
                         status: 'sent'
                     });

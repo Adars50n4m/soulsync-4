@@ -60,6 +60,7 @@ export interface UserProfile {
   bio: string | null;
   email: string;
   createdAt: string;
+  birthdate: string | null;
 }
 
 export interface AuthResult {
@@ -105,6 +106,7 @@ class AuthService {
             username: 'shri',
             name: 'Shri Ram',
             display_name: 'Shri Ram',
+            birthdate: '2000-01-01',
           } as any,
         };
       }
@@ -124,6 +126,7 @@ class AuthService {
             bio: null,
             email: 'hari@example.com', // Placeholder email
             createdAt: new Date().toISOString(),
+            birthdate: '2000-01-01',
           },
         };
       }
@@ -468,7 +471,7 @@ class AuthService {
       }
 
       const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-        redirectTo: 'soulsync://reset-password',   // Deep link — configure in app.json
+        redirectTo: 'mobile://reset-password',   // Deep link — configure in app.json
       });
 
       if (error) throw error;
@@ -536,6 +539,7 @@ class AuthService {
         bio:         data.bio,
         email:       authUser.user?.email ?? '',
         createdAt:   data.created_at,
+        birthdate:   data.birthdate,
       };
     } catch {
       return null;

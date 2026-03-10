@@ -1,8 +1,7 @@
 /**
- * SoulSync — Couple Teddy Bears Login (React Native)
- * ✅ Fixed: "Moved to native" Error & Blink Stability.
- * Consistent use of JS driver for SVG properties to ensure stability.
- * ✅ Updated: OTP-based login + Google Sign-In + Forgot Password
+ * SoulSync — Login Screen
+ * Design: Exact teddy bear couple from reference + dark theme
+ * Auth:   Supabase email/password + Google Sign-In
  */
 
 import React, { useState, useRef, useEffect } from 'react';
@@ -11,160 +10,126 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  StyleSheet,
+  Animated,
+  SafeAreaView,
   KeyboardAvoidingView,
   Platform,
-  Animated,
-  StyleSheet,
-  Dimensions,
+  StatusBar,
   ActivityIndicator,
+  Dimensions,
 } from 'react-native';
+import Svg, { Circle, Path, Ellipse, G, Line } from 'react-native-svg';
 import { Feather } from '@expo/vector-icons';
-import { GlassView } from '../components/ui/GlassView';
-import { LinearGradient } from 'expo-linear-gradient';
-import Svg, {
-  Path,
-  Circle,
-  Ellipse,
-  G,
-  Defs,
-  ClipPath,
-  Rect,
-} from 'react-native-svg';
 import { useRouter } from 'expo-router';
 import { useApp } from '../context/AppContext';
 import { authService } from '../services/AuthService';
+import { GlassView } from '../components/ui/GlassView';
 
-const AnimatedG = Animated.createAnimatedComponent(G) as any;
-const AnimatedPath = Animated.createAnimatedComponent(Path) as any;
-const AnimatedEllipse = Animated.createAnimatedComponent(Ellipse) as any;
-const AnimatedRect = Animated.createAnimatedComponent(Rect) as any;
-const AnimatedCircle = Animated.createAnimatedComponent(Circle) as any;
+const { width: SCREEN_W } = Dimensions.get('window');
 
-const { width } = Dimensions.get('window');
-
+// ── Color Theme ──────────────────────────────────────────────────────
+const STROKE = '#3A2B24';
 const C = {
-  bg:         '#0a0a0a',
-  pinkMid:    '#EC4899',
-  pinkText:   '#FBCFE8',
-  boyMain:    '#9B6A41',
-  boyLight:   '#E8BE9A',
-  boyPaw:     '#845630',
-  girlMain:   '#D88D6D',
-  girlLight:  '#FAD6C3',
-  girlPaw:    '#B87355',
-  bearDark:   '#26160D',
-  blush:      '#FF8DA1',
-  bowPink:    '#F472B6',
-  bowDark:    '#DB2777',
+  bg:           '#000000',
+  card:         'rgba(26, 26, 28, 0.40)',
+  cardBorder:   'rgba(255, 255, 255, 0.10)',
+  accent:       '#F08B8B',
+  accentDark:   '#E56B85',
+  input:        '#262628',
+  inputBorder:  '#3A3A3C',
+  inputFocus:   '#F08B8B',
+  text:         '#FFFFFF',
+  textMuted:    '#9CA3AF',
+  textSub:      '#999999',
 };
 
 export default function LoginScreen() {
   const router = useRouter();
   const { login, setSession, currentUser } = useApp();
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isEmailFocused, setIsEmailFocused] = useState(false);
-  const [isPasswordFocused, setIsPasswordFocused] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const [status, setStatus] = useState('idle');
+  const [email, setEmail]               = useState('');
+  const [password, setPassword]         = useState('');
+  const [isEmailFocused, setEmailFocus] = useState(false);
+  const [isPassFocused, setPassFocus]   = useState(false);
+  const [showPassword, setShowPwd]      = useState(false);
+  const [status, setStatus]             = useState<'idle'|'loading'|'success'|'fail'>('idle');
 
-  // Animated Values
-  const breatheAnim = useRef(new Animated.Value(0)).current;
-  const blinkAnim   = useRef(new Animated.Value(0)).current;
-  const pawsLHAnim  = useRef(new Animated.Value(0)).current; 
-  const pawsRHAnim  = useRef(new Animated.Value(0)).current; 
-  const statusAnim  = useRef(new Animated.Value(0)).current;
+  // ── Animated Values ──────────────────────────────────────────────
+  const jumpY      = useRef(new Animated.Value(0)).current;
+  const shakeX     = useRef(new Animated.Value(0)).current;
+  const heartScale = useRef(new Animated.Value(0)).current;
+  const heartFloat = useRef(new Animated.Value(0)).current;
+  const boyBreathe = useRef(new Animated.Value(0)).current;
+  const girlBreathe = useRef(new Animated.Value(0)).current;
+  const floatY = useRef(new Animated.Value(0)).current;
 
-  // ─── Animations ──────────────────────────────
-
+  // Redirect if already logged in
   useEffect(() => {
-    if (currentUser) {
-      router.replace('/(tabs)');
-    }
+    if (currentUser) router.replace('/(tabs)');
   }, [currentUser]);
 
+  // Breathe loops
   useEffect(() => {
-    let isActive = true;
-    let blinkTimer: any = null;
-    
-    // Breathing loop (JS Driver for SVG stability)
+    const loop = (anim: Animated.Value, delay = 0) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(anim, { toValue: 1, duration: 2000, useNativeDriver: true }),
+          Animated.timing(anim, { toValue: 0, duration: 2000, useNativeDriver: true }),
+        ])
+      ).start();
+    loop(boyBreathe, 0);
+    loop(girlBreathe, 600);
+
+    // Smooth floating motion
     Animated.loop(
       Animated.sequence([
-        Animated.timing(breatheAnim, { toValue: 1, duration: 2000, useNativeDriver: false }),
-        Animated.timing(breatheAnim, { toValue: 0, duration: 2000, useNativeDriver: false }),
+        Animated.timing(floatY, { toValue: -8, duration: 2200, useNativeDriver: true }),
+        Animated.timing(floatY, { toValue: 0,  duration: 2200, useNativeDriver: true }),
       ])
     ).start();
-
-    // Blinking loop (Using setTimeout for reliable long delays on Android)
-    // Blinking loop (Robust strict single-timer)
-    const runBlink = () => {
-      if (!isActive) return;
-      if (blinkTimer) clearTimeout(blinkTimer);
-      
-      // Extremely slow: 25 to 50 seconds delay
-      const nextDelay = Math.random() * 25000 + 25000;
-      
-      blinkTimer = setTimeout(() => {
-        if (!isActive) return;
-        
-        Animated.sequence([
-          Animated.timing(blinkAnim, { toValue: 1, duration: 200, useNativeDriver: false }),
-          Animated.timing(blinkAnim, { toValue: 0, duration: 200, useNativeDriver: false }),
-        ]).start(({ finished }) => {
-          if (isActive && finished) {
-            runBlink();
-          }
-        });
-      }, nextDelay);
-    };
-    
-    runBlink();
-
-    return () => {
-      isActive = false;
-      if (blinkTimer) clearTimeout(blinkTimer);
-      blinkAnim.stopAnimation();
-    };
   }, []);
 
+  // Status animations
   useEffect(() => {
-    const LHMove = isPasswordFocused ? 1 : 0;
-    const RHMove = (isPasswordFocused && !showPassword) ? 1 : 0;
-    Animated.parallel([
-      Animated.spring(pawsLHAnim, { toValue: LHMove, friction: 6, tension: 40, useNativeDriver: false }),
-      Animated.spring(pawsRHAnim, { toValue: RHMove, friction: 6, tension: 40, useNativeDriver: false })
-    ]).start();
-  }, [isPasswordFocused, showPassword]);
-
-  useEffect(() => {
-    if (status === 'success' || status === 'fail') {
+    if (status === 'success') {
       Animated.sequence([
-        Animated.timing(statusAnim, { toValue: status === 'success' ? 1 : -1, duration: 150, useNativeDriver: false }),
-        Animated.timing(statusAnim, { toValue: status === 'success' ? 0 : 1, duration: 150, useNativeDriver: false }),
-        Animated.timing(statusAnim, { toValue: 0, duration: 150, useNativeDriver: false }),
+        Animated.timing(jumpY, { toValue: -18, duration: 220, useNativeDriver: true }),
+        Animated.spring(jumpY, { toValue: 0, useNativeDriver: true, tension: 180, friction: 7 }),
       ]).start();
-      
-      if (status === 'fail') {
-        const timer = setTimeout(() => setStatus('idle'), 2000);
-        return () => clearTimeout(timer);
-      }
+      Animated.spring(heartScale, { toValue: 1, tension: 220, friction: 5, useNativeDriver: true }).start();
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(heartFloat, { toValue: -12, duration: 900, useNativeDriver: true }),
+          Animated.timing(heartFloat, { toValue: 0,   duration: 900, useNativeDriver: true }),
+        ])
+      ).start();
+      setTimeout(() => {
+        Animated.timing(heartScale, { toValue: 0, duration: 200, useNativeDriver: true }).start();
+        heartFloat.stopAnimation();
+        heartFloat.setValue(0);
+      }, 3000);
+    } else if (status === 'fail') {
+      Animated.sequence([
+        Animated.timing(shakeX, { toValue: -9, duration: 80, useNativeDriver: true }),
+        Animated.timing(shakeX, { toValue:  9, duration: 80, useNativeDriver: true }),
+        Animated.timing(shakeX, { toValue: -6, duration: 80, useNativeDriver: true }),
+        Animated.timing(shakeX, { toValue:  6, duration: 80, useNativeDriver: true }),
+        Animated.timing(shakeX, { toValue:  0, duration: 80, useNativeDriver: true }),
+      ]).start();
+      const t = setTimeout(() => setStatus('idle'), 2000);
+      return () => clearTimeout(t);
     }
   }, [status]);
 
+  // ── Auth handlers ────────────────────────────────────────────────
   const handleLogin = async () => {
     if (status === 'loading') return;
-    if (!email.trim() || !password.trim()) {
-      setStatus('fail');
-      return;
-    }
+    if (!email.trim() || !password.trim()) { setStatus('fail'); return; }
     setStatus('loading');
-
-    // email field accepts email OR username
     const result = await authService.signInWithPassword(email, password);
-
     if (result.success && result.user) {
-      // Sync the user state to AppContext for UI redirection
       await setSession(result.user.id);
       setStatus('success');
       setTimeout(() => router.replace('/(tabs)'), 1500);
@@ -176,275 +141,354 @@ export default function LoginScreen() {
   const handleGoogleSignIn = async () => {
     if (status === 'loading') return;
     setStatus('loading');
-
     const result = await authService.signInWithGoogle();
-
     if (result.success) {
       setStatus('success');
-      if (result.isNewUser) {
-        setTimeout(() => router.push('/username-setup'), 1000);
-      } else {
-        setTimeout(() => router.replace('/(tabs)'), 1000);
-      }
+      if (result.isNewUser) setTimeout(() => router.push('/username-setup'), 1000);
+      else setTimeout(() => router.replace('/(tabs)'), 1000);
     } else {
       setStatus('fail');
     }
   };
 
-  const handleCreateAccount = () => {
-    router.push('/signup');
-  };
+  // ── Eye tracking ─────────────────────────────────────────────────
+  const trackLen = isEmailFocused ? email.length
+    : (isPassFocused && showPassword ? password.length : 0);
 
-  // ─── Tracking & Paths ───────────────────────
-  
-  const trackingLength = isEmailFocused ? email.length : (isPasswordFocused && showPassword ? password.length : 0);
-  const targetPupilX = (isEmailFocused || (isPasswordFocused && showPassword)) ? (Math.min(trackingLength / 25, 1) * 16 - 8) : 0;
+  const eyeXOffset = (isEmailFocused || (isPassFocused && showPassword))
+    ? (Math.min(trackLen / 25, 1) * 6) - 3 : 0;
+  const eyeYOffset = status === 'fail' ? 3
+    : (isEmailFocused || (isPassFocused && showPassword)) ? 2 : 0;
 
-  let pupilY = 2;
-  if (status === 'fail') pupilY = 12;
-  else if (isEmailFocused) pupilY = 8;
-  else if (isPasswordFocused && showPassword) pupilY = 10;
+  // ── SVG path helpers (exact from reference) ───────────────────────
+  const headPath = (cx: number, cy: number) =>
+    `M ${cx} ${cy-50} C ${cx+45} ${cy-50},${cx+72} ${cy-20},${cx+72} ${cy+15} C ${cx+72} ${cy+55},${cx+40} ${cy+65},${cx} ${cy+65} C ${cx-40} ${cy+65},${cx-72} ${cy+55},${cx-72} ${cy+15} C ${cx-72} ${cy-20},${cx-45} ${cy-50},${cx} ${cy-50} Z`;
 
-  const getMouthPath = (cx, cy) => {
-    if (status === 'success') return `M ${cx - 24} ${cy + 28} Q ${cx} ${cy + 65} ${cx + 24} ${cy + 28} Q ${cx} ${cy + 32} ${cx - 24} ${cy + 28}`;
-    if (status === 'fail') return `M ${cx - 14} ${cy + 42} Q ${cx} ${cy + 28} ${cx + 14} ${cy + 42} Q ${cx} ${cy + 34} ${cx - 14} ${cy + 42}`;
-    if (isPasswordFocused && !showPassword) return `M ${cx - 12} ${cy + 34} Q ${cx} ${cy + 38} ${cx + 12} ${cy + 34} Q ${cx} ${cy + 32} ${cx - 12} ${cy + 34}`;
-    if (isEmailFocused || (isPasswordFocused && showPassword)) {
-      const o = 38 + (email.length % 4) * 3;
-      return `M ${cx - 16} ${cy + 30} Q ${cx} ${cy + o} ${cx + 16} ${cy + 30} Q ${cx} ${cy + 32} ${cx - 16} ${cy + 30}`;
+  // Body starts wider (cx±40) to overlap with head bottom — no visible neck gap
+  const bodyPath = (cx: number, cy: number) =>
+    `M ${cx-40} ${cy+30} C ${cx-55} ${cy+80},${cx-50} ${cy+165},${cx-35} ${cy+175} L ${cx-2} ${cy+175} C ${cx} ${cy+165},${cx} ${cy+165},${cx+2} ${cy+175} L ${cx+35} ${cy+175} C ${cx+50} ${cy+165},${cx+55} ${cy+80},${cx+40} ${cy+30} Z`;
+
+  const leftArm  = `M 16 0 C 24 30,22 65,10 85 A 18 18 0 0 1 -26 75 C -24 40,-20 20,-16 0`;
+  const rightArm = `M -16 0 C -24 30,-22 65,-10 85 A 18 18 0 0 0 26 75 C 24 40,20 20,16 0`;
+
+  // ── Mouth renderer (exact from reference) ─────────────────────────
+  const renderMouth = (cx: number, cy: number) => {
+    const mY = cy + 18;
+    if (status === 'fail') {
+      return <Path d={`M ${cx-8} ${mY+6} Q ${cx} ${mY} ${cx+8} ${mY+6}`} fill="none" stroke={STROKE} strokeWidth="4" strokeLinecap="round" />;
     }
-    return `M ${cx - 18} ${cy + 30} Q ${cx} ${cy + 46} ${cx + 18} ${cy + 30} Q ${cx} ${cy + 36} ${cx - 18} ${cy + 30}`;
+    if (isPassFocused && !showPassword) {
+      return <Path d={`M ${cx-4} ${mY} Q ${cx} ${mY+2} ${cx+4} ${mY}`} fill="none" stroke={STROKE} strokeWidth="4" strokeLinecap="round" />;
+    }
+    let h = status === 'success' ? 16 : 12;
+    if (isEmailFocused || (isPassFocused && showPassword)) {
+      h = 6 + (trackLen % 3) * 3;
+    }
+    return (
+      <G>
+        <Path d={`M ${cx-7} ${mY} Q ${cx} ${mY+2} ${cx+7} ${mY} C ${cx+7} ${mY+h},${cx-7} ${mY+h},${cx-7} ${mY} Z`} fill={STROKE} stroke={STROKE} strokeWidth="3" strokeLinejoin="round" />
+        <Path d={`M ${cx-4} ${mY+h*0.3} C ${cx-4} ${mY+h*0.8},${cx+4} ${mY+h*0.8},${cx+4} ${mY+h*0.3} Z`} fill="#FF94A8" />
+      </G>
+    );
   };
 
-  // Interpolations
-  const headRotBoy  = breatheAnim.interpolate({ inputRange: [0, 1], outputRange: ['2deg', '4deg'] });
-  const headRotGirl = breatheAnim.interpolate({ inputRange: [0, 1], outputRange: ['-2deg', '-4deg'] });
-  const headY       = breatheAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 3] });
-  const bodySX      = breatheAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.02] });
-  const bodySY      = breatheAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0.98] });
-  
-  const pawLHY      = pawsLHAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -90] });
-  const pawLHScale  = pawsLHAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
-  const pawRHY      = pawsRHAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -90] });
-  const pawRHScale  = pawsRHAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
-  
-  // Eye Blink - Animating RY (radius) directly ensures zero shift
-  const eyeRY       = blinkAnim.interpolate({ inputRange: [0, 1], outputRange: [16, 0.5] });
-  const pupilRY     = blinkAnim.interpolate({ inputRange: [0, 1], outputRange: [9, 0.3] });
-
-  const containerTrans = statusAnim.interpolate({
-    inputRange: [-1, 0, 1],
-    outputRange: status === 'fail' ? [-8, 0, 8] : [0, 0, -15],
-  });
-
+  // ── Bear configs (exact from reference) ───────────────────────────
   const bears = [
-    { id: 'boy', cx: 135, cy: 110, colorMain: C.boyMain, colorLight: C.boyLight, colorPaw: C.boyPaw, hasBow: false, rot: headRotBoy },
-    { id: 'girl', cx: 265, cy: 110, colorMain: C.girlMain, colorLight: C.girlLight, colorPaw: C.girlPaw, hasBow: true, rot: headRotGirl },
+    { id: 'boy',  cx: 120, cy: 90, color: '#FFFFFF', snout: '#FFF0F5', cheek: '#FFCAD6', peekArm: 'right' },
+    { id: 'girl', cx: 280, cy: 90, color: '#D69E71', snout: '#F0C4A5', cheek: '#F08B8B', peekArm: 'left'  },
   ];
 
-  return (
-    <View style={styles.container}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.keyboardView}>
-        
-        <Animated.View style={[styles.svgContainer, { transform: [status === 'fail' ? { translateX: containerTrans } : { translateY: containerTrans }] }]}>
-          <Svg 
-            width="360" 
-            height="200" 
-            viewBox="0 0 400 240" 
-            onLayout={() => {}}
-            pointerEvents="none"
-            collapsable={false}
-          >
-            <Defs>
-              {bears.map(b => (
-              <ClipPath id={`mouth-clip-${b.id}`} key={`clip-${b.id}`}>
-                <Path d={getMouthPath(b.cx, b.cy)} />
-              </ClipPath>
-              ))}
-            </Defs>
+  const covering = isPassFocused && !showPassword;
+  const peeking  = isPassFocused && showPassword;
 
-            {bears.map(bear => {
-              const { id, cx, cy, colorMain, colorLight, colorPaw, hasBow, rot } = bear;
+  return (
+    <SafeAreaView style={s.safe}>
+      <StatusBar barStyle="light-content" backgroundColor="#000" />
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={s.kav}>
+
+        {/* ── Bears SVG ─────────────────────────────────────── */}
+        <Animated.View style={[s.bearsWrap, { transform: [{ translateY: Animated.add(jumpY, floatY) }, { translateX: shakeX }] }]}>
+          <Svg width="400" height="240" viewBox="0 0 400 300">
+            {bears.map(({ id, cx, cy, color, snout, cheek, peekArm }) => {
+              const lAngle = (covering || (peeking && peekArm !== 'left'))  ? -170 : 15;
+              const rAngle = (covering || (peeking && peekArm !== 'right')) ?  170 : -15;
+
               return (
                 <G key={id}>
                   {/* Body */}
-                  <AnimatedG originX={cx} originY={240} style={{ transform: [{ scaleX: bodySX }, { scaleY: bodySY }] }}>
-                    <Path d={`M ${cx - 70} 240 C ${cx - 70} 140, ${cx + 70} 140, ${cx + 70} 240 Z`} fill={colorMain} />
-                  </AnimatedG>
+                  <Path d={bodyPath(cx, cy)} fill={color} stroke={STROKE} strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+                  {/* Toe lines */}
+                  {[-24, -14, 14, 24].map(x => (
+                    <Line key={x} x1={cx+x} y1={cy+175} x2={cx+x} y2={cy+165} stroke={STROKE} strokeWidth="3" strokeLinecap="round" />
+                  ))}
+
+                  {/* Ears */}
+                  <Circle cx={cx-48} cy={cy-38} r="18" fill={color} stroke={STROKE} strokeWidth="5" />
+                  <Circle cx={cx+48} cy={cy-38} r="18" fill={color} stroke={STROKE} strokeWidth="5" />
 
                   {/* Head */}
-                  <AnimatedG originX={cx} originY={cy} style={{ transform: [{ rotate: rot }, { translateY: headY }] }}>
-                    <Circle cx={cx-65} cy={cy-45} r="28" fill={colorMain} />
-                    <Circle cx={cx-65} cy={cy-45} r="15" fill={colorLight} />
-                    <Circle cx={cx+65} cy={cy-45} r="28" fill={colorMain} />
-                    <Circle cx={cx+65} cy={cy-45} r="15" fill={colorLight} />
-                    <Circle cx={cx} cy={cy} r="75" fill={colorMain} />
+                  <Path d={headPath(cx, cy)} fill={color} stroke={STROKE} strokeWidth="5" strokeLinejoin="round" />
 
-                    {hasBow && (
-                      <G>
-                        <Path d={`M ${cx+40} ${cy-65} L ${cx+25} ${cy-80} L ${cx+25} ${cy-50} Z`} fill={C.bowPink} />
-                        <Path d={`M ${cx+40} ${cy-65} L ${cx+55} ${cy-80} L ${cx+55} ${cy-50} Z`} fill={C.bowPink} />
-                        <Circle cx={cx+40} cy={cy-65} r="7" fill={C.bowDark} />
-                      </G>
-                    )}
+                  {/* Snout */}
+                  <Ellipse cx={cx} cy={cy+19} rx="22" ry="16" fill={snout} />
 
-                    <Ellipse cx={cx - 48} cy={cy + 12} rx="12" ry="6" fill={C.blush} opacity={hasBow ? 0.6 : 0.3} />
-                    <Ellipse cx={cx + 48} cy={cy + 12} rx="12" ry="6" fill={C.blush} opacity={hasBow ? 0.6 : 0.3} />
+                  {/* Cheeks */}
+                  <Ellipse cx={cx-42} cy={cy+16} rx="12" ry="9" fill={cheek} opacity="0.55" />
+                  <Ellipse cx={cx+42} cy={cy+16} rx="12" ry="9" fill={cheek} opacity="0.55" />
 
-                    {/* Eyes — Animating RY directly (Zero Shift) */}
+                  {/* Eyes */}
+                  {status === 'success' ? (
                     <G>
-                      {status === 'success' ? (
-                        <G>
-                          <Path d={`M ${cx-52} ${cy} Q ${cx-38} ${cy-14} ${cx-24} ${cy}`} stroke={C.bearDark} strokeWidth="4" strokeLinecap="round" fill="none" />
-                          <Path d={`M ${cx+24} ${cy} Q ${cx+38} ${cy-14} ${cx+52} ${cy}`} stroke={C.bearDark} strokeWidth="4" strokeLinecap="round" fill="none" />
-                        </G>
-                      ) : (
-                        <G>
-                          <AnimatedEllipse cx={cx-38} cy={cy} rx={16} ry={eyeRY} fill="white" />
-                          <AnimatedEllipse cx={cx+38} cy={cy} rx={16} ry={eyeRY} fill="white" />
-                          <G transform={`translate(${targetPupilX}, ${pupilY})`}>
-                            <AnimatedEllipse cx={cx-38} cy={cy} rx={9} ry={pupilRY} fill={C.bearDark} />
-                            <AnimatedCircle cx={cx-41} cy={cy-3} r="3" fill="white" opacity={blinkAnim.interpolate({inputRange:[0,0.5], outputRange:[1,0]}) as any} />
-                            <AnimatedEllipse cx={cx+38} cy={cy} rx={9} ry={pupilRY} fill={C.bearDark} />
-                            <AnimatedCircle cx={cx+35} cy={cy-3} r="3" fill="white" opacity={blinkAnim.interpolate({inputRange:[0,0.5], outputRange:[1,0]}) as any} />
-                          </G>
-                        </G>
-                      )}
+                      <Path d={`M ${cx-32} ${cy+7} Q ${cx-24} ${cy-2} ${cx-16} ${cy+7}`} stroke={STROKE} strokeWidth="5" strokeLinecap="round" fill="transparent" />
+                      <Path d={`M ${cx+16} ${cy+7} Q ${cx+24} ${cy-2} ${cx+32} ${cy+7}`} stroke={STROKE} strokeWidth="5" strokeLinecap="round" fill="transparent" />
                     </G>
-
-                    <Ellipse cx={cx} cy={cy+32} rx="34" ry="24" fill={colorLight} />
-                    <Path d={`M ${cx} ${cy+24} C ${cx-8} ${cy+16}, ${cx-4} ${cy+12}, ${cx} ${cy+17} C ${cx+4} ${cy+12}, ${cx+8} ${cy+16}, ${cx} ${cy+24} Z`} fill={C.bearDark} />
+                  ) : (
                     <G>
-                      <Path d={getMouthPath(bear.cx, bear.cy)} fill={C.bearDark} />
-                      <Ellipse cx={cx} cy={cy+44} rx="14" ry="10" fill={C.blush} clipPath={`url(#mouth-clip-${id})`} />
+                      <Circle cx={cx-24+eyeXOffset} cy={cy+5+eyeYOffset} r="6.5" fill={STROKE} />
+                      <Circle cx={cx-21.5+eyeXOffset} cy={cy+2.5+eyeYOffset} r="2" fill="#fff" />
+                      <Circle cx={cx+24+eyeXOffset} cy={cy+5+eyeYOffset} r="6.5" fill={STROKE} />
+                      <Circle cx={cx+26.5+eyeXOffset} cy={cy+2.5+eyeYOffset} r="2" fill="#fff" />
                     </G>
-                  </AnimatedG>
+                  )}
 
-                  {/* LH (Cover eye 1) */}
-                  <AnimatedG originX={cx-60} originY={200} style={{ transform: [{ translateY: pawLHY }, { translateX: isPasswordFocused ? 22 : 0 }] }}>
-                    <AnimatedRect x={cx-84} y="200" width="48" height="85" fill={colorPaw} rx="24" style={{ transform: [{ scaleY: pawLHScale }] }} />
-                    <Ellipse cx={cx-60} cy="200" rx="24" ry="32" fill={colorPaw} />
-                  </AnimatedG>
-                  {/* RH (Cover eye 2) */}
-                  <AnimatedG originX={cx+60} originY={200} style={{ transform: [{ translateY: pawRHY }, { translateX: (isPasswordFocused && !showPassword) ? -22 : 0 }] }}>
-                    <AnimatedRect x={cx+36} y="200" width="48" height="85" fill={colorPaw} rx="24" style={{ transform: [{ scaleY: pawRHScale }] }} />
-                    <Ellipse cx={cx+60} cy="200" rx="24" ry="32" fill={colorPaw} />
-                  </AnimatedG>
+                  {/* Nose */}
+                  <Path d={`M ${cx-2} ${cy+11} Q ${cx} ${cy+13} ${cx+2} ${cy+11} Z`} fill={STROKE} stroke={STROKE} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+
+                  {/* Mouth */}
+                  {renderMouth(cx, cy)}
+
+                  {/* Left arm */}
+                  <G transform={`rotate(${lAngle}, ${cx-36}, ${cy+82})`}>
+                    <G transform={`translate(${cx-36}, ${cy+82})`}>
+                      <Path d={leftArm} fill={color} stroke={STROKE} strokeWidth="5" strokeLinejoin="round" strokeLinecap="round" />
+                      <Path d="M -12 76 L -14 86" fill="none" stroke={STROKE} strokeWidth="3" strokeLinecap="round" />
+                      <Path d="M 0 78 L -2 89"   fill="none" stroke={STROKE} strokeWidth="3" strokeLinecap="round" />
+                    </G>
+                  </G>
+
+                  {/* Right arm */}
+                  <G transform={`rotate(${rAngle}, ${cx+36}, ${cy+82})`}>
+                    <G transform={`translate(${cx+36}, ${cy+82})`}>
+                      <Path d={rightArm} fill={color} stroke={STROKE} strokeWidth="5" strokeLinejoin="round" strokeLinecap="round" />
+                      <Path d="M 12 76 L 14 86" fill="none" stroke={STROKE} strokeWidth="3" strokeLinecap="round" />
+                      <Path d="M 0 78 L 2 89"   fill="none" stroke={STROKE} strokeWidth="3" strokeLinecap="round" />
+                    </G>
+                  </G>
                 </G>
               );
             })}
+
+
           </Svg>
         </Animated.View>
 
-        <View style={styles.cardContainer}>
-          <GlassView 
-            intensity={Platform.OS === 'ios' ? 85 : 90} 
-            tint="dark" 
-            style={StyleSheet.absoluteFill}
-          />
-          {/* Subtle "Gloss" highlight layer */}
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(255,255,255,0.03)' }]} />
-          
-          <View style={styles.card}>
-            <View style={styles.header}>
-              <Text style={styles.title}>SoulSync</Text>
-              <Text style={styles.subtitle}>Join the cutest couples today ✨</Text>
-            </View>
+        {/* ── Form Card ─────────────────────────────────────────── */}
+        <View style={s.card}>
+          {/* Blur backdrop */}
+          <GlassView intensity={Platform.OS === 'ios' ? 80 : 60} tint="dark" style={StyleSheet.absoluteFill} />
 
-            {/* Email */}
-            <View style={styles.inputContainer}>
-              <View style={styles.iconWrapper}><Feather name="user" size={20} color={isEmailFocused ? '#EC4899' : '#9CA3AF'} /></View>
-              <TextInput style={styles.input} placeholder="Email or Username" placeholderTextColor="#9CA3AF" onFocus={() => setIsEmailFocused(true)} onBlur={() => setIsEmailFocused(false)} onChangeText={setEmail} value={email} autoCapitalize="none" autoCorrect={false} />
-            </View>
+          <Text style={s.title}>Soul</Text>
+          <Text style={s.subtitle}>Soul for Soulmates</Text>
 
-            {/* Password */}
-            <View style={styles.inputContainer}>
-              <View style={styles.iconWrapper}><Feather name="lock" size={20} color={isPasswordFocused ? '#EC4899' : '#9CA3AF'} /></View>
-              <TextInput style={styles.input} placeholder="Password" placeholderTextColor="#9CA3AF" secureTextEntry={!showPassword} onFocus={() => setIsPasswordFocused(true)} onBlur={() => setIsPasswordFocused(false)} onChangeText={setPassword} value={password} autoCapitalize="none" />
-              <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowPassword(!showPassword)}>
-                <Feather name={showPassword ? 'eye' : 'eye-off'} size={20} color="#9CA3AF" />
-              </TouchableOpacity>
-            </View>
+          {/* Soul ID */}
+          <View style={[s.inputWrap, isEmailFocused && s.inputWrapFocused]}>
+            <Feather name="user" size={20} color={isEmailFocused ? C.accent : '#666'} style={s.inputIcon} />
+            <TextInput
+              style={s.input}
+              placeholder="Soul Id"
+              placeholderTextColor="#666"
+              value={email}
+              onChangeText={setEmail}
+              onFocus={() => setEmailFocus(true)}
+              onBlur={() => setEmailFocus(false)}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </View>
 
-            {/* Login Button */}
-            <TouchableOpacity activeOpacity={0.8} onPress={handleLogin} disabled={status === 'loading'}>
-              <LinearGradient colors={['#EC4899', '#F43F5E']} style={styles.btn}>
-                {status === 'loading' ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.btnText}>{status === 'success' ? 'Hearts Synced 💕' : 'Sync Hearts'}</Text>}
-              </LinearGradient>
+          {/* Password */}
+          <View style={[s.inputWrap, isPassFocused && s.inputWrapFocused, { marginBottom: 28 }]}>
+            <Feather name="lock" size={20} color={isPassFocused ? C.accent : '#666'} style={s.inputIcon} />
+            <TextInput
+              style={[s.input, { flex: 1 }]}
+              placeholder="Secret Password"
+              placeholderTextColor="#666"
+              value={password}
+              onChangeText={setPassword}
+              onFocus={() => setPassFocus(true)}
+              onBlur={() => setPassFocus(false)}
+              secureTextEntry={!showPassword}
+            />
+            <TouchableOpacity onPress={() => setShowPwd(p => !p)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <Feather name={showPassword ? 'eye' : 'eye-off'} size={20} color="#666" />
             </TouchableOpacity>
+          </View>
 
-            {/* Divider */}
-            <View style={styles.divider}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>or</Text>
-              <View style={styles.dividerLine} />
-            </View>
+          {/* Login */}
+          <TouchableOpacity style={s.btn} onPress={handleLogin} activeOpacity={0.82} disabled={status === 'loading'}>
+            {status === 'loading' ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={s.btnText}>
+                {status === 'success' ? 'Hearts Synced ♥' : 'Hearts Sync Karein'}
+              </Text>
+            )}
+          </TouchableOpacity>
 
-            {/* Google Sign-In */}
-            <TouchableOpacity activeOpacity={0.8} onPress={handleGoogleSignIn} disabled={status === 'loading'}>
-              <View style={styles.googleBtn}>
-                <Text style={styles.googleIcon}>G</Text>
-                <Text style={styles.googleBtnText}>Continue with Google</Text>
-              </View>
+          {/* Divider */}
+          <View style={s.divider}>
+            <View style={s.dividerLine} />
+            <Text style={s.dividerText}>or</Text>
+            <View style={s.dividerLine} />
+          </View>
+
+          {/* Google */}
+          <TouchableOpacity style={s.googleBtn} onPress={handleGoogleSignIn} activeOpacity={0.82} disabled={status === 'loading'}>
+            <Text style={s.googleIcon}>G</Text>
+            <Text style={s.googleText}>Continue with Google</Text>
+          </TouchableOpacity>
+
+          {/* Footer */}
+          <View style={s.footer}>
+            <TouchableOpacity onPress={() => router.push('/forgot-password')}>
+              <Text style={s.footerMuted}>Forget Password?</Text>
             </TouchableOpacity>
-
-            {/* Footer */}
-            <View style={styles.footer}>
-              <TouchableOpacity onPress={() => router.push('/forgot-password')}><Text style={styles.footerMuted}>Forgot password?</Text></TouchableOpacity>
-              <TouchableOpacity onPress={handleCreateAccount}><Text style={styles.footerPink}>Create Account</Text></TouchableOpacity>
-            </View>
+            <TouchableOpacity onPress={() => router.push('/signup')}>
+              <Text style={s.footerAccent}>Create Soul Id</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </KeyboardAvoidingView>
-    </View>
+    </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a', alignItems: 'center', justifyContent: 'center' },
-  keyboardView: { width: '100%', maxWidth: 400, alignItems: 'center', paddingHorizontal: 20 },
-  svgContainer: { width: 400, height: 180, marginBottom: -55, zIndex: 0, alignItems: 'center', justifyContent: 'flex-end' },
-  cardContainer: { width: '100%', borderRadius: 32, overflow: 'hidden', zIndex: 10 },
-  card: { 
-    width: '100%', 
-    padding: 30, 
-    paddingTop: 45, 
-    backgroundColor: Platform.OS === 'ios' ? 'rgba(30, 30, 30, 0.4)' : 'rgba(30, 30, 30, 0.85)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.12)',
+// ── Styles ────────────────────────────────────────────────────────────
+const s = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: C.bg },
+  kav: {
+    flex: 1,
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+  },
+  bearsWrap: {
+    width: 400,
+    height: 170,
+    alignItems: 'center',
+    marginBottom: -50,
+    zIndex: 0,
+  },
+  card: {
+    width: '100%',
+    backgroundColor: C.card,
+    borderRadius: 40,
+    paddingHorizontal: 28,
+    paddingTop: 44,
+    paddingBottom: 32,
+    borderWidth: 1,
+    borderColor: C.cardBorder,
+    overflow: 'hidden',
+    zIndex: 10,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 25 },
+    shadowOffset: { width: 0, height: 20 },
     shadowOpacity: 0.5,
-    shadowRadius: Platform.OS === 'ios' ? 35.5 : 10,
-    elevation: Platform.OS === 'ios' ? 0 : 2,
+    shadowRadius: 28,
+    elevation: 14,
   },
-  header: { alignItems: 'center', marginBottom: 25 },
-  title: { fontSize: 34, fontWeight: '900', color: '#EC4899', letterSpacing: -0.5 },
-  subtitle: { color: '#FBCFE8', opacity: 0.9, marginTop: 6, fontWeight: '600', fontSize: 14 },
-  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', borderRadius: 16, marginBottom: 16, height: 56 },
-  iconWrapper: { paddingHorizontal: 16, justifyContent: 'center' },
-  input: { flex: 1, color: '#FFFFFF', fontSize: 16, fontWeight: '500', height: '100%' },
-  eyeBtn: { paddingHorizontal: 16, height: '100%', justifyContent: 'center' },
-  btn: { 
-    height: 56, 
-    borderRadius: 16, 
-    justifyContent: 'center', 
-    alignItems: 'center', 
-    marginTop: 10, 
-    shadowColor: '#EC4899', 
-    shadowOpacity: 0.4, 
-    shadowRadius: Platform.OS === 'ios' ? 12 : 5, 
-    elevation: Platform.OS === 'ios' ? 10 : 3 
+  cardGlow: {
+    position: 'absolute',
+    top: -50,
+    alignSelf: 'center',
+    width: '100%',
+    height: 120,
+    backgroundColor: C.accent,
+    opacity: 0.2,
+    borderRadius: 60,
   },
-  btnText: { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },
-  divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 20 },
-  dividerLine: { flex: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.1)' },
-  dividerText: { color: '#9CA3AF', fontSize: 13, paddingHorizontal: 12 },
-  googleBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', borderRadius: 16, height: 56, gap: 10 },
+  title: {
+    fontSize: 38,
+    fontWeight: '900',
+    color: C.accent,
+    textAlign: 'center',
+    letterSpacing: -0.5,
+  },
+  subtitle: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.7)',
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 26,
+    fontWeight: '500',
+  },
+  inputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: C.input,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: C.inputBorder,
+    paddingHorizontal: 16,
+    height: 56,
+    marginBottom: 14,
+  },
+  inputWrapFocused: {
+    borderColor: C.inputFocus,
+    backgroundColor: '#2A2A2C',
+  },
+  iconText: { fontSize: 15, marginRight: 10, opacity: 0.45 },
+  iconFocused: { opacity: 1 },
+  inputIcon: { marginRight: 12 },
+  input: {
+    flex: 1,
+    color: C.text,
+    fontSize: 15,
+    fontWeight: '500',
+    paddingVertical: 0,
+  },
+  eyeIcon: { fontSize: 16, marginLeft: 6 },
+  btn: {
+    backgroundColor: C.accent,
+    borderRadius: 16,
+    height: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: C.accent,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  btnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 18,
+  },
+  dividerLine: { flex: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.08)' },
+  dividerText: { color: C.textMuted, fontSize: 13, paddingHorizontal: 12 },
+  googleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 16,
+    height: 56,
+    gap: 10,
+  },
   googleIcon: { fontSize: 18, fontWeight: '800', color: '#4285F4' },
-  googleBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '500' },
-  footer: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 24 },
-  footerMuted: { color: '#9CA3AF', fontWeight: '500' },
-  footerPink: { color: '#EC4899', fontWeight: 'bold' },
+  googleText: { color: C.text, fontSize: 15, fontWeight: '500' },
+  footer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 22,
+  },
+  footerMuted: { color: C.textMuted, fontSize: 13, fontWeight: '700' },
+  footerAccent: { color: C.accent, fontSize: 13, fontWeight: '700' },
 });

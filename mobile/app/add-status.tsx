@@ -37,6 +37,8 @@ export default function AddStatusScreen() {
             allowsEditing: true,
             quality: 0.8,
             videoMaxDuration: 60,
+            legacy: true,
+            preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
         });
 
         if (!result.canceled && result.assets[0]) {

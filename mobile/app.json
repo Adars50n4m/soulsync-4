@@ -25,7 +25,10 @@
         ],
         "LSApplicationQueriesSchemes": [
           "mailto"
-        ]
+        ],
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
       }
     },
     "android": {
@@ -51,7 +54,9 @@
         "android.permission.WAKE_LOCK",
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.RECEIVE_BOOT_COMPLETED",
-        "android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+        "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+        "android.permission.READ_PHONE_NUMBERS",
+        "android.permission.ANSWER_PHONE_CALLS"
       ]
     },
     "web": {

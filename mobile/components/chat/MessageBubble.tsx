@@ -88,6 +88,13 @@ const MessageBubble = React.memo(({
     React.useEffect(() => {
         if (!isMe && onMediaDownload) {
             mediaItems.forEach((media, index) => {
+                // If we JUST got the localFileUri, remove it from downloadingIndices
+                if (media.localFileUri && downloadingIndices.includes(index)) {
+                    console.log(`[MessageBubble] Media downloaded: clearing index ${index}`);
+                    setDownloadingIndices(prev => prev.filter(i => i !== index));
+                    return;
+                }
+
                 // If it's a key (doesn't look like a URL or file path) and we don't have it locally, auto-download
                 const isKey = media.url && 
                              !media.url.startsWith('http') && 
@@ -246,14 +253,14 @@ const MessageBubble = React.memo(({
                     <AnimatedImage 
                         source={(media.localFileUri || (media.url && (media.url.startsWith('http') || media.url.startsWith('file:') || media.url.startsWith('data:')))) 
                             ? { uri: media.localFileUri || media.url } 
-                            : undefined} 
+                            : (media.thumbnail ? { uri: media.thumbnail } : undefined)}
                         style={{ 
                             width: mediaWidth,
                             height: mediaHeight,
                         }} 
                         contentFit="cover"
                         transition={200}
-                        blurRadius={(!isMe && !media.localFileUri) ? 20 : 0}
+                        blurRadius={(!isMe && !media.localFileUri && !media.url?.startsWith('http') && !media.url?.startsWith('file:')) ? 10 : 0}
                         onLoad={(e) => {
                             const { width, height } = e.source;
                             if (width && height) {
@@ -274,12 +281,16 @@ const MessageBubble = React.memo(({
                             </Text>
                         </View>
                     )}
-                    {(!isMe && !media.localFileUri) && (
+                    {(!isMe && !media.localFileUri && !media.thumbnail) && (
                         <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 46 }]}>
                             {downloadingIndices.includes(0) ? (
                                 <MaterialIcons name="hourglass-empty" size={36} color="rgba(255,255,255,0.92)" />
                             ) : (
-                                <MaterialIcons name="file-download" size={46} color="rgba(255,255,255,0.92)" />
+                                <MaterialIcons 
+                                    name={media.url ? "file-download" : "hourglass-empty"} 
+                                    size={46} 
+                                    color="rgba(255,255,255,0.92)" 
+                                />
                             )}
                         </View>
                     )}
@@ -308,11 +319,11 @@ const MessageBubble = React.memo(({
                                  <AnimatedImage 
                                      source={(media.localFileUri || (media.url && (media.url.startsWith('http') || media.url.startsWith('file:') || media.url.startsWith('data:')))) 
                                          ? { uri: media.localFileUri || media.url } 
-                                         : undefined} 
+                                         : (media.thumbnail ? { uri: media.thumbnail } : undefined)} 
                                      style={ChatStyles.mediaGridImage} 
                                      contentFit="cover" 
                                      transition={200} 
-                                     blurRadius={(!isMe && !media.localFileUri) ? 20 : 0}
+                                     blurRadius={(!isMe && !media.localFileUri && !media.url?.startsWith('http') && !media.url?.startsWith('file:')) ? 10 : 0}
                                 />
                                 {media.type === 'video' && !showMore && uploadProgress === undefined && (
                                     <View style={ChatStyles.mediaTilePlayOverlay}>
@@ -326,7 +337,7 @@ const MessageBubble = React.memo(({
                                         </Text>
                                     </View>
                                 )}
-                                {(!isMe && !media.localFileUri) && (
+                                {(!isMe && !media.localFileUri && !media.thumbnail) && (
                                     <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 34 }]}>
                                         {downloadingIndices.includes(index) ? (
                                             <MaterialIcons name="hourglass-empty" size={24} color="rgba(255,255,255,0.92)" />
@@ -526,6 +537,11 @@ const MessageBubble = React.memo(({
   if (prevProps.msg?.id !== nextProps.msg?.id) return false;
   if (prevProps.msg?.text !== nextProps.msg?.text) return false;
   if (prevProps.msg?.status !== nextProps.msg?.status) return false;
+  
+  // CRITICAL: Ensure re-render when media is downloaded or resolved
+  if (prevProps.msg?.localFileUri !== nextProps.msg?.localFileUri) return false;
+  if (prevProps.msg?.media?.url !== nextProps.msg?.media?.url) return false;
+
   const prevReactions = (prevProps.msg?.reactions || []).join('|');
   const nextReactions = (nextProps.msg?.reactions || []).join('|');
   if (prevReactions !== nextReactions) return false;

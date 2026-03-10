@@ -14,6 +14,7 @@ export interface Message {
         url: string;
         name?: string;
         caption?: string;
+        thumbnail?: string;
     };
     // Offline media support
     localFileUri?: string;

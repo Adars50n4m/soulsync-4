@@ -185,10 +185,10 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
             top: interpolate(p, [0, 1], [sourceLayout.y, targetY]) + translateY.value,
             width: interpolate(p, [0, 1], [sourceLayout.width, targetWidth]),
             height: interpolate(p, [0, 1], [sourceLayout.height, targetHeight]),
-            borderRadius: interpolate(p, [0, 1], [16, 36]), // Ultra-smooth corners
+            borderRadius: interpolate(p, [0, 1], [16, 20]), 
             transform: [{ scale: scale.value }],
             overflow: 'hidden',
-            backgroundColor: 'rgba(255,255,255,0.03)', // Define the card boundaries subtly
+            backgroundColor: 'transparent',
         };
     });
 
@@ -231,7 +231,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                         <Video
                             source={{ uri: media.localFileUri || media.url }}
                             style={styles.fullMedia}
-                            resizeMode={ResizeMode.COVER}
+                            resizeMode={ResizeMode.CONTAIN}
                             shouldPlay
                             isLooping
                         />
@@ -239,7 +239,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                         <Image 
                             source={{ uri: media.localFileUri || media.url }} 
                             style={styles.fullMedia} 
-                            contentFit="cover" 
+                            contentFit="contain" 
                             transition={200}
                         />
                     )}

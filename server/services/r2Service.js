@@ -27,6 +27,7 @@ if (isR2Configured) {
 
 async function generateUploadPresignedUrl(key, contentType = 'application/octet-stream') {
     if (!s3Client) throw new Error('R2 Service not configured');
+    console.log(`[R2Service] Generating upload presigned URL for key: ${key}, contentType: ${contentType}`);
     const command = new PutObjectCommand({
         Bucket: R2_BUCKET_NAME,
         Key: key,

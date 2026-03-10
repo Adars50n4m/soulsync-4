@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useLayoutEffect, useMemo } from 'react';
+// Force re-bundle: 2026-03-10T21:48:59+05:30
+import * as ImageManipulator from 'expo-image-manipulator';
 import {
     View, Text, TextInput, Pressable,
     StyleSheet, StatusBar, Platform,
@@ -205,7 +207,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     
     const router = useRouter();
     const isFocused = useIsFocused();
-    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker } = useApp();
+    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, onlineUsers } = useApp();
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
     const [isReady, setIsReady] = useState(false);
@@ -1011,6 +1013,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
     const handleMediaDownload = useCallback(async (msgId: string, url: string, index: number) => {
         try {
+            console.log(`[ChatScreen] Starting media resolution for msgId: ${msgId}, url: ${url}`);
             // Use storageService.getMediaUrl to handle caching and URL resolution (R2 keys vs direct URLs)
             // This fixes the "Expected URL scheme" error on Android by ensuring we always have a proper URL before downloadAsync
             const localUri = await storageService.getMediaUrl(url);
@@ -1019,6 +1022,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                throw new Error('Failed to resolve media URL');
             }
 
+            console.log(`[ChatScreen] Resolved to localUri: ${localUri}`);
+
             // Update Database
             await offlineService.updateMessageLocalUri(msgId, localUri);
 
@@ -1026,17 +1031,21 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             if (updateMessage) {
                 const currentMsg = chatMessages.find(m => m.id === msgId);
                 if (currentMsg) {
+                    console.log(`[ChatScreen] Updating AppContext state for msgId: ${msgId}`);
                     updateMessage(id as string, msgId, { 
                          localFileUri: localUri,
-                         media: currentMsg.media ? { ...currentMsg.media, url: currentMsg.media.url } : undefined
+                         // Force a partial update that React.memo will see
+                         media: currentMsg.media ? { ...currentMsg.media } : undefined
                     } as any);
+                } else {
+                    console.warn(`[ChatScreen] Message ${msgId} not found in current chatMessages state`);
                 }
             }
         } catch (error) {
             console.error('[ChatScreen] Media download error:', error);
             // Alert.alert('Download Failed', 'Could not seamlessly download this media.');
         }
-    }, [updateMessage, chatMessages, id]);
+    }, [id, chatMessages, updateMessage]);
 
     const renderMessage = useCallback(({ item }: { item: any }) => (
         <MessageBubble
@@ -1115,6 +1124,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             allowsEditing: false,
             allowsMultipleSelection: true,
             videoMaxDuration: 120,
+            legacy: true,
+            preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
         });
         if (!result.canceled && result.assets && result.assets.length > 0) {
             const items: { uri: string; type: 'image' | 'video' | 'audio' }[] = result.assets.map(asset => ({
@@ -1140,17 +1151,35 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         Alert.alert('Coming Soon', 'Contact sharing will be available soon.');
     };
 
+
     const handleSendMedia = async (mediaList: { uri: string; type: 'image'|'video'|'audio' }[], caption?: string) => {
         if (!mediaList || mediaList.length === 0 || !id) return;
         try {
             for (let i = 0; i < mediaList.length; i++) {
                 const item = mediaList[i];
                 
+                let thumbnail: string | undefined = undefined;
+                try {
+                    if (item.type === 'image') {
+                        const manipResult = await ImageManipulator.manipulateAsync(
+                            item.uri,
+                            [{ resize: { width: 20, height: 20 } }],
+                            { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+                        );
+                        thumbnail = `data:image/jpeg;base64,${manipResult.base64}`;
+                    }
+                    // For videos, in a real app we'd extract a frame. 
+                    // For now, we'll skip or use a generic video icon as thumbnail if needed.
+                } catch (thumbErr) {
+                    console.warn('[ChatScreen] Thumbnail generation failed:', thumbErr);
+                }
+
                 const media: Message['media'] = {
                     type: item.type,
                     url: '', // will be set by ChatService after background upload
                     caption: i === 0 ? caption || undefined : undefined,
-                };
+                    thumbnail,
+                } as any;
                 const msgText = i === 0 ? (caption || '') : '';
 
                 // Instantly send to local UI and background queue
@@ -1197,7 +1226,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                 style={styles.messagesList}
                                 contentContainerStyle={styles.messagesContent}
                                 showsVerticalScrollIndicator={false}
-                                removeClippedSubviews={Platform.OS === 'android'}
+                                removeClippedSubviews={false}
                                  ListHeaderComponent={null}
                                 ListEmptyComponent={
                                     <View style={styles.emptyChat}>
@@ -1472,24 +1501,42 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                     <Text style={styles.contactName}>{contact?.name || '...'}</Text>
                                 </Animated.View>
                                 <Animated.View style={headerAccessoryAnimatedStyle}>
-                                    {musicState.currentSong ? (
+                                    {musicState.isPlaying && musicState.currentSong ? (
                                         <View style={styles.nowPlayingStatus}>
                                             <MaterialIcons name="audiotrack" size={12} color={activeTheme.primary} />
                                             <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
                                                 {sanitizeSongTitle(musicState.currentSong.name)}
                                             </Text>
                                         </View>
-                                    ) : contact?.status === 'online' ? (
-                                        <Text style={[styles.statusText, { color: '#22c55e' }]}>
-                                            online
-                                        </Text>
-                                    ) : (
-                                        <Text style={[styles.statusText, { color: 'rgba(255,255,255,0.35)' }]}>
-                                            {contact?.lastSeen
-                                                ? `last seen ${formatLastSeen(contact.lastSeen)}`
-                                                : 'offline'}
-                                        </Text>
-                                    )}
+                                    ) : (() => {
+                                        let statusText = 'offline';
+                                        let statusColor = 'rgba(255,255,255,0.35)';
+                                        
+                                        if (!connectivity.isDeviceOnline) {
+                                            statusText = 'No network';
+                                        } else if (!connectivity.isServerReachable) {
+                                            // Only show 'Connecting...' if we cannot even reach the server.
+                                            // If we can reach the server but Realtime is pending, we have 
+                                            // polling anyway, so we are effectively 'Online'.
+                                            statusText = 'Connecting...';
+                                        } else if (contact?.status === 'online' || (contact?.id && onlineUsers.includes(contact.id))) {
+                                            statusText = 'online';
+                                            statusColor = '#22c55e';
+                                        } else if (contact?.lastSeen) {
+                                            statusText = `last seen ${formatLastSeen(contact.lastSeen)}`;
+                                        }
+
+                                        // Only log when focused and status is relevant
+                                        if (isFocused && contact?.id) {
+                                            // Optional: console.log(`[ChatHeader] status for ${contact.id}: ${statusText.toUpperCase()}`);
+                                        }
+
+                                        return (
+                                            <Text style={[styles.statusText, { color: statusColor }]}>
+                                                {statusText}
+                                            </Text>
+                                        );
+                                    })()}
                                 </Animated.View>
                             </View>
 

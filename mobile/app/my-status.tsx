@@ -178,6 +178,8 @@ export default function MyStatusScreen() {
       mediaTypes: ImagePicker.MediaTypeOptions.All,
       allowsEditing: true,
       videoMaxDuration: 60,
+      legacy: true,
+      preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
     });
     await createStatus(result);
   };
@@ -295,7 +297,7 @@ export default function MyStatusScreen() {
         onClose={() => setIsMediaPickerVisible(false)}
         onSelectCamera={handleSelectCamera}
         onSelectGallery={() => handleSelectGallery()}
-        onSelectAsset={handleSelectGallery}
+        onSelectAssets={(assets) => handleSelectGallery(assets[0])}
         onSelectAudio={() => {
             setIsMediaPickerVisible(false);
             Alert.alert("Soul Audio", "Audio status coming soon!");

@@ -46,6 +46,10 @@ function withAndroidCallingPlugin(config) {
       'android.permission.SYSTEM_ALERT_WINDOW',
       // Disable battery optimization (for reliable push delivery)
       'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+      // Required for TelecomManager.getPhoneAccount on Android 11+
+      'android.permission.READ_PHONE_NUMBERS',
+      // Required for answering calls on some Android versions
+      'android.permission.ANSWER_PHONE_CALLS',
     ];
     
     for (const perm of requiredPermissions) {

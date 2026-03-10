@@ -9,6 +9,8 @@ export interface GlassViewProps extends ViewProps {
     children?: React.ReactNode;
 }
 
+const IS_ANDROID = Platform.OS === 'android';
+
 export const GlassView = ({
     intensity = 45,
     tint = 'dark',
@@ -16,12 +18,21 @@ export const GlassView = ({
     children,
     ...rest
 }: GlassViewProps) => {
-    if (Platform.OS === 'android') {
+    // Android: wrap in a View with a dark backing so the BlurView has
+    // real pixels to blur. experimentalBlurMethod="dimezisBlurView" uses
+    // a native Android blur renderer that actually blurs what's beneath.
+    const androidIntensity = Math.min(Math.round(intensity * 1.5), 80);
+
+    if (IS_ANDROID) {
         return (
-            <View style={[styles.container, style, { backgroundColor: tint === 'dark' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.4)' }]}>
+            <View
+                style={[styles.container, style]}
+                {...rest}
+            >
                 <BlurView
-                    intensity={Math.min(intensity * 1.5, 100)}
+                    intensity={androidIntensity}
                     tint={tint}
+                    experimentalBlurMethod="dimezisBlurView"
                     style={StyleSheet.absoluteFill}
                 />
                 {children}

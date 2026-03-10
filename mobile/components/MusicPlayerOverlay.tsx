@@ -195,10 +195,11 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                     tint="dark" 
                     style={StyleSheet.absoluteFill}
                 />
+                {/* Android needs an extra dark layer since BlurView alone isn't opaque enough */}
                 <Pressable 
                     style={[
                         styles.backdrop, 
-                        Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.3)' }
+                        Platform.OS === 'android' && { backgroundColor: 'rgba(0,0,0,0.65)' }
                     ]} 
                     onPress={onClose} 
                 />
@@ -406,7 +407,7 @@ const styles = StyleSheet.create({
     },
     glassContainer: {
         flex: 1,
-        backgroundColor: '#0a0a0a',
+        backgroundColor: Platform.OS === 'android' ? '#0d0d10' : '#0a0a0a',
     },
     dragHandleContainer: {
         alignItems: 'center',

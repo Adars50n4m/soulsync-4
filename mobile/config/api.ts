@@ -43,8 +43,10 @@ export async function smartFetch(
     try {
         const response = await fetch(url, init);
         
-        // Retry on 5xx server errors or 429 rate limits
-        if (retries > 0 && (response.status >= 500 || response.status === 429)) {
+        // Retry on 5xx server errors or 429 rate limits, but NOT on 503 from a dead tunnel
+        // (retrying a "Tunnel Unavailable" response won't help and adds ~7s of unnecessary delay)
+        const isTunnelDown = response.status === 503 && isTunnel;
+        if (retries > 0 && !isTunnelDown && (response.status >= 500 || response.status === 429)) {
             console.warn(`[Network] Retrying ${url} (${response.status})... ${retries} attempts left`);
             await new Promise(resolve => setTimeout(resolve, backoff));
             return smartFetch(url, init, retries - 1, backoff * 2);
@@ -59,6 +61,49 @@ export async function smartFetch(
             return smartFetch(url, init, retries - 1, backoff * 2);
         }
         throw error;
+    }
+}
+
+/**
+ * Robust JSON fetcher that safely handles:
+ * 1. Non-200 responses
+ * 2. Non-JSON payloads (proxy errors, HTML)
+ * 3. Network timeouts/failures
+ */
+export async function safeFetchJson<T>(
+    url: string,
+    init?: RequestInit
+): Promise<{ success: boolean; data?: T; error?: string }> {
+    try {
+        const response = await serverFetch(url, init);
+        
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            const text = await response.text();
+            console.warn(`[API] Expected JSON, got ${contentType}:`, text.substring(0, 100));
+            return {
+                success: false,
+                error: `Server returned non-JSON response (${response.status}). Please check if the server is running.`
+            };
+        }
+
+        const data = await response.json();
+        
+        if (!response.ok) {
+            return { 
+                success: false, 
+                data: data as T, 
+                error: (data as any).error || `Request failed with status ${response.status}`
+            };
+        }
+
+        return { success: true, data: data as T };
+    } catch (error: any) {
+        console.warn(`[API] safeFetchJson failed for ${url}:`, error);
+        return {
+            success: false,
+            error: error.message || 'Network request failed'
+        };
     }
 }
 

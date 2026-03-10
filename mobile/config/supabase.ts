@@ -86,6 +86,7 @@ export interface Message {
         type: 'image' | 'video' | 'audio';
         url: string;
         name?: string;
+        thumbnail?: string;
     };
     timestamp: string;
     status: 'sent' | 'delivered' | 'read';
@@ -179,7 +180,6 @@ export const DatabaseService = {
                 event: 'INSERT',
                 schema: 'public',
                 table: 'messages',
-                filter: `receiver=eq.${userId}`
             }, (payload) => callback(payload.new as Message))
             .subscribe();
     }

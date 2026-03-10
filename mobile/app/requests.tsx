@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Platform, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SERVER_URL, serverFetch, proxySupabaseUrl } from '../config/api';
+import { SERVER_URL, safeFetchJson, proxySupabaseUrl } from '../config/api';
 import { useApp } from '../context/AppContext';
 import { MaterialIcons } from '@expo/vector-icons';
 import GlassView from '../components/ui/GlassView';
@@ -15,20 +15,30 @@ export default function RequestsScreen() {
     const [outgoing, setOutgoing] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const router = useRouter();
 
     const fetchRequests = useCallback(async () => {
+        setErrorMsg(null);
         try {
-            const resp = await serverFetch(`${SERVER_URL}/api/connections/requests`, {
-                headers: { 'x-user-id': currentUser?.id || '' }
-            });
-            const data = await resp.json() as any;
-            if (data.success) {
+            const { success, data, error } = await safeFetchJson<any>(
+                `${SERVER_URL}/api/connections/requests`,
+                {
+                    headers: { 'x-user-id': currentUser?.id || '' }
+                }
+            );
+
+            if (success && data?.success) {
                 setIncoming(data.incoming || []);
                 setOutgoing(data.outgoing || []);
+            } else {
+                const msg = error || 'Could not load requests';
+                console.warn('[Requests] Fetch failed:', msg);
+                setErrorMsg(msg);
             }
-        } catch (err) {
-            console.error('Fetch requests failed:', err);
+        } catch (err: any) {
+            console.warn('[Requests] Unexpected fetch error:', err);
+            setErrorMsg(err?.message || 'Network error');
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -44,21 +54,23 @@ export default function RequestsScreen() {
             const method = action === 'cancel' ? 'DELETE' : 'PUT';
             const endpoint = `${SERVER_URL}/api/connections/request/${requestId}/${action}`;
             
-            const resp = await serverFetch(endpoint, {
+            const { success, data, error } = await safeFetchJson<any>(endpoint, {
                 method,
                 headers: { 
                     'Content-Type': 'application/json',
                     'x-user-id': currentUser?.id || ''
                 }
             });
-            const data = await resp.json() as any;
-            if (data.success) {
+
+            if (success && data?.success) {
                 // Remove from local state
                 setIncoming(prev => prev.filter(r => r.id !== requestId));
                 setOutgoing(prev => prev.filter(r => r.id !== requestId));
+            } else if (error) {
+                console.error(`[Requests] Request ${action} failed:`, error);
             }
         } catch (err) {
-            console.error(`Request ${action} failed:`, err);
+            console.error(`[Requests] Unexpected ${action} error:`, err);
         }
     };
 
@@ -141,13 +153,25 @@ export default function RequestsScreen() {
                 keyExtractor={item => item.title}
                 contentContainerStyle={styles.list}
                 ListEmptyComponent={
-                    !loading && incoming.length === 0 && outgoing.length === 0 ? (
+                    !loading ? (
                         <View style={styles.emptyContainer}>
-                            <MaterialIcons name="people-outline" size={80} color="rgba(255,255,255,0.05)" />
-                            <Text style={styles.emptyText}>No pending requests</Text>
-                            <TouchableOpacity style={styles.findButton} onPress={() => router.push('/search')}>
-                                <Text style={styles.findText}>Find People</Text>
-                            </TouchableOpacity>
+                            {errorMsg ? (
+                                <>
+                                    <MaterialIcons name="wifi-off" size={80} color="rgba(255,255,255,0.05)" />
+                                    <Text style={styles.emptyText}>Could not connect to server</Text>
+                                    <TouchableOpacity style={styles.findButton} onPress={() => { setLoading(true); fetchRequests(); }}>
+                                        <Text style={styles.findText}>Retry</Text>
+                                    </TouchableOpacity>
+                                </>
+                            ) : (
+                                <>
+                                    <MaterialIcons name="people-outline" size={80} color="rgba(255,255,255,0.05)" />
+                                    <Text style={styles.emptyText}>No pending requests</Text>
+                                    <TouchableOpacity style={styles.findButton} onPress={() => router.push('/search')}>
+                                        <Text style={styles.findText}>Find People</Text>
+                                    </TouchableOpacity>
+                                </>
+                            )}
                         </View>
                     ) : null
                 }

@@ -28,31 +28,55 @@ try {
 //   - When either user is on 4G/5G or behind a strict NAT/firewall, STUN fails
 //   - TURN relays media through the server as a fallback — this is what WhatsApp does
 //
-// CURRENT SETUP: Metered's free open relay TURN servers
-//   - Free tier: 500 MB/month (enough for testing and small user base)
-//   - For production with many users, get your own TURN server:
-//     → https://www.metered.ca/stun-turn (paid plans)
-//     → https://www.twilio.com/docs/stun-turn (Twilio TURN)
-//     → Self-hosted: coturn (open source)
+// CURRENT SETUP:
+//   1. Google STUN (fast, for same-network / simple NAT)
+//   2. Open Relay Project by Metered (free TURN — works on 4G/5G cross-network, no signup)
+//   3. ENV-configured TURN (for production self-hosted / paid upgrade)
 //
-const ICE_SERVERS: RTCIceServer[] = [
+const ICE_SERVERS: any[] = [
+  // ── STUN servers (fast, direct connection attempt first) ──────────────────
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
-  
-  // Production TURN Server (dynamic via ENV)
-  ...(ENV.TURN_SERVER ? [{
+  { urls: 'stun:stun.cloudflare.com:3478' },
+
+  // ── Free TURN servers (Open Relay Project by Metered.ca) ─────────────────
+  // These relay traffic when 4G/5G NAT blocks direct WebRTC connection.
+  // Works globally — same as what WhatsApp/Telegram use for calls.
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turns:openrelay.metered.ca:443',  // TLS — punches through strict firewalls
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+
+  // ── Production TURN Server (upgrade to your own for scale) ────────────────
+  ...(ENV.TURN_SERVER && ENV.TURN_SERVER.length > 10 && !ENV.TURN_SERVER.includes('yourdomain') ? [{
     urls: ['turn:' + ENV.TURN_SERVER],
     username: ENV.TURN_USERNAME,
     credential: ENV.TURN_PASSWORD
   }] : []),
-  
-  // Alternative TURN Server (for redundancy)
-  ...(ENV.TURN_SERVER_2 ? [{
+
+  // ── Backup Production TURN ────────────────────────────────────────────────
+  ...(ENV.TURN_SERVER_2 && ENV.TURN_SERVER_2.length > 10 && !ENV.TURN_SERVER_2.includes('backup-turn') ? [{
     urls: ['turn:' + ENV.TURN_SERVER_2],
     username: ENV.TURN_USERNAME_2,
     credential: ENV.TURN_PASSWORD_2
-  }] : [])
+  }] : []),
 ];
 
 type CallType = 'audio' | 'video';

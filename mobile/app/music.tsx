@@ -539,7 +539,7 @@ export default function MusicScreen() {
             {/* Combined Backdrop: Single layer of glass + subtle tint */}
             <Animated.View style={[StyleSheet.absoluteFill, backdropBlurOpacity, { zIndex: 40 }]}>
                 <GlassView 
-                    intensity={20} 
+                    intensity={60} 
                     tint="dark" 
                     style={StyleSheet.absoluteFill}
                 />
@@ -556,7 +556,7 @@ export default function MusicScreen() {
 
             <Animated.View style={[styles.musicOverlay, overlayStyle]}>
                 <GlassView 
-                    intensity={35} 
+                    intensity={80} 
                     tint="dark" 
                     style={styles.overlayGlass} 
                 >

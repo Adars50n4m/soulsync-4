@@ -204,6 +204,8 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
         allowsEditing: true,
         quality: 1,
         videoMaxDuration: 120,
+        legacy: true,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
       });
 
       if (!result.canceled && result.assets?.[0]) {

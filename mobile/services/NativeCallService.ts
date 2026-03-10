@@ -34,15 +34,6 @@ export type NativeCallEventHandler = (action: NativeCallAction, callId: string, 
 
 /**
  * Attempt to load RNCallKeep. Returns null if not installed.
- * This is called lazily (inside initialize()) so Metro won't fail at bundle time
- * if the module isn't in node_modules — the require() is inside a function that
- * is only called at runtime.
- * 
- * NOTE: Metro DOES statically resolve require() even inside functions.
- * If react-native-callkeep is NOT installed, you must remove or comment out
- * the require() line below, or install the package.
- * 
- * For development without the package, set NATIVE_CALLING_ENABLED = false.
  */
 const NATIVE_CALLING_ENABLED = true;
 
@@ -75,6 +66,9 @@ class NativeCallService {
   private pendingIncomingCall: IncomingCallPayload | null = null;
   private eventHandlers: Set<NativeCallEventHandler> = new Set();
   private appState: AppStateStatus = AppState.currentState;
+  private listenersRegistered = false;
+  private callKeepSubscriptions: any[] = [];
+  private appStateSubscription: any = null;
 
   /**
    * Initialize CallKeep with platform-specific configuration.
@@ -86,9 +80,32 @@ class NativeCallService {
     this.RNCallKeep = loadCallKeep();
 
     if (!this.RNCallKeep) {
-      console.log('[NativeCallService] Skipping init — RNCallKeep not available. Install react-native-callkeep and set NATIVE_CALLING_ENABLED = true');
+      console.log('[NativeCallService] Skipping init — RNCallKeep not available.');
       this.initialized = true;
       return;
+    }
+
+    // Android 11+ (API 30+) requires READ_PHONE_NUMBERS for TelecomManager
+    // This is a dangerous permission and MUST be requested at runtime
+    if (Platform.OS === 'android') {
+      try {
+        const { PermissionsAndroid } = require('react-native');
+        const permissions = [
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          PermissionsAndroid.PERMISSIONS.CAMERA,
+        ];
+
+        // Only add READ_PHONE_NUMBERS if it exists (it was added in API 26)
+        if (PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS) {
+          permissions.push(PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS);
+        }
+
+        console.log('[NativeCallService] Requesting required permissions at runtime...');
+        const granted = await PermissionsAndroid.requestMultiple(permissions);
+        console.log('[NativeCallService] Permissions result:', granted);
+      } catch (e) {
+        console.warn('[NativeCallService] Failed to request permissions:', e);
+      }
     }
 
     const options = {
@@ -100,12 +117,12 @@ class NativeCallService {
         supportsVideo: true,
       },
       android: {
-        alertTitle: 'Permissions Required',
-        alertDescription: 'Soul needs phone account permission to show incoming calls',
+        alertTitle: 'Permissions required',
+        alertDescription: 'This application needs to access your phone accounts',
         cancelButton: 'Cancel',
-        okButton: 'OK',
-        selfManaged: true,
-        additionalPermissions: [],
+        okButton: 'ok',
+        imageName: 'ic_launcher',
+        selfManaged: true, // CRITICAL for VoIP apps on Android
         foregroundService: {
           channelId: 'com.soulsync4.mobile.calls',
           channelName: 'Soul Calls',
@@ -118,21 +135,30 @@ class NativeCallService {
     try {
       await this.RNCallKeep.setup(options);
 
-      if (Platform.OS === 'android') {
-        this.RNCallKeep.setAvailable(true);
-        this.RNCallKeep.registerPhoneAccount?.();
-        this.RNCallKeep.registerAndroidEvents?.();
-        this.RNCallKeep.canMakeMultipleCalls?.(false);
+      if (Platform.OS === 'android' && this.RNCallKeep) {
+        try {
+          if (typeof this.RNCallKeep.setAvailable === 'function') this.RNCallKeep.setAvailable(true);
+          if (typeof this.RNCallKeep.registerPhoneAccount === 'function') this.RNCallKeep.registerPhoneAccount();
+          if (typeof this.RNCallKeep.registerAndroidEvents === 'function') this.RNCallKeep.registerAndroidEvents();
+          if (typeof this.RNCallKeep.canMakeMultipleCalls === 'function') this.RNCallKeep.canMakeMultipleCalls(false);
+        } catch (e) {
+          console.warn('[NativeCallService] Android-specific setup failed:', e);
+        }
       }
 
       this.registerEventListeners();
-      AppState.addEventListener('change', this.handleAppStateChange);
+      
+      // Store AppState subscription for precise removal
+      if (this.appStateSubscription) {
+          this.appStateSubscription.remove();
+      }
+      this.appStateSubscription = AppState.addEventListener('change', this.handleAppStateChange);
 
       this.initialized = true;
       this.isReady = true;
-      console.log('[NativeCallService] Initialized successfully');
+      console.log('[NativeCallService] Initialized successfully with selfManaged: true');
     } catch (error) {
-      this.initialized = true; // Still marked as initialized to avoid re-entry
+      this.initialized = true;
       this.isReady = false;
       console.warn('[NativeCallService] Setup failed (non-fatal):', error);
     }
@@ -147,8 +173,14 @@ class NativeCallService {
       return;
     }
 
-    const { callId, callerName, callType } = payload;
+    const { callId, callerName, callType, callerId } = payload;
     
+    // Stricter guards for native params to prevent native crashes
+    if (!callId || !callerName || !callerId) {
+        console.warn('[NativeCallService] 🛑 Missing required params for displayIncomingCall:', { callId, callerName, callerId });
+        return;
+    }
+
     if (Platform.OS === 'ios' && !this.isValidUUID(callId)) {
         console.warn(`[NativeCallService] 🛑 Invalid UUID for CallKit: ${callId}. Skipping to prevent native crash.`);
         return;
@@ -162,7 +194,7 @@ class NativeCallService {
     try {
       this.RNCallKeep.displayIncomingCall(
         callId,
-        payload.callerId,
+        callerId,
         callerName,
         'generic',
         callType === 'video',
@@ -179,6 +211,12 @@ class NativeCallService {
     if (!this.RNCallKeep || !this.isReady) {
       console.log('[NativeCallService] Ignoring startOutgoingCall - not ready');
       return;
+    }
+
+    // Stricter guards for native params to prevent native crashes
+    if (!callId || !callerName) {
+        console.warn('[NativeCallService] 🛑 Missing required params for startOutgoingCall:', { callId, callerName });
+        return;
     }
 
     if (Platform.OS === 'ios' && !this.isValidUUID(callId)) {
@@ -288,8 +326,10 @@ class NativeCallService {
   // ─── Private: Event Listeners ────────────────────────────────────────────
 
   private registerEventListeners(): void {
-    if (!this.RNCallKeep) return;
+    if (!this.RNCallKeep || this.listenersRegistered) return;
 
+    // Use standard RNCallKeep API. Do not store and call .remove() on returned objects.
+    this.RNCallKeep.addEventListener('didReceiveStartCallAction', this.onStartCallAction);
     this.RNCallKeep.addEventListener('answerCall', this.onAnswerCall);
     this.RNCallKeep.addEventListener('endCall', this.onEndCall);
     this.RNCallKeep.addEventListener('didDisplayIncomingCall', this.onDidDisplayIncomingCall);
@@ -301,8 +341,14 @@ class NativeCallService {
     this.RNCallKeep.addEventListener('didResetProvider', this.onProviderReset);
     this.RNCallKeep.addEventListener('checkReachability', this.onCheckReachability);
 
-    console.log('[NativeCallService] Event listeners registered');
+    this.listenersRegistered = true;
+    console.log('[NativeCallService] Event listeners registered precisely');
   }
+
+  private onStartCallAction = (data: any) => {
+    console.log('[NativeCallService] 📞 Native start call action:', data);
+    // Optional: handle if needed
+  };
 
   private onAnswerCall = ({ callUUID }: { callUUID: string }) => {
     console.log(`[NativeCallService] ✅ User ANSWERED call: ${callUUID}`);
@@ -370,8 +416,6 @@ class NativeCallService {
     }
   };
 
-  // Note: 'showIncomingCallUi' is not supported by the installed RNCallKeep version
-
   private handleAppStateChange = (nextAppState: AppStateStatus) => {
     this.appState = nextAppState;
   };
@@ -387,23 +431,30 @@ class NativeCallService {
   }
 
   cleanup(): void {
-    if (this.RNCallKeep) {
-      this.RNCallKeep.removeEventListener('answerCall');
-      this.RNCallKeep.removeEventListener('endCall');
-      this.RNCallKeep.removeEventListener('didDisplayIncomingCall');
-      this.RNCallKeep.removeEventListener('didActivateAudioSession');
-      this.RNCallKeep.removeEventListener('didDeactivateAudioSession');
-      this.RNCallKeep.removeEventListener('didPerformSetMutedCallAction');
-      this.RNCallKeep.removeEventListener('didToggleHoldCallAction');
-      this.RNCallKeep.removeEventListener('didPerformDTMFAction');
-      this.RNCallKeep.removeEventListener('didResetProvider');
-      this.RNCallKeep.removeEventListener('checkReachability');
+    // We explicitly DO NOT remove RNCallKeep listeners here.
+    // react-native-callkeep's internal listener tracking can get out of sync with 
+    // RCTEventEmitter during Fast Refresh or rapid unmount/remount cycles, leading 
+    // to the fatal "Attempted to remove more RNCallKeep listeners than added" crash.
+    // Since RNCallKeep is a global native module, it's safer to leave them attached.
+    // The handlers will just gracefully no-op when `pendingIncomingCall` is null.
+    console.log(`[NativeCallService] Skipping native CallKeep listener removal to prevent RCTEventEmitter crash`);
+
+
+    // 2. Remove AppState listener
+    if (this.appStateSubscription) {
+      console.log('[NativeCallService] Removing AppState listener');
+      this.appStateSubscription.remove();
+      this.appStateSubscription = null;
     }
+
+    this.listenersRegistered = false;
     this.eventHandlers.clear();
     this.activeCallUUID = null;
     this.pendingIncomingCall = null;
     this.RNCallKeep = null;
     this.initialized = false;
+    this.isReady = false;
+    console.log('[NativeCallService] Cleanup complete and state reset');
   }
 }
 
