@@ -33,32 +33,44 @@ try {
     } else {
       console.log(`[BackgroundSync] Defining task: ${BACKGROUND_SYNC_TASK}`);
       TaskManager.defineTask(BACKGROUND_SYNC_TASK, async () => {
-        try {
-          console.log('[BackgroundSync] Starting background sync...');
-          
-          // Get current user
-          const { data: { user } } = await supabase.auth.getUser();
-          if (!user) {
-            console.log('[BackgroundSync] No authenticated user, skipping');
+        const syncPromise = (async () => {
+          try {
+            console.log('[BackgroundSync] Starting background sync...');
+            
+            // Get current user
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) {
+              console.log('[BackgroundSync] No authenticated user, skipping');
+              return BackgroundFetch.BackgroundFetchResult.NoData;
+            }
+            
+            // Fetch unread messages from Supabase
+            const syncedCount = await syncMessagesFromServer(user.id);
+            
+            console.log(`[BackgroundSync] Synced ${syncedCount} messages`);
+            
+            if (syncedCount > 0) {
+              // Show local notification for new messages
+              await showSyncNotification(syncedCount);
+              return BackgroundFetch.BackgroundFetchResult.NewData;
+            }
+            
             return BackgroundFetch.BackgroundFetchResult.NoData;
+          } catch (error) {
+            console.error('[BackgroundSync] Error in task execution:', error);
+            return BackgroundFetch.BackgroundFetchResult.Failed;
           }
-          
-          // Fetch unread messages from Supabase
-          const syncedCount = await syncMessagesFromServer(user.id);
-          
-          console.log(`[BackgroundSync] Synced ${syncedCount} messages`);
-          
-          if (syncedCount > 0) {
-            // Show local notification for new messages
-            await showSyncNotification(syncedCount);
-            return BackgroundFetch.BackgroundFetchResult.NewData;
-          }
-          
-          return BackgroundFetch.BackgroundFetchResult.NoData;
-        } catch (error) {
-          console.error('[BackgroundSync] Error in task execution:', error);
-          return BackgroundFetch.BackgroundFetchResult.Failed;
-        }
+        })();
+
+        // ANR Prevention: Ensure task returns within 25 seconds (OS limit is usually 30s)
+        const timeoutPromise = new Promise<BackgroundFetch.BackgroundFetchResult>((resolve) => {
+          setTimeout(() => {
+            console.warn('[BackgroundSync] Task timed out to prevent ANR');
+            resolve(BackgroundFetch.BackgroundFetchResult.NoData);
+          }, 25000);
+        });
+
+        return await Promise.race([syncPromise, timeoutPromise]);
       });
       console.log(`[BackgroundSync] Task ${BACKGROUND_SYNC_TASK} defined successfully`);
     }
@@ -79,7 +91,7 @@ async function syncMessagesFromServer(userId: string): Promise<number> {
     const { data: messages, error } = await supabase
       .from('messages')
       .select('*')
-      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+      .or(`sender.eq.${userId},receiver.eq.${userId}`)
       .gt('created_at', lastSyncTime)
       .order('created_at', { ascending: true });
     
@@ -94,8 +106,8 @@ async function syncMessagesFromServer(userId: string): Promise<number> {
     
     // Save each message to local DB
     for (const msg of messages) {
-      const isMe = msg.sender_id === userId;
-      const chatId = isMe ? msg.receiver_id : msg.sender_id;
+      const isMe = msg.sender === userId;
+      const chatId = isMe ? msg.receiver : msg.sender;
       
       await offlineService.saveMessage(chatId, {
         id: msg.id,
@@ -108,9 +120,7 @@ async function syncMessagesFromServer(userId: string): Promise<number> {
           url: msg.media_url,
           caption: msg.media_caption
         } : undefined,
-        replyTo: msg.reply_to_id,
-        // Media status for offline handling
-        mediaStatus: msg.media_url ? 'not_downloaded' : undefined
+        replyTo: msg.reply_to_id
       });
       
       // Update contact's last message
@@ -141,7 +151,7 @@ async function updateContactLastMessage(contactId: string, msg: any): Promise<vo
       await offlineService.saveContact({
         ...existingContact,
         lastMessage: msg.text?.substring(0, 50) || (msg.media_url ? '📷 Media' : ''),
-        unreadCount: (existingContact.unreadCount || 0) + (msg.sender_id !== contactId ? 0 : 1)
+        unreadCount: (existingContact.unreadCount || 0) + (msg.sender === contactId ? 1 : 0)
       });
     } else {
       // Fetch contact info from Supabase
@@ -155,7 +165,7 @@ async function updateContactLastMessage(contactId: string, msg: any): Promise<vo
         await offlineService.saveContact({
           id: contactId,
           name: profile.name || 'Unknown',
-          avatar: profile.avatar || '',
+          avatar: profile.avatar_url || profile.avatar || '',
           status: 'offline',
           lastMessage: msg.text?.substring(0, 50) || '📷 Media',
           unreadCount: 1

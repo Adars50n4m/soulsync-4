@@ -18,23 +18,18 @@ export const GlassView = ({
     children,
     ...rest
 }: GlassViewProps) => {
-    // Android: wrap in a View with a dark backing so the BlurView has
-    // real pixels to blur. experimentalBlurMethod="dimezisBlurView" uses
-    // a native Android blur renderer that actually blurs what's beneath.
-    const androidIntensity = Math.min(Math.round(intensity * 1.5), 80);
-
+    // Android: Use a semi-transparent View instead of BlurView to prevent "Black Screen" issues.
+    // The experimental blur method is unstable on many Android emulators and devices.
     if (IS_ANDROID) {
         return (
             <View
-                style={[styles.container, style]}
+                style={[
+                    styles.container, 
+                    { backgroundColor: tint === 'dark' ? 'rgba(12, 12, 14, 0.88)' : 'rgba(255, 255, 255, 0.85)' },
+                    style
+                ]}
                 {...rest}
             >
-                <BlurView
-                    intensity={androidIntensity}
-                    tint={tint}
-                    experimentalBlurMethod="dimezisBlurView"
-                    style={StyleSheet.absoluteFill}
-                />
                 {children}
             </View>
         );

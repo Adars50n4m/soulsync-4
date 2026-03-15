@@ -8,7 +8,8 @@ import { useApp } from '../../context/AppContext';
 import { SoulAvatar } from '../../components/SoulAvatar';
 
 const CallItem = React.memo(({ item, contact, onCall, activeTheme, isSelected, toggleSelection, selectionMode }: any) => {
-    const isMissed = item.type === 'missed';
+    if (!item) return null;
+    const isMissed = item.status === 'missed';
     const isIncoming = item.type === 'incoming';
 
     const handlePress = () => {
@@ -148,7 +149,7 @@ export default function CallsScreen() {
                 ) : (
                     <View style={styles.normalHeader}>
                         <Text style={styles.headerTitle}>CALLS</Text>
-                        {calls.length > 0 && (
+                        {calls && calls.length > 0 && (
                             <Pressable 
                                 onPress={handleClearAll}
                                 style={({ pressed }) => [
@@ -168,7 +169,7 @@ export default function CallsScreen() {
                 <Text style={styles.sectionTitle}>CALL HISTORY</Text>
             </View>
 
-            {calls.length === 0 ? (
+            {(!calls || calls.length === 0) ? (
                 <View style={styles.emptyState}>
                     <MaterialIcons name="call" size={60} color="rgba(255,255,255,0.1)" />
                     <Text style={styles.emptyStateText}>NO CALLS YET</Text>

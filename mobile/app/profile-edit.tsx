@@ -69,9 +69,10 @@ export default function ProfileEditScreen() {
     const enableSharedMorph = Platform.OS === 'ios';
     const { width } = useWindowDimensions();
     const router = useRouter();
-    const { currentUser, updateProfile, activeTheme } = useApp();
+    const { currentUser, updateProfile, changeUsername, activeTheme } = useApp();
 
     const [name, setName] = useState(currentUser?.name || '');
+    const [username, setUsername] = useState(currentUser?.username || '');
     const [bio, setBio] = useState(currentUser?.bio || '');
     const [avatar, setAvatar] = useState(currentUser?.avatar || '');
     const [birthdate, setBirthdate] = useState(currentUser?.birthdate || '');
@@ -79,12 +80,13 @@ export default function ProfileEditScreen() {
     const [pickerDate, setPickerDate] = useState<Date>(new Date());
     const [showImageModal, setShowImageModal] = useState(false);
     const [showFullImage, setShowFullImage] = useState(false);
-    const [isEditing, setIsEditing] = useState<'name' | 'bio' | null>(null);
+    const [isEditing, setIsEditing] = useState<'name' | 'bio' | 'username' | null>(null);
     const [showDatePicker, setShowDatePicker] = useState(false);
 
     useEffect(() => {
         if (currentUser) {
             if (currentUser.name && !isEditing) setName(currentUser.name);
+            if (currentUser.username && !isEditing) setUsername(currentUser.username);
             if (currentUser.bio && !isEditing) setBio(currentUser.bio);
             // Only sync birthdate if we aren't currently picking one
             // and the value is actually different from what we have locally
@@ -230,6 +232,21 @@ export default function ProfileEditScreen() {
         setIsEditing(null);
     };
 
+    const handleSaveUsername = async () => {
+        if (!username.trim() || username.trim() === currentUser?.username) {
+            setIsEditing(null);
+            return;
+        }
+
+        const result = await changeUsername(username.trim());
+        if (result.success) {
+            setIsEditing(null);
+            Alert.alert('Success', 'Username updated successfully');
+        } else {
+            Alert.alert('Error', result.error || 'Failed to update username');
+        }
+    };
+
     const handleDateChange = (event: any, selectedDate?: Date) => {
         if (Platform.OS === 'android') {
             setShowDatePicker(false);
@@ -369,12 +386,49 @@ export default function ProfileEditScreen() {
                     <Animated.View style={styles.section}>
                         <Text style={styles.sectionLabel}>Soul ID</Text>
                         <View style={styles.settingsGroup}>
-                            <SettingRow
-                                label=""
-                                value={`@${currentUser?.username || 'user'}`}
-                                icon="alternate-email"
-                                onPress={() => {}} // Read-only for now as per plan
-                            />
+                            {isEditing === 'username' ? (
+                                <View style={styles.editRow}>
+                                    <View style={styles.inputPrefixWrapper}>
+                                        <Text style={styles.inputPrefix}>@</Text>
+                                        <TextInput
+                                            style={[styles.editInput, { flex: 1, marginBottom: 0 }]}
+                                            value={username}
+                                            onChangeText={setUsername}
+                                            placeholder="username"
+                                            placeholderTextColor="rgba(255,255,255,0.3)"
+                                            autoCapitalize="none"
+                                            autoCorrect={false}
+                                        />
+                                    </View>
+                                    <View style={[styles.editActions, { marginTop: 12 }]}>
+                                        <Pressable onPress={() => setIsEditing(null)} style={styles.cancelBtn}>
+                                            <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
+                                        </Pressable>
+                                        <Pressable onPress={handleSaveUsername} style={[styles.saveBtn, { backgroundColor: activeTheme.primary }]}>
+                                            <MaterialIcons name="check" size={20} color="#ffffff" />
+                                        </Pressable>
+                                    </View>
+                                </View>
+                            ) : (
+                                <SettingRow
+                                    label=""
+                                    value={`@${currentUser?.username || 'user'}`}
+                                    icon="alternate-email"
+                                    onPress={() => {
+                                        // 15 day check
+                                        if (currentUser?.lastUsernameChange) {
+                                            const lastDate = new Date(currentUser.lastUsernameChange);
+                                            const now = new Date();
+                                            const diff = Math.ceil(Math.abs(now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+                                            if (diff < 15) {
+                                                Alert.alert('Hold on!', `You can change your username again in ${15 - diff} days.`);
+                                                return;
+                                            }
+                                        }
+                                        setIsEditing('username');
+                                    }}
+                                />
+                            )}
                         </View>
                     </Animated.View>
 
@@ -636,6 +690,18 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(255,255,255,0.08)',
         borderRadius: 8,
         marginBottom: 12,
+    },
+    inputPrefixWrapper: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'rgba(255,255,255,0.08)',
+        borderRadius: 8,
+        paddingLeft: 12,
+    },
+    inputPrefix: {
+        color: 'rgba(255,255,255,0.4)',
+        fontSize: 16,
+        marginRight: -4,
     },
     editActions: {
         flexDirection: 'row',

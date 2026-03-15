@@ -149,8 +149,9 @@ export default function StorageManagementScreen() {
 
     // Per-chat storage computation
     const chatStorageData = useMemo((): ChatStorageInfo[] => {
-        return Object.entries(messages).map(([chatId, msgs]) => {
-            const contact = contacts.find(c => c.id === chatId);
+        if (!messages) return [];
+        return Object.entries(messages as Record<string, any[]>).map(([chatId, msgs]) => {
+            const contact = contacts?.find(c => c.id === chatId);
             const mediaMessages = msgs.filter(m => m.media);
 
             return {
@@ -170,9 +171,10 @@ export default function StorageManagementScreen() {
 
     // All media items for the grid
     const mediaItems = useMemo((): MediaItem[] => {
+        if (!messages) return [];
         const items: MediaItem[] = [];
-        Object.entries(messages).forEach(([chatId, msgs]) => {
-            const contact = contacts.find(c => c.id === chatId);
+        Object.entries(messages as Record<string, any[]>).forEach(([chatId, msgs]) => {
+            const contact = contacts?.find(c => c.id === chatId);
             msgs.forEach(msg => {
                 if (msg.media && msg.media.url && msg.media.type !== 'status_reply') {
                     items.push({

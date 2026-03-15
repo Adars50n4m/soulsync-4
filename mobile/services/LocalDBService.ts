@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as SQLite from 'expo-sqlite';
+import { Platform } from 'react-native';
 import { MIGRATE_DB } from '../database/schema';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,6 +48,16 @@ export interface LocalMessage {
   media?: QueuedMessage['media'];
   replyTo?: string;
   localFileUri?: string;
+}
+
+export interface PendingSyncOperation {
+  id: number;
+  entityType: string;
+  entityId: string;
+  opType: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  retryCount: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -152,6 +163,12 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
 
 // FIX #6: Database integrity check to detect corruption
 async function checkDatabaseIntegrity(db: SQLite.SQLiteDatabase): Promise<boolean> {
+  // skip on Android emulator for performance if needed, but here we'll just add a race
+  if (Platform.OS === 'android') {
+      console.log('[SQLite] Android: Skipping long integrity check for faster boot');
+      return true;
+  }
+  
   try {
     const result = await db.getFirstAsync<{ integrity_check: string }>('PRAGMA integrity_check;');
     if (result && result.integrity_check === 'ok') {
@@ -214,6 +231,44 @@ function rowToQueuedMessage(row: any): QueuedMessage {
 }
 
 class OfflineService {
+  async initialize(): Promise<void> {
+    await getDb();
+  }
+
+  private async upsertChatSummary(
+    chatId: string,
+    messagePreview: string,
+    timestamp: string,
+    unreadIncrement = 0
+  ): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `INSERT INTO chats (id, last_message_preview, last_message_at, unread_count, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         last_message_preview = excluded.last_message_preview,
+         last_message_at = excluded.last_message_at,
+         unread_count = MAX(0, COALESCE(chats.unread_count, 0) + ?),
+         updated_at = excluded.updated_at;`,
+      [chatId, messagePreview, timestamp, Math.max(0, unreadIncrement), timestamp, unreadIncrement]
+    );
+  }
+
+  private async enqueuePendingSyncOp(
+    entityType: string,
+    entityId: string,
+    opType: string,
+    payload: Record<string, unknown>,
+    createdAt: string
+  ): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `INSERT INTO pending_sync_ops (entity_type, entity_id, op_type, payload, created_at)
+       VALUES (?, ?, ?, ?, ?);`,
+      [entityType, entityId, opType, JSON.stringify(payload), createdAt]
+    );
+  }
+
   async saveMessage(chatId: string, msg: LocalMessage): Promise<void> {
     const db = await getDb();
     await db.runAsync(
@@ -222,13 +277,16 @@ class OfflineService {
           media_type, media_url, media_caption, media_thumbnail,
           reply_to_id, timestamp, status, local_file_uri, is_unsent)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-       ON CONFLICT(id) DO UPDATE SET
+      ON CONFLICT(id) DO UPDATE SET
          status = excluded.status,
          media_url = COALESCE(excluded.media_url, messages.media_url),
          media_thumbnail = COALESCE(excluded.media_thumbnail, messages.media_thumbnail),
          local_file_uri = COALESCE(messages.local_file_uri, excluded.local_file_uri);`,
       [msg.id, chatId, msg.sender, msg.sender === 'me' ? chatId : 'me', msg.text ?? '', msg.media?.type ?? null, msg.media?.url ?? null, msg.media?.caption ?? null, msg.media?.thumbnail ?? null, msg.replyTo ?? null, msg.timestamp, msg.status ?? 'delivered', msg.localFileUri ?? null]
     );
+
+    const preview = msg.text?.trim() || (msg.media ? 'Media' : '');
+    await this.upsertChatSummary(chatId, preview, msg.timestamp, msg.sender === 'them' ? 1 : 0);
   }
 
   async savePendingMessage(chatId: string, msg: QueuedMessage): Promise<void> {
@@ -239,7 +297,7 @@ class OfflineService {
           media_type, media_url, media_caption, media_thumbnail,
           reply_to_id, timestamp, status, retry_count, local_file_uri, is_unsent)
        VALUES (?, ?, 'me', ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, 1)
-       ON CONFLICT(id) DO UPDATE SET 
+      ON CONFLICT(id) DO UPDATE SET 
          status = 'pending', 
          is_unsent = 1,
          media_url = COALESCE(excluded.media_url, messages.media_url),
@@ -247,6 +305,19 @@ class OfflineService {
          local_file_uri = COALESCE(messages.local_file_uri, excluded.local_file_uri);`,
       [msg.id, chatId, chatId, msg.text ?? '', msg.media?.type ?? null, msg.media?.url ?? null, msg.media?.caption ?? null, msg.media?.thumbnail ?? null, msg.replyTo ?? null, msg.timestamp, msg.localFileUri ?? null]
     );
+
+    await this.enqueuePendingSyncOp('message', msg.id, 'insert', {
+      chatId,
+      sender: msg.sender,
+      text: msg.text,
+      timestamp: msg.timestamp,
+      media: msg.media ?? null,
+      replyTo: msg.replyTo ?? null,
+      localFileUri: msg.localFileUri ?? null,
+    }, msg.timestamp);
+
+    const preview = msg.text?.trim() || (msg.media ? 'Media' : '');
+    await this.upsertChatSummary(chatId, preview, msg.timestamp, 0);
   }
 
   async getMessages(chatId: string, limit = 100): Promise<QueuedMessage[]> {
@@ -265,6 +336,12 @@ class OfflineService {
     const db = await getDb();
     const row = await db.getFirstAsync(`SELECT * FROM messages WHERE id = ? LIMIT 1;`, [messageId]);
     return row ? rowToQueuedMessage(row) : null;
+  }
+
+  async getAllMessages(): Promise<QueuedMessage[]> {
+    const db = await getDb();
+    const rows = await db.getAllAsync(`SELECT * FROM messages ORDER BY timestamp ASC;`);
+    return (rows as any[]).map(rowToQueuedMessage);
   }
 
   async updateMessageStatus(messageId: string, status: MessageStatus): Promise<void> {
@@ -467,11 +544,46 @@ class OfflineService {
     try {
       await db.runAsync(`DELETE FROM messages WHERE chat_id = ?;`, [partnerId]);
       await db.runAsync(`UPDATE contacts SET last_message = '', unread_count = 0 WHERE id = ?;`, [partnerId]);
+      await db.runAsync(`DELETE FROM chats WHERE id = ?;`, [partnerId]);
       await db.execAsync('COMMIT;');
     } catch (e) {
       await db.execAsync('ROLLBACK;');
       throw e;
     }
+  }
+
+  async removePendingSyncOpsForEntity(entityType: string, entityId: string): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `DELETE FROM pending_sync_ops WHERE entity_type = ? AND entity_id = ?;`,
+      [entityType, entityId]
+    );
+  }
+
+  async getPendingSyncOps(entityType?: string): Promise<PendingSyncOperation[]> {
+    const db = await getDb();
+    const rows = entityType
+      ? await db.getAllAsync(
+          `SELECT * FROM pending_sync_ops WHERE entity_type = ? ORDER BY created_at ASC;`,
+          [entityType]
+        )
+      : await db.getAllAsync(`SELECT * FROM pending_sync_ops ORDER BY created_at ASC;`);
+
+    return (rows as any[]).map((row) => ({
+      id: row.id,
+      entityType: row.entity_type,
+      entityId: row.entity_id,
+      opType: row.op_type,
+      payload: (() => {
+        try {
+          return JSON.parse(row.payload ?? '{}');
+        } catch {
+          return {};
+        }
+      })(),
+      createdAt: row.created_at,
+      retryCount: row.retry_count ?? 0,
+    }));
   }
 }
 

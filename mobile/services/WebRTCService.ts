@@ -359,9 +359,19 @@ class WebRTCService {
 
         // Stop local tracks
         if (this.localStream) {
-            this.localStream.getTracks().forEach((track: any) => {
-                track.stop();
-            });
+            try {
+                this.localStream.getTracks().forEach((track: any) => {
+                    if (track && typeof track.stop === 'function') {
+                        try {
+                            track.stop();
+                        } catch (e) {
+                            console.warn('[WebRTCService] Error stopping track:', e);
+                        }
+                    }
+                });
+            } catch (e) {
+                console.warn('[WebRTCService] Error getting tracks for stop:', e);
+            }
             this.localStream = null;
         }
 
@@ -470,7 +480,7 @@ class WebRTCService {
             });
             
             const timeoutPromise = new Promise<MediaStream>((_, reject) => {
-                timer = setTimeout(() => reject(new Error('getUserMedia timed out after 3 seconds')), 3000);
+                timer = setTimeout(() => reject(new Error('getUserMedia timed out after 5 seconds')), 5000);
             });
 
             this.localStream = await Promise.race([mediaPromise, timeoutPromise]);

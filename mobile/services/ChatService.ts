@@ -655,6 +655,10 @@ class ChatService {
       }
       
       await offlineService.updateMessageStatus(serverId, 'sent');
+      await offlineService.removePendingSyncOpsForEntity('message', message.id);
+      if (serverId !== message.id) {
+        await offlineService.removePendingSyncOpsForEntity('message', serverId);
+      }
       // Pass the original client ID as message.id, and the new server ID as the third param
       this.onStatusUpdate?.(message.id, 'sent', serverId);
 
@@ -772,6 +776,17 @@ class ChatService {
     replyTo?: string,
     localUri?: string
   ): Promise<ChatMessage | null> {
+    if (!this.userId) {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        this.userId = user.id;
+        this.senderName =
+          user.user_metadata?.name ??
+          user.user_metadata?.display_name ??
+          this.senderName;
+      }
+    }
+
     const targetChatId = chatId || this.partnerId;
     if (!this.userId || !targetChatId) {
       console.warn('[ChatService] sendMessage failed: userId or targetChatId is null', { userId: this.userId, targetChatId });

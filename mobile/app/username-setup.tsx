@@ -1,5 +1,5 @@
 // mobile/app/username-setup.tsx
-// Adapted from reference UsernameSetupScreen.tsx for Expo Router
+// Same UI style as login screen with animated bears
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -12,9 +12,31 @@ import {
   Platform,
   ActivityIndicator,
   StatusBar,
+  Animated,
+  Dimensions,
 } from 'react-native';
+import Svg, { Circle, Path, Ellipse, G } from 'react-native-svg';
+import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { authService } from '../services/AuthService';
+import { GlassView } from '../components/ui/GlassView';
+
+const { width: SCREEN_W } = Dimensions.get('window');
+
+const STROKE = '#3A2B24';
+const C = {
+  bg:           '#000000',
+  card:         'rgba(26, 26, 28, 0.40)',
+  cardBorder:   'rgba(255, 255, 255, 0.10)',
+  accent:       '#BC002A',
+  accentDark:   '#9B0022',
+  input:        '#262628',
+  inputBorder:  '#3A3A3C',
+  inputFocus:   '#BC002A',
+  text:         '#FFFFFF',
+  textMuted:    '#9CA3AF',
+  textSub:      '#999999',
+};
 
 type AvailabilityState = 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
 
@@ -42,6 +64,33 @@ function getPasswordStrength(password: string): {
 
 export default function UsernameSetupScreen() {
   const router = useRouter();
+
+  // Animated values (same as login)
+  const boyBreathe = useRef(new Animated.Value(0)).current;
+  const girlBreathe = useRef(new Animated.Value(0)).current;
+  const floatY = useRef(new Animated.Value(0)).current;
+  const shakeX = useRef(new Animated.Value(0)).current;
+
+  // Breathe loops
+  useEffect(() => {
+    const loop = (anim: Animated.Value, delay = 0) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(anim, { toValue: 1, duration: 2000, useNativeDriver: true }),
+          Animated.timing(anim, { toValue: 0, duration: 2000, useNativeDriver: true }),
+        ])
+      ).start();
+    loop(boyBreathe, 0);
+    loop(girlBreathe, 600);
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(floatY, { toValue: -8, duration: 2200, useNativeDriver: true }),
+        Animated.timing(floatY, { toValue: 0,  duration: 2200, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
 
   const [username,        setUsername]        = useState('');
   const [usernameState,   setUsernameState]   = useState<AvailabilityState>('idle');
@@ -117,25 +166,59 @@ export default function UsernameSetupScreen() {
     });
   };
 
+  // Bear configs (same as login)
+  const bears = [
+    { id: 'boy',  cx: 145, cy: 90, color: '#FFFFFF', snout: '#FFF0F5', cheek: '#FFCAD6', peekArm: 'right' },
+    { id: 'girl', cx: 255, cy: 90, color: '#D69E71', snout: '#F0C4A5', cheek: '#F08B8B', peekArm: 'left'  },
+  ];
+
   return (
     <KeyboardAvoidingView
-      style={styles.root}
+      style={{ flex: 1, backgroundColor: C.bg }}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <StatusBar barStyle="light-content" backgroundColor="#0A0A0F" />
+      <StatusBar barStyle="light-content" backgroundColor="#000" />
+
+      {/* Bears SVG Header */}
+      <Animated.View style={{ transform: [{ translateY: floatY }, { translateX: shakeX }], alignItems: 'center', marginBottom: -50 }}>
+        <Svg width="400" height="200" viewBox="0 0 400 300">
+          {bears.map(({ id, cx, cy, color, snout, cheek, peekArm }) => (
+            <G key={id}>
+              <Ellipse cx={cx-24} cy={cy+132} rx="12" ry="8" fill={color} stroke={STROKE} strokeWidth="5" />
+              <Ellipse cx={cx+24} cy={cy+132} rx="12" ry="8" fill={color} stroke={STROKE} strokeWidth="5" />
+              <Path d={`M ${cx-34} ${cy+25} C ${cx-65} ${cy+60},${cx-60} ${cy+135},${cx} ${cy+135} C ${cx+60} ${cy+135},${cx+65} ${cy+60},${cx+34} ${cy+25} Z`} fill={color} stroke={STROKE} strokeWidth="5" />
+              <Circle cx={cx-48} cy={cy-38} r="18" fill={color} stroke={STROKE} strokeWidth="5" />
+              <Circle cx={cx+48} cy={cy-38} r="18" fill={color} stroke={STROKE} strokeWidth="5" />
+              <Path d={`M ${cx} ${cy-50} C ${cx+45} ${cy-50},${cx+72} ${cy-20},${cx+72} ${cy+15} C ${cx+72} ${cy+55},${cx+40} ${cy+65},${cx} ${cy+65} C ${cx-40} ${cy+65},${cx-72} ${cy+55},${cx-72} ${cy+15} C ${cx-72} ${cy-20},${cx-45} ${cy-50},${cx} ${cy-50} Z`} fill={color} stroke={STROKE} strokeWidth="5" />
+              <Ellipse cx={cx} cy={cy+19} rx="22" ry="16" fill={snout} />
+              <Ellipse cx={cx-42} cy={cy+16} rx="12" ry="9" fill={cheek} opacity="0.55" />
+              <Ellipse cx={cx+42} cy={cy+16} rx="12" ry="9" fill={cheek} opacity="0.55" />
+              <Circle cx={cx-24} cy={cy+5} r="6.5" fill={STROKE} />
+              <Circle cx={cx-21.5} cy={cy+2.5} r="2" fill="#fff" />
+              <Circle cx={cx+24} cy={cy+5} r="6.5" fill={STROKE} />
+              <Circle cx={cx+26.5} cy={cy+2.5} r="2" fill="#fff" />
+              <Path d={`M ${cx-2} ${cy+11} Q ${cx} ${cy+13} ${cx+2} ${cy+11} Z`} fill={STROKE} stroke={STROKE} strokeWidth="2" />
+              <Path d={`M ${cx-7} ${cy+18} Q ${cx} ${cy+20} ${cx+7} ${cy+18} C ${cx+7} ${cy+28},${cx-7} ${cy+28},${cx-7} ${cy+18} Z`} fill={STROKE} stroke={STROKE} strokeWidth="3" />
+            </G>
+          ))}
+        </Svg>
+      </Animated.View>
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 22, justifyContent: 'center' }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.header}>
-          <Text style={styles.step}>Step 1 of 2</Text>
-          <Text style={styles.title}>Choose your identity</Text>
-          <Text style={styles.subtitle}>
-            Your username is how people find you on SoulSync
-          </Text>
-        </View>
+        {/* Glass Card */}
+        <GlassView intensity={Platform.OS === 'ios' ? 80 : 60} tint="dark" style={s.card}>
+          <Text style={s.title}>Create Soul Id</Text>
+          <Text style={s.subtitle}>Choose your unique identity</Text>
+
+          {/* Back link */}
+          <TouchableOpacity onPress={() => router.back()} style={s.backLink}>
+            <Feather name="arrow-left" size={18} color={C.accent} />
+            <Text style={s.backText}> Back to login</Text>
+          </TouchableOpacity>
 
         {/* Username */}
         <View style={styles.fieldGroup}>
@@ -265,12 +348,13 @@ export default function UsernameSetupScreen() {
             : <Text style={styles.nextBtnText}>Next →</Text>
           }
         </TouchableOpacity>
+        </GlassView>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
-const AMBER  = '#F5A623';
+const AMBER  = '#BC002A';
 const BG     = '#0A0A0F';
 const BORDER = '#252535';
 
@@ -311,4 +395,51 @@ const styles = StyleSheet.create({
   nextBtn: { backgroundColor: AMBER, borderRadius: 12, height: 52, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   btnDisabled: { opacity: 0.6 },
   nextBtnText: { color: '#0A0A0F', fontSize: 16, fontWeight: '700' },
+});
+
+// Glass card styles (same as login)
+const s = StyleSheet.create({
+  card: {
+    width: '100%',
+    backgroundColor: C.card,
+    borderRadius: 40,
+    paddingHorizontal: 28,
+    paddingTop: 44,
+    paddingBottom: 32,
+    borderWidth: 1,
+    borderColor: C.cardBorder,
+    overflow: 'hidden',
+    zIndex: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 20 },
+    shadowOpacity: 0.5,
+    shadowRadius: 28,
+    elevation: 14,
+  },
+  title: {
+    fontSize: 32,
+    fontWeight: '900',
+    color: C.accent,
+    textAlign: 'center',
+    letterSpacing: -0.5,
+  },
+  subtitle: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.7)',
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 26,
+    fontWeight: '500',
+  },
+  backLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  backText: {
+    color: C.accent,
+    fontSize: 14,
+    fontWeight: '600',
+  },
 });

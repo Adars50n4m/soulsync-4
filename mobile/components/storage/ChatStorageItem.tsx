@@ -89,8 +89,8 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     chatName: {
-        fontSize: 15,
-        fontWeight: '600',
+        fontSize: 16,
+        fontWeight: '700',
         color: '#fff',
     },
     chatStorageDetail: {

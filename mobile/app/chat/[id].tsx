@@ -51,6 +51,7 @@ import 'react-native-gesture-handler';
 import { useApp, USERS } from '../../context/AppContext';
 import { SoulAvatar } from '../../components/SoulAvatar';
 import { chatService } from '../../services/ChatService';
+import { chatTransitionState } from '../../services/chatTransitionState';
 import { MusicPlayerOverlay } from '../../components/MusicPlayerOverlay';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { MediaPreviewModal } from '../../components/MediaPreviewModal';
@@ -62,17 +63,18 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'reac
 
 const IS_IOS = Platform.OS === 'ios';
 const ENABLE_SHARED_TRANSITIONS = Platform.OS === 'ios';
+const ENABLE_INNER_SHARED_TRANSITIONS = false;
 const IOS_KEYBOARD_SAFE_ADJUST = 0; 
 const HEADER_PILL_TOP = 62;
 const LIST_PILL_HEIGHT = 72;
 const LIST_PILL_RADIUS = 36;
-const MORPH_IN_OUT_DURATION = 1020;
-const MORPH_OUT_HANDOFF = Math.round(MORPH_IN_OUT_DURATION * 0.16);
+const MORPH_IN_OUT_DURATION = 520;
+const MORPH_OUT_HANDOFF = Math.round(MORPH_IN_OUT_DURATION * 0.82);
 const pillSharedTransition = SharedTransition.custom((values) => {
     'worklet';
     const morph = {
-        duration: 1020,
-        easing: Easing.bezier(0.2, 1, 0.36, 1),
+        duration: 520,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
     };
     return {
         originX: withTiming(values.targetOriginX, morph),
@@ -81,7 +83,7 @@ const pillSharedTransition = SharedTransition.custom((values) => {
         height: withTiming(values.targetHeight, morph),
         borderRadius: withTiming(values.targetBorderRadius, morph),
     };
-}).duration(720);
+}).duration(520);
 
 type ChatMediaItem = {
     url: string;
@@ -248,7 +250,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     
     const router = useRouter();
     const isFocused = useIsFocused();
-    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, onlineUsers } = useApp();
+    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, onlineUsers, initializeChatSession, cleanupChatSession } = useApp() as any;
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
     const [isReady, setIsReady] = useState(false);
@@ -304,7 +306,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         opacity: interpolate(
             backgroundMorphProgress.value,
             [0, 1],
-            [0.9, 1],
+            [0, 1],
             Extrapolation.CLAMP
         ),
         transform: [
@@ -320,7 +322,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 scale: interpolate(
                     backgroundMorphProgress.value,
                     [0, 1],
-                    [0.985, 1],
+                    [0.986, 1],
                     Extrapolation.CLAMP
                 ),
             },
@@ -358,8 +360,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 easing: Easing.bezier(0.22, 1, 0.36, 1),
             });
             headerAccessoryOpacity.value = withDelay(
-                320,
-                withTiming(1, { duration: 260, easing: Easing.out(Easing.cubic) })
+                180,
+                withTiming(1, { duration: 180, easing: Easing.out(Easing.cubic) })
             );
             return;
         }
@@ -440,7 +442,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
         // OUT = reverse of IN (same easing + same duration + same path).
         if (isMorphEntry && sourceY !== undefined) {
-            headerAccessoryOpacity.value = withTiming(0, { duration: 100 });
+            chatTransitionState.setPhase('returning');
+            headerAccessoryOpacity.value = withTiming(0, { duration: 120 });
             backgroundMorphProgress.value = withTiming(0, {
                 duration: MORPH_IN_OUT_DURATION,
                 easing: Easing.bezier(0.22, 1, 0.36, 1),
@@ -458,7 +461,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             setTimeout(() => finishBack(), MORPH_OUT_HANDOFF);
             return;
         }
-        headerAccessoryOpacity.value = withTiming(0, { duration: 1280 });
+        chatTransitionState.setPhase('returning');
+        headerAccessoryOpacity.value = withTiming(0, { duration: 180 });
         requestAnimationFrame(() => {
             finishBack();
         });
@@ -521,6 +525,18 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     // Memoize reversed messages to avoid expensive array operations in render
     const reversedMessages = useMemo(() => [...chatMessages].reverse(), [chatMessages]);
     const isTyping = contact ? typingUsers.includes(contact.id) : false;
+
+    useEffect(() => {
+        if (!isFocused || !currentUser?.id || !contact?.id) {
+            return;
+        }
+
+        initializeChatSession?.(contact.id);
+
+        return () => {
+            cleanupChatSession?.(contact.id);
+        };
+    }, [cleanupChatSession, contact?.id, currentUser?.id, initializeChatSession, isFocused]);
 
     // Mark incoming messages as read when chat is open
     useEffect(() => {
@@ -1075,8 +1091,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const handleMediaDownload = useCallback(async (msgId: string, url: string, index: number) => {
         try {
             console.log(`[ChatScreen] Starting media resolution for msgId: ${msgId}, url: ${url}`);
-            // Use storageService.getMediaUrl to handle caching and URL resolution (R2 keys vs direct URLs)
-            // This fixes the "Expected URL scheme" error on Android by ensuring we always have a proper URL before downloadAsync
             const localUri = await storageService.getMediaUrl(url);
             
             if (!localUri) {
@@ -1089,14 +1103,14 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             await offlineService.updateMessageLocalUri(msgId, localUri);
 
             // Update AppContext State to trigger re-render in UI
-            if (updateMessage) {
-                const currentMsg = chatMessages.find(m => m.id === msgId);
+            if (updateMessage && id) {
+                const currentMsg = (chatMessages || []).find(m => m.id === msgId);
                 if (currentMsg) {
                     console.log(`[ChatScreen] Updating AppContext state for msgId: ${msgId}`);
                     updateMessage(id as string, msgId, { 
                          localFileUri: localUri,
                          // Force a partial update that React.memo will see
-                         media: currentMsg.media ? { ...currentMsg.media } : undefined
+                         media: currentMsg.media ? { ...currentMsg.media } : {}
                     } as any);
                 } else {
                     console.warn(`[ChatScreen] Message ${msgId} not found in current chatMessages state`);
@@ -1104,7 +1118,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             }
         } catch (error) {
             console.error('[ChatScreen] Media download error:', error);
-            // Alert.alert('Download Failed', 'Could not seamlessly download this media.');
         }
     }, [id, chatMessages, updateMessage]);
 
@@ -1124,7 +1137,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             onSelectToggle={handleSelectToggle}
             isHighlighted={highlightedMessageId === item.id}
             onQuotePress={handleQuotePress}
-            uploadProgress={uploadProgressTracker[item.id]}
+            uploadProgress={uploadProgressTracker?.[item.id]}
             onMediaDownload={handleMediaDownload}
         />
     ), [selectedContextMessage, chatMessages, contact?.name, handleMediaTap, selectionMode, selectedMessageIds, handleSelectToggle, uploadProgressTracker, handleMediaDownload]);
@@ -1227,7 +1240,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                     if (item.type === 'image') {
                         const manipResult = await ImageManipulator.manipulateAsync(
                             item.uri,
-                            [{ resize: { width: 20, height: 20 } }],
+                            [{ resize: { width: 32 } }],
                             { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG, base64: true }
                         );
                         thumbnail = `data:image/jpeg;base64,${manipResult.base64}`;
@@ -1545,7 +1558,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             </Animated.View>
 
                             <Animated.View
-                                {...(ENABLE_SHARED_TRANSITIONS
+                                {...(ENABLE_INNER_SHARED_TRANSITIONS
                                     ? {
                                         sharedTransitionTag: `pill-avatar-${id}`,
                                         sharedTransitionStyle: pillSharedTransition,
@@ -1579,7 +1592,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
                             <View style={styles.headerInfo}>
                                 <Animated.View
-                                    {...(ENABLE_SHARED_TRANSITIONS
+                                    {...(ENABLE_INNER_SHARED_TRANSITIONS
                                         ? {
                                             sharedTransitionTag: `pill-name-${id}`,
                                             sharedTransitionStyle: pillSharedTransition,

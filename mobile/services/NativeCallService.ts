@@ -89,6 +89,12 @@ class NativeCallService {
     // This is a dangerous permission and MUST be requested at runtime
     if (Platform.OS === 'android') {
       try {
+        // Only request permissions if the app is in the foreground to prevent crashes
+        if (AppState.currentState !== 'active') {
+          console.log('[NativeCallService] App not active, skipping permission request');
+          return;
+        }
+
         const { PermissionsAndroid } = require('react-native');
         const permissions = [
           PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
@@ -99,7 +105,6 @@ class NativeCallService {
         if (PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS) {
           permissions.push(PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS);
         }
-
         console.log('[NativeCallService] Requesting required permissions at runtime...');
         const granted = await PermissionsAndroid.requestMultiple(permissions);
         console.log('[NativeCallService] Permissions result:', granted);

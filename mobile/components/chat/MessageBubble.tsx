@@ -1,6 +1,7 @@
 import React, { useRef, useCallback, useMemo } from 'react';
-import { View, Text, Pressable, Alert, Platform } from 'react-native';
+import { View, Text, Pressable, Alert, Platform, Image as RNImage } from 'react-native';
 import { Image } from 'expo-image';
+import * as FileSystem from 'expo-file-system';
 import GlassView from '../ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -20,8 +21,6 @@ import { Message } from '../../types';
 import { ChatStyles } from './ChatStyles';
 import { getMessageMediaItems } from '../../utils/chatUtils';
 import VoiceNotePlayer from './VoiceNotePlayer';
-
-const AnimatedImage = Animated.createAnimatedComponent(Image);
 
 interface MessageBubbleProps {
     msg: Message;
@@ -56,6 +55,22 @@ const formatTime = (ts: string) => {
     }
 };
 
+const areNumberArraysEqual = (a: number[], b: number[]) => {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
+};
+
+const isSameRatio = (current: number | null, next: number) => {
+    if (current == null) return false;
+    return Math.abs(current - next) < 0.02;
+};
+
+const mediaAspectRatioCache = new Map<string, number>();
+const DEFAULT_MEDIA_RATIO = 0.78;
+
 const MessageBubble = React.memo(({ 
   msg, 
   contactName, 
@@ -76,20 +91,101 @@ const MessageBubble = React.memo(({
   uploadProgress,
   onMediaDownload,
 }: MessageBubbleProps) => {
+    const initialMediaItems = getMessageMediaItems(msg);
+    const initialMediaSource =
+        initialMediaItems[0]?.localFileUri ||
+        (initialMediaItems[0]?.url && (
+            initialMediaItems[0].url.startsWith('http') ||
+            initialMediaItems[0].url.startsWith('file:') ||
+            initialMediaItems[0].url.startsWith('data:')
+        ) ? initialMediaItems[0].url : undefined) ||
+        initialMediaItems[0]?.thumbnail ||
+        null;
+    const cachedAspectRatio = initialMediaSource ? mediaAspectRatioCache.get(`${msg.id}:${initialMediaSource}`) ?? null : null;
     const { activeTheme } = useApp();
-    const [aspectRatio, setAspectRatio] = React.useState<number | null>(initialAspectRatio || null);
+    const [aspectRatio, setAspectRatio] = React.useState<number | null>(initialAspectRatio || cachedAspectRatio || null);
     const [downloadingIndices, setDownloadingIndices] = React.useState<number[]>([]);
+    const [invalidLocalIndices, setInvalidLocalIndices] = React.useState<number[]>([]);
     const translateX = useSharedValue(0);
     const isMe = msg.sender === 'me';
     const bubbleRef = useRef<View>(null);
 
     const mediaItems = useMemo(() => getMessageMediaItems(msg), [msg]);
+    const mediaValidationKey = useMemo(
+        () => mediaItems.map((media, index) => `${index}:${media.localFileUri || ''}:${media.url || ''}:${media.thumbnail || ''}`).join('|'),
+        [mediaItems]
+    );
+    const invalidLocalIndexSet = useMemo(() => new Set(invalidLocalIndices), [invalidLocalIndices]);
+    const primaryMediaPreviewSource = useMemo(() => {
+        const media = mediaItems[0];
+        if (!media || media.type === 'audio') return null;
+        const usableLocalUri = invalidLocalIndexSet.has(0) ? undefined : media.localFileUri;
+        const fallbackRemoteUri = media.url && (media.url.startsWith('http') || media.url.startsWith('file:') || media.url.startsWith('data:'))
+            ? media.url
+            : undefined;
+        return usableLocalUri || fallbackRemoteUri || media.thumbnail || null;
+    }, [mediaItems, invalidLocalIndexSet]);
+    const primaryMediaAspectCacheKey = primaryMediaPreviewSource ? `${msg.id}:${primaryMediaPreviewSource}` : null;
+
+    React.useEffect(() => {
+        let cancelled = false;
+
+        const validateLocalMedia = async () => {
+            const results = await Promise.all(mediaItems.map(async (media, index) => {
+                if (!media.localFileUri?.startsWith('file://')) return null;
+                try {
+                    const info = await FileSystem.getInfoAsync(media.localFileUri);
+                    return info.exists ? null : index;
+                } catch {
+                    return index;
+                }
+            }));
+
+            if (!cancelled) {
+                const nextInvalidIndices = results.filter((value): value is number => value !== null);
+                setInvalidLocalIndices((prev) => (
+                    areNumberArraysEqual(prev, nextInvalidIndices) ? prev : nextInvalidIndices
+                ));
+            }
+        };
+
+        validateLocalMedia();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [mediaItems, mediaValidationKey]);
+
+    React.useEffect(() => {
+        if (!primaryMediaPreviewSource || aspectRatio != null) return;
+
+        let cancelled = false;
+
+        RNImage.getSize(
+            primaryMediaPreviewSource,
+            (width, height) => {
+                if (cancelled || !width || !height) return;
+                const ratio = Math.max(0.6, Math.min(width / height, 1.8));
+                if (primaryMediaAspectCacheKey) {
+                    mediaAspectRatioCache.set(primaryMediaAspectCacheKey, ratio);
+                }
+                setAspectRatio(prev => (isSameRatio(prev, ratio) ? prev : ratio));
+            },
+            () => {}
+        );
+
+        return () => {
+            cancelled = true;
+        };
+    }, [aspectRatio, primaryMediaAspectCacheKey, primaryMediaPreviewSource]);
     
     React.useEffect(() => {
         if (!isMe && onMediaDownload) {
             mediaItems.forEach((media, index) => {
+                const usableLocalUri = invalidLocalIndexSet.has(index) ? undefined : media.localFileUri;
+
                 // If we JUST got the localFileUri, remove it from downloadingIndices
-                if (media.localFileUri && downloadingIndices.includes(index)) {
+                if (usableLocalUri && downloadingIndices.includes(index)) {
                     console.log(`[MessageBubble] Media downloaded: clearing index ${index}`);
                     setDownloadingIndices(prev => prev.filter(i => i !== index));
                     return;
@@ -101,14 +197,14 @@ const MessageBubble = React.memo(({
                              !media.url.startsWith('file:') && 
                              !media.url.startsWith('data:');
                 
-                if (isKey && !media.localFileUri && !downloadingIndices.includes(index)) {
+                if (isKey && !usableLocalUri && !downloadingIndices.includes(index)) {
                     console.log(`[MessageBubble] Auto-downloading media key: ${media.url}`);
                     setDownloadingIndices(prev => [...prev, index]);
                     onMediaDownload(msg.id, media.url, index);
                 }
             });
         }
-    }, [isMe, msg.id, mediaItems, onMediaDownload, downloadingIndices]);
+    }, [isMe, msg.id, mediaItems, onMediaDownload, downloadingIndices, invalidLocalIndexSet]);
 
     const hasText = !!msg.text;
     const hasCaption = !!msg.media?.caption;
@@ -212,7 +308,8 @@ const MessageBubble = React.memo(({
     const handleMediaPress = (index: number, openGallery = false) => {
         if (!isClone) {
             const media = mediaItems[index];
-            if (!isMe && !media.localFileUri && onMediaDownload) {
+            const usableLocalUri = invalidLocalIndexSet.has(index) ? undefined : media.localFileUri;
+            if (!isMe && !usableLocalUri && onMediaDownload) {
                 if (!downloadingIndices.includes(index)) {
                     setDownloadingIndices(prev => [...prev, index]);
                     onMediaDownload(msg.id, media.url, index);
@@ -228,13 +325,21 @@ const MessageBubble = React.memo(({
 
         if (mediaItems.length === 1) {
             const media = mediaItems[0];
+            const usableLocalUri = invalidLocalIndexSet.has(0) ? undefined : media.localFileUri;
+            const fallbackRemoteUri = media.url && (media.url.startsWith('http') || media.url.startsWith('file:') || media.url.startsWith('data:'))
+                ? media.url
+                : undefined;
+            const previewSource = usableLocalUri || fallbackRemoteUri || media.thumbnail;
+            const showDownloadOverlay = !isMe && !usableLocalUri;
+            const shouldMeasureImage = !showDownloadOverlay || aspectRatio == null;
             if (media.type === 'audio') {
                 return <VoiceNotePlayer uri={media.url} isMe={isMe} theme={activeTheme} />;
             }
 
-            const currentAspectRatio = aspectRatio || 1;
+            const currentAspectRatio = aspectRatio || DEFAULT_MEDIA_RATIO;
             const mediaWidth = 260;
             const mediaHeight = mediaWidth / currentAspectRatio;
+            const shouldHideInitialFlash = showDownloadOverlay && aspectRatio == null;
 
             return (
                 <Pressable
@@ -246,29 +351,39 @@ const MessageBubble = React.memo(({
                         { 
                             width: mediaWidth,
                             height: mediaHeight,
-                            backgroundColor: 'rgba(255,255,255,0.05)',
+                            backgroundColor: shouldHideInitialFlash ? 'transparent' : 'rgba(255,255,255,0.05)',
                         }
                     ]}
                 >
-                    <AnimatedImage 
-                        source={(media.localFileUri || (media.url && (media.url.startsWith('http') || media.url.startsWith('file:') || media.url.startsWith('data:')))) 
-                            ? { uri: media.localFileUri || media.url } 
-                            : (media.thumbnail ? { uri: media.thumbnail } : undefined)}
-                        style={{ 
-                            width: mediaWidth,
-                            height: mediaHeight,
-                        }} 
-                        contentFit="cover"
-                        transition={200}
-                        blurRadius={(!isMe && !media.localFileUri && !media.url?.startsWith('http') && !media.url?.startsWith('file:')) ? 10 : 0}
-                        onLoad={(e) => {
-                            const { width, height } = e.source;
-                            if (width && height) {
-                                const ratio = Math.max(0.6, Math.min(width / height, 1.8));
-                                setAspectRatio(ratio);
-                            }
-                        }}
-                    />
+                    {!shouldHideInitialFlash && (
+                        <Image
+                            source={previewSource ? { uri: previewSource } : undefined}
+                            style={{ 
+                                width: mediaWidth,
+                                height: mediaHeight,
+                            }} 
+                            contentFit="cover"
+                            transition={showDownloadOverlay ? 0 : 120}
+                            cachePolicy="memory-disk"
+                            blurRadius={showDownloadOverlay ? 18 : 0}
+                            onLoad={(e) => {
+                                if (!shouldMeasureImage) return;
+                                const { width, height } = e.source;
+                                if (width && height) {
+                                    const ratio = Math.max(0.6, Math.min(width / height, 1.8));
+                                    if (primaryMediaAspectCacheKey) {
+                                        mediaAspectRatioCache.set(primaryMediaAspectCacheKey, ratio);
+                                    }
+                                    setAspectRatio(prev => (isSameRatio(prev, ratio) ? prev : ratio));
+                                }
+                            }}
+                            onError={() => {
+                                if (usableLocalUri && !invalidLocalIndexSet.has(0)) {
+                                    setInvalidLocalIndices(prev => (prev.includes(0) ? prev : [...prev, 0]));
+                                }
+                            }}
+                        />
+                    )}
                     {media.type === 'video' && uploadProgress === undefined && (
                         <View style={ChatStyles.mediaTilePlayOverlay}>
                             <MaterialIcons name="play-circle-filled" size={46} color="rgba(255,255,255,0.92)" />
@@ -281,17 +396,16 @@ const MessageBubble = React.memo(({
                             </Text>
                         </View>
                     )}
-                    {(!isMe && !media.localFileUri && !media.thumbnail) && (
-                        <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 46 }]}>
-                            {downloadingIndices.includes(0) ? (
-                                <MaterialIcons name="hourglass-empty" size={36} color="rgba(255,255,255,0.92)" />
-                            ) : (
+                    {showDownloadOverlay && !shouldHideInitialFlash && (
+                        <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'transparent', borderRadius: 46 }]}>
+                            <View style={ChatStyles.mediaDownloadScrim} />
+                            <GlassView intensity={55} tint="dark" style={ChatStyles.mediaDownloadBadge}>
                                 <MaterialIcons 
-                                    name={media.url ? "file-download" : "hourglass-empty"} 
-                                    size={46} 
-                                    color="rgba(255,255,255,0.92)" 
+                                    name={downloadingIndices.includes(0) ? 'hourglass-empty' : (media.url ? 'file-download' : 'hourglass-empty')}
+                                    size={28}
+                                    color="#fff"
                                 />
-                            )}
+                            </GlassView>
                         </View>
                     )}
                 </Pressable>
@@ -309,6 +423,12 @@ const MessageBubble = React.memo(({
             ]}>
                 <View style={ChatStyles.mediaGrid}>
                     {visibleItems.map((media, index) => {
+                        const usableLocalUri = invalidLocalIndexSet.has(index) ? undefined : media.localFileUri;
+                        const fallbackRemoteUri = media.url && (media.url.startsWith('http') || media.url.startsWith('file:') || media.url.startsWith('data:'))
+                            ? media.url
+                            : undefined;
+                        const previewSource = usableLocalUri || fallbackRemoteUri || media.thumbnail;
+                        const showDownloadOverlay = !isMe && !usableLocalUri;
                         const showMore = index === 3 && extraCount > 0;
                         return (
                             <Pressable
@@ -316,14 +436,18 @@ const MessageBubble = React.memo(({
                                 style={ChatStyles.mediaGridTile}
                                 onPress={() => handleMediaPress(index, showMore)}
                             >
-                                 <AnimatedImage 
-                                     source={(media.localFileUri || (media.url && (media.url.startsWith('http') || media.url.startsWith('file:') || media.url.startsWith('data:')))) 
-                                         ? { uri: media.localFileUri || media.url } 
-                                         : (media.thumbnail ? { uri: media.thumbnail } : undefined)} 
+                                 <Image
+                                     source={previewSource ? { uri: previewSource } : undefined} 
                                      style={ChatStyles.mediaGridImage} 
                                      contentFit="cover" 
-                                     transition={200} 
-                                     blurRadius={(!isMe && !media.localFileUri && !media.url?.startsWith('http') && !media.url?.startsWith('file:')) ? 10 : 0}
+                                     transition={showDownloadOverlay ? 0 : 120}
+                                     cachePolicy="memory-disk"
+                                     blurRadius={showDownloadOverlay ? 18 : 0}
+                                     onError={() => {
+                                        if (usableLocalUri && !invalidLocalIndexSet.has(index)) {
+                                            setInvalidLocalIndices(prev => (prev.includes(index) ? prev : [...prev, index]));
+                                        }
+                                     }}
                                 />
                                 {media.type === 'video' && !showMore && uploadProgress === undefined && (
                                     <View style={ChatStyles.mediaTilePlayOverlay}>
@@ -337,13 +461,16 @@ const MessageBubble = React.memo(({
                                         </Text>
                                     </View>
                                 )}
-                                {(!isMe && !media.localFileUri && !media.thumbnail) && (
-                                    <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 34 }]}>
-                                        {downloadingIndices.includes(index) ? (
-                                            <MaterialIcons name="hourglass-empty" size={24} color="rgba(255,255,255,0.92)" />
-                                        ) : (
-                                            <MaterialIcons name="file-download" size={30} color="rgba(255,255,255,0.92)" />
-                                        )}
+                                {showDownloadOverlay && (
+                                    <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'transparent', borderRadius: 34 }]}>
+                                        <View style={ChatStyles.mediaDownloadScrim} />
+                                        <GlassView intensity={55} tint="dark" style={ChatStyles.mediaDownloadBadgeSmall}>
+                                            <MaterialIcons
+                                                name={downloadingIndices.includes(index) ? 'hourglass-empty' : 'file-download'}
+                                                size={18}
+                                                color="#fff"
+                                            />
+                                        </GlassView>
                                     </View>
                                 )}
                                 {showMore && (

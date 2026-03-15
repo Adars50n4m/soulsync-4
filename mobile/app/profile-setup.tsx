@@ -242,7 +242,7 @@ export default function ProfileSetupScreen() {
   );
 }
 
-const AMBER  = '#F5A623';
+const AMBER  = '#BC002A';
 const BG     = '#0A0A0F';
 const BORDER = '#252535';
 

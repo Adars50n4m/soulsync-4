@@ -204,7 +204,7 @@ class CallService {
 
     // ── PUBLIC: initiateCall() ────────────────────────────────────────────
 
-    async initiateCall(partnerId: string, callType: 'audio' | 'video'): Promise<string | null> {
+    async startCall(partnerId: string, callType: 'audio' | 'video'): Promise<string | null> {
         if (!this.userId) return null;
 
         const roomId = Crypto.randomUUID();

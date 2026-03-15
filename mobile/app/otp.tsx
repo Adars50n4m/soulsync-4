@@ -21,7 +21,11 @@ const RESEND_WAIT = 60;
 
 export default function OTPScreen() {
   const router = useRouter();
-  const { email } = useLocalSearchParams<{ email: string }>();
+  const { email, phone } = useLocalSearchParams<{ email?: string; phone?: string }>();
+
+  // Determine if this is phone auth
+  const isPhoneAuth = !!phone;
+  const authTarget = phone ?? email ?? '';
 
   const [digits,    setDigits]    = useState<string[]>(Array(OTP_LENGTH).fill(''));
   const [loading,   setLoading]   = useState(false);
@@ -107,7 +111,12 @@ export default function OTPScreen() {
     setLoading(true);
     setError('');
 
-    const result = await authService.verifyOTP(email ?? '', code);
+    let result;
+    if (isPhoneAuth) {
+      result = await authService.verifyPhoneOTP(authTarget, code);
+    } else {
+      result = await authService.verifyOTP(authTarget, code);
+    }
 
     setLoading(false);
 
@@ -132,7 +141,12 @@ export default function OTPScreen() {
     setError('');
     setDigits(Array(OTP_LENGTH).fill(''));
 
-    const result = await authService.sendOTP(email ?? '');
+    let result;
+    if (isPhoneAuth) {
+      result = await authService.sendPhoneOTP(authTarget);
+    } else {
+      result = await authService.sendOTP(authTarget);
+    }
 
     setResending(false);
 
@@ -145,9 +159,22 @@ export default function OTPScreen() {
     inputRefs.current[0]?.focus();
   };
 
-  const maskedEmail = (email ?? '').replace(/^(.)(.*)(@)/, (_, first, _rest, at) => {
-    return `${first}***${at}`;
-  });
+  // Mask phone or email for display
+  const getMaskedTarget = () => {
+    if (isPhoneAuth) {
+      // Show last 4 digits of phone
+      const digitsOnly = authTarget.replace(/\D/g, '');
+      if (digitsOnly.length >= 4) {
+        return `***${digitsOnly.slice(-4)}`;
+      }
+      return authTarget;
+    } else {
+      // Mask email
+      return (authTarget).replace(/^(.)(.*)(@)/, (_, first, _rest, at) => {
+        return `${first}***${at}`;
+      });
+    }
+  };
 
   const filledCount = digits.filter(d => d !== '').length;
 
@@ -163,14 +190,14 @@ export default function OTPScreen() {
           style={styles.backBtn}
           onPress={() => router.back()}
         >
-          <Text style={styles.backBtnText}>← Change email</Text>
+          <Text style={styles.backBtnText}>← Change {isPhoneAuth ? 'phone' : 'email'}</Text>
         </TouchableOpacity>
 
         <View style={styles.header}>
-          <Text style={styles.title}>Check your inbox</Text>
+          <Text style={styles.title}>{isPhoneAuth ? 'Check your phone' : 'Check your inbox'}</Text>
           <Text style={styles.subtitle}>
             We sent a 6-digit code to{'\n'}
-            <Text style={styles.emailHighlight}>{maskedEmail}</Text>
+            <Text style={styles.emailHighlight}>{getMaskedTarget()}</Text>
           </Text>
         </View>
 
@@ -251,7 +278,7 @@ export default function OTPScreen() {
   );
 }
 
-const AMBER  = '#F5A623';
+const AMBER  = '#BC002A';
 const BG     = '#0A0A0F';
 const BORDER = '#252535';
 

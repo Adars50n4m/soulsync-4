@@ -26,7 +26,9 @@ import Animated, {
   withSequence,
   runOnJS,
   Easing,
-  cancelAnimation
+  cancelAnimation,
+  interpolate,
+  Extrapolate,
 } from 'react-native-reanimated';
 import { Story } from '../types';
 import { useApp } from '../context/AppContext';
@@ -45,6 +47,7 @@ interface StatusViewerModalProps {
   onStorySeen?: (storyId: string) => void;
   onClose: () => void;
   onComplete: () => void;
+  initialLayout?: { x: number; y: number; width: number; height: number } | null;
 }
 
 const ProgressBar = ({ index, currentIndex, duration, onComplete, paused }: { index: number, currentIndex: number, duration: number, onComplete: () => void, paused: boolean }) => {
@@ -94,7 +97,13 @@ export const StatusViewerModal = ({
   onStorySeen,
   onClose,
   onComplete,
+  initialLayout,
 }: StatusViewerModalProps) => {
+  const morphSpringConfig = {
+    damping: 15,
+    stiffness: 100,
+    mass: 1,
+  };
   const { width, height } = useWindowDimensions();
   const { activeTheme, contacts, currentUser } = useApp();
   const insets = useSafeAreaInsets();
@@ -108,6 +117,8 @@ export const StatusViewerModal = ({
   const [showViewers, setShowViewers] = useState(false);
   const sessionRef = useRef(0);
   const [prevVisible, setPrevVisible] = useState(visible);
+  const [isInternalVisible, setIsInternalVisible] = useState(visible);
+  const morphProgress = useSharedValue(0);
 
   // Use render-time state reset to avoid cascading renders in useEffect
   if (visible !== prevVisible) {
@@ -117,13 +128,40 @@ export const StatusViewerModal = ({
           setReplyText('');
           setMediaLoadFailed(false);
           setShowViewers(false);
+          setIsInternalVisible(true);
+          morphProgress.value = withSpring(1, morphSpringConfig);
       }
       setPrevVisible(visible);
   }
   
   const heartScale = useSharedValue(1);
-  const viewersTranslateY = useSharedValue(0); // Initialize with 0, will update in useEffect
+  const viewersTranslateY = useSharedValue(0);
   const backdropOpacity = useSharedValue(0);
+
+  const containerAnimatedStyle = useAnimatedStyle(() => {
+    if (!initialLayout) {
+      return {
+        opacity: morphProgress.value,
+        transform: [
+          { scale: 0.94 + (morphProgress.value * 0.06) } as any,
+          { translateY: (1 - morphProgress.value) * 20 } as any
+        ],
+      };
+    }
+
+    const { x, y, width: iWidth, height: iHeight } = initialLayout;
+
+    return {
+      position: 'absolute',
+      top: interpolate(morphProgress.value, [0, 1], [y, 0]),
+      left: interpolate(morphProgress.value, [0, 1], [x, 0]),
+      width: interpolate(morphProgress.value, [0, 1], [iWidth, width]),
+      height: interpolate(morphProgress.value, [0, 1], [iHeight, height], Extrapolate.IDENTITY),
+      borderRadius: interpolate(morphProgress.value, [0, 1], [28, 0], Extrapolate.CLAMP),
+      opacity: interpolate(morphProgress.value, [0, 0.05], [0, 1], Extrapolate.CLAMP),
+      overflow: 'hidden',
+    };
+  });
   const currentStory = stories[currentIndex] || stories[0] || null;
   const isOwnStatus = !!currentUserId && !!statusOwnerId && statusOwnerId === currentUserId;
 
@@ -155,11 +193,35 @@ export const StatusViewerModal = ({
   useEffect(() => {
     if (Platform.OS !== 'android' || !visible) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      onClose();
+      handleClose();
       return true;
     });
     return () => sub.remove();
-  }, [visible, onClose]);
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible && isInternalVisible) {
+      handleClose();
+    }
+  }, [visible, isInternalVisible]);
+
+  const handleClose = () => {
+    morphProgress.value = withSpring(0, morphSpringConfig, (finished) => {
+      if (finished) {
+        runOnJS(setIsInternalVisible)(false);
+        runOnJS(onClose)();
+      }
+    });
+  };
+
+  const handleComplete = () => {
+    morphProgress.value = withSpring(0, morphSpringConfig, (finished) => {
+      if (finished) {
+        runOnJS(setIsInternalVisible)(false);
+        runOnJS(onComplete)();
+      }
+    });
+  };
 
   // Capture the session at render time so stale animation callbacks are ignored
   const activeSession = sessionRef.current;
@@ -169,7 +231,7 @@ export const StatusViewerModal = ({
     if (currentIndex < stories.length - 1) {
       setCurrentIndex(prev => prev + 1);
     } else {
-      onComplete(); // Finished all stories
+      handleComplete(); // Finished all stories
     }
   };
 
@@ -274,10 +336,10 @@ export const StatusViewerModal = ({
     setIsUIVisible(true);
   };
 
-  if (!visible || !currentStory) return null;
+  if (!isInternalVisible || !currentStory) return null;
 
   const content = (
-      <View style={[styles.container, StyleSheet.absoluteFillObject]}>
+        <Animated.View style={[styles.container, StyleSheet.absoluteFillObject, containerAnimatedStyle]}>
         <RNStatusBar barStyle="light-content" translucent backgroundColor="transparent" />
         
         {/* Background Backdrop */}
@@ -377,7 +439,7 @@ export const StatusViewerModal = ({
                   <Pressable style={styles.iconButton}>
                     <MaterialIcons name="more-horiz" size={24} color="#fff" />
                   </Pressable>
-                  <Pressable onPress={onClose} style={styles.iconButton}>
+                  <Pressable onPress={handleClose} style={styles.iconButton}>
                     <MaterialIcons name="close" size={24} color="#fff" />
                   </Pressable>
                 </View>
@@ -504,7 +566,7 @@ export const StatusViewerModal = ({
           </>
         )}
 
-      </View>
+      </Animated.View>
   );
 
   // Android: use a full-screen View overlay instead of Modal to avoid
@@ -522,7 +584,7 @@ export const StatusViewerModal = ({
 
   // iOS: use native Modal for proper window layering
   return (
-    <Modal visible animationType="slide" transparent statusBarTranslucent onRequestClose={onClose}>
+    <Modal visible={isInternalVisible} animationType="none" transparent statusBarTranslucent onRequestClose={handleClose}>
       {content}
     </Modal>
   );

@@ -1,8 +1,9 @@
-import React, { createContext, useContext, useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
-import { View, Text, Image, Pressable, StyleSheet, StatusBar, Dimensions, Alert, FlatList, Platform, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
+import { View, Text, Image, Pressable, StyleSheet, StatusBar, Dimensions, Alert, FlatList, Platform, TouchableOpacity, RefreshControl } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 
 import { useRouter, useNavigation } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import GlassView from '../../components/ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -11,21 +12,20 @@ import Animated, {
   useAnimatedStyle,
   withSpring,
   withTiming,
-  SharedTransition,
   Easing,
-  LinearTransition,
-  FadeIn,
-  FadeOut,
-  FadeInDown,
-  ZoomIn,
+  SharedTransition,
+  interpolate,
+  Extrapolation,
 } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system';
 import { storageService } from '../../services/StorageService';
 import { proxySupabaseUrl } from '../../config/api';
+import { chatTransitionState } from '../../services/chatTransitionState';
 
 import { useApp } from '../../context/AppContext';
+import { LEGACY_TO_UUID } from '../../context/ChatContext';
 import { SoulAvatar } from '../../components/SoulAvatar';
 import { StatusViewerModal } from '../../components/StatusViewerModal';
 import { MediaPreviewModal } from '../../components/MediaPreviewModal';
@@ -35,7 +35,7 @@ import { NoteBubble } from '../../components/NoteBubble';
 import { NoteCreatorModal } from '../../components/NoteCreatorModal';
 const DEFAULT_AVATAR = '';
 const ENABLE_SHARED_TRANSITIONS = Platform.OS === 'ios';
-const HOME_MORPH_DURATION = 680;
+const HOME_MORPH_DURATION = 480;
 
 const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promise<string> => {
   let resolvedUri = asset.uri;
@@ -69,11 +69,10 @@ const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promi
 // ─── Stable style objects (extracted to avoid inline object creation in render) ──
 const typingStyle = { color: '#22c55e', fontWeight: '700' as const };
 const chevronColor = 'rgba(255,255,255,0.3)';
-const hiddenStyle = { opacity: 0 };
 const pillSharedTransition = SharedTransition.custom((values) => {
   'worklet';
   const morph = {
-    duration: 920,
+    duration: 520,
     easing: Easing.bezier(0.22, 1, 0.36, 1),
   };
   return {
@@ -83,7 +82,7 @@ const pillSharedTransition = SharedTransition.custom((values) => {
     height: withTiming(values.targetHeight, morph),
     borderRadius: withTiming(values.targetBorderRadius, morph),
   };
-}).duration(920);
+}).duration(520);
 const formatTime = (ts: string) => {
   if (!ts) return '';
   try {
@@ -105,42 +104,44 @@ let hasRenderedHomeOnce = false;
 
 interface ChatListItemProps {
   item: Contact;
+  index: number;
   lastMsg: { text?: string; timestamp?: string };
   onSelect: (contact: Contact, y: number) => void;
   isTyping: boolean;
   onlineUsers: string[];
   connectivity: { isDeviceOnline: boolean; isServerReachable: boolean; isRealtimeConnected: boolean };
-  isHidden?: boolean;
+  homeMorphProgress: Animated.SharedValue<number>;
 }
 
-const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, onlineUsers, connectivity, isHidden }: ChatListItemProps) => {
+const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, isTyping, onlineUsers, connectivity, homeMorphProgress }: ChatListItemProps) => {
   const scaleAnim = useSharedValue(1);
   const opacityAnim = useSharedValue(1);
   const itemRef = useRef<View>(null);
 
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scaleAnim.value }],
-    opacity: opacityAnim.value,
+    transform: [
+      { scale: scaleAnim.value } as any,
+      { translateY: interpolate(homeMorphProgress.value, [0, 1], [0, 35 + (index % 5) * 20], Extrapolation.IDENTITY) } as any,
+      { scale: interpolate(homeMorphProgress.value, [0, 1], [1, 0.92], Extrapolation.IDENTITY) } as any
+    ],
+    opacity: opacityAnim.value * interpolate(homeMorphProgress.value, [0, 0.7], [1, 0], Extrapolation.CLAMP),
   }));
 
   const handlePressIn = useCallback(() => {
-    if (isHidden) return;
     scaleAnim.value = withSpring(0.96, { damping: 15, stiffness: 300 });
-    opacityAnim.value = withTiming(0.85, { duration: 100 });
-  }, [isHidden]);
+    opacityAnim.value = withTiming(0.92, { duration: 90 });
+  }, []);
 
   const handlePressOut = useCallback(() => {
-    if (isHidden) return;
     scaleAnim.value = withSpring(1, { damping: 15, stiffness: 300 });
-    opacityAnim.value = withTiming(1, { duration: 150 });
-  }, [isHidden]);
+    opacityAnim.value = withTiming(1, { duration: 120 });
+  }, []);
 
   const handlePress = useCallback(() => {
-    if (isHidden) return;
     itemRef.current?.measure((x, y, width, height, pageX, pageY) => {
       onSelect(item, pageY);
     });
-  }, [isHidden, item, onSelect]);
+  }, [item, onSelect]);
 
   return (
     <Pressable
@@ -148,8 +149,7 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, onlineUser
       onPress={handlePress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
-      style={isHidden ? [styles.chatItem, hiddenStyle] : styles.chatItem}
-      disabled={isHidden}
+      style={styles.chatItem}
     >
       {/* Outer morph target - ONLY handles the shared element transition */}
       <Animated.View 
@@ -174,7 +174,7 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, onlineUser
             
         {/* Content rendered safely as an overlay, decoupled from Reanimated's snapshot engine */}
         <View style={[styles.pillContent, { position: 'absolute', width: '100%', height: '100%', paddingHorizontal: 16 }]} pointerEvents="box-none">
-          <Animated.View
+          <Animated.View 
             {...(ENABLE_SHARED_TRANSITIONS
               ? {
                   sharedTransitionTag: `pill-avatar-${item.id}`,
@@ -185,11 +185,13 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, onlineUser
           >
             <SoulAvatar
               uri={proxySupabaseUrl(item.avatar) || DEFAULT_AVATAR}
-              size={46}
+              size={40}
               style={[
                 item.stories && item.stories.length > 0 && {
                   borderWidth: 2,
-                  borderColor: item.stories.some((s) => !s.seen) ? '#3b82f6' : 'rgba(255,255,255,0.4)'
+                  borderColor: item.stories.some((s) => !s.seen) ? '#3b82f6' : 'rgba(255,255,255,0.4)',
+                  padding: 2,
+                  overflow: 'hidden'
                 }
               ]}
             />
@@ -235,7 +237,6 @@ const ChatListItem = React.memo(({ item, lastMsg, onSelect, isTyping, onlineUser
     prevProps.lastMsg.text === nextProps.lastMsg.text &&
     prevProps.lastMsg.timestamp === nextProps.lastMsg.timestamp &&
     prevProps.isTyping === nextProps.isTyping &&
-    prevProps.isHidden === nextProps.isHidden &&
     prevProps.onSelect === nextProps.onSelect
   );
 });
@@ -257,9 +258,11 @@ export default function HomeScreen() {
     addStatusView,
     connectivity,
     onlineUsers,
+    refreshLocalCache,
   } = useApp();
   const navigation = useNavigation();
   const router = useRouter();
+  const isFocused = useIsFocused();
 
   // Status Handlers
   const [selectedStatusContact, setSelectedStatusContact] = useState<Contact | null>(null);
@@ -268,27 +271,33 @@ export default function HomeScreen() {
   const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
   const [statusMediaPreview, setStatusMediaPreview] = useState<{ uri: string; type: 'image' | 'video' | 'audio' } | null>(null);
   const [isUploadingStatus, setIsUploadingStatus] = useState(false);
+  const [statusInitialLayout, setStatusInitialLayout] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
+  const statusRefs = useRef<Record<string, any>>({});
   const statusRailOpacity = useSharedValue(hasRenderedHomeOnce ? 0 : 1);
+  const statusRailOffset = useSharedValue(0);
   const homeMorphProgress = useSharedValue(0);
   const hasFocusedOnce = useRef(false);
-  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
-  const selectedChatResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const statusRailAnimStyle = useAnimatedStyle(() => ({
     opacity: statusRailOpacity.value,
+    transform: [{ translateY: statusRailOffset.value }],
   }));
 
-  const homeContentAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: 1 - homeMorphProgress.value * 0.08,
-    transform: [
-      { translateY: homeMorphProgress.value * -100 },
-      { scale: 1 - homeMorphProgress.value * 0.012 },
-    ],
-  }));
+const homeContentAnimatedStyle = useAnimatedStyle(() => ({
+  transform: [
+    { translateY: interpolate(homeMorphProgress.value, [0, 1], [0, 45], Extrapolation.IDENTITY) },
+    { scale: interpolate(homeMorphProgress.value, [0, 1], [1, 0.92], Extrapolation.IDENTITY) },
+  ] as any,
+  opacity: Platform.OS === 'android' 
+    ? 1 
+    : interpolate(homeMorphProgress.value, [0, 0.6], [1, 0], Extrapolation.CLAMP),
+}));
 
   const homeBackdropAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: homeMorphProgress.value * 0.12,
-    transform: [{ scale: 1 + homeMorphProgress.value * 0.012 }],
+    opacity: homeMorphProgress.value * 0.11,
+    transform: [
+      { scale: 1 + homeMorphProgress.value * 0.012 },
+      { translateY: homeMorphProgress.value * -10 },
+    ] as any,
   }));
 
   // Hide tab bar when fullscreen overlays are open — useLayoutEffect ensures
@@ -303,59 +312,112 @@ export default function HomeScreen() {
 
   useEffect(() => {
     const unsubscribe = (navigation as any).addListener('focus', () => {
-      if (selectedChatResetTimeoutRef.current) {
-        clearTimeout(selectedChatResetTimeoutRef.current);
-        selectedChatResetTimeoutRef.current = null;
+      // If we are already in the middle of a 'returning' animation handled by subscriber,
+      // do NOT reset the shared values here as it causes jitter.
+      if (chatTransitionState.getPhase() === 'returning') {
+        return;
       }
-      setSelectedChatId(null);
+      
+      chatTransitionState.setPhase('idle');
       homeMorphProgress.value = 1;
       if (!hasFocusedOnce.current) {
         hasFocusedOnce.current = true;
         hasRenderedHomeOnce = true;
         homeMorphProgress.value = 0;
         statusRailOpacity.value = 1;
+        statusRailOffset.value = 0;
         return;
       }
       homeMorphProgress.value = withTiming(0, {
         duration: HOME_MORPH_DURATION,
         easing: Easing.bezier(0.22, 1, 0.36, 1),
       });
-      // Fade-in only status rail on return; keep the rest of Home unchanged.
-      statusRailOpacity.value = 1;
+      // Smooth fade-in and downward motion for status rail on return
+      statusRailOpacity.value = 0;
+      statusRailOffset.value = -30;
       statusRailOpacity.value = withTiming(1, {
-        duration: 420,
+        duration: 400,
         easing: Easing.out(Easing.cubic),
+      });
+      statusRailOffset.value = withTiming(0, {
+        duration: 520,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
       });
     });
     return unsubscribe;
   }, [homeMorphProgress, navigation, statusRailOpacity]);
 
+  // Safety: Ensure visibility if focus listener fails or is delayed on mount (common on Android cold boots)
   useEffect(() => {
-    return () => {
-      if (selectedChatResetTimeoutRef.current) {
-        clearTimeout(selectedChatResetTimeoutRef.current);
+    if (isFocused && homeMorphProgress.value === 1) {
+       const timer = setTimeout(() => {
+         if (homeMorphProgress.value === 1) {
+           console.log('[HomeScreen] Safety Visibility Trigger');
+           homeMorphProgress.value = withTiming(0, { 
+             duration: 500,
+             easing: Easing.bezier(0.22, 1, 0.36, 1)
+           });
+         }
+       }, 800);
+       return () => clearTimeout(timer);
+    }
+  }, [isFocused]);
+
+  useEffect(() => {
+    const unsubscribe = chatTransitionState.subscribe((phase) => {
+      if (phase === 'entering') {
+        homeMorphProgress.value = withTiming(1, {
+          duration: HOME_MORPH_DURATION,
+          easing: Easing.bezier(0.22, 1, 0.36, 1),
+        });
+        return;
       }
-    };
-  }, []);
+
+      if (phase === 'returning') {
+        homeMorphProgress.value = 1;
+        statusRailOpacity.value = 0; // Start from 0 to avoid pop
+        statusRailOffset.value = -30;
+        homeMorphProgress.value = withTiming(0, {
+          duration: HOME_MORPH_DURATION,
+          easing: Easing.bezier(0.22, 1, 0.36, 1),
+        });
+        statusRailOpacity.value = withTiming(1, {
+          duration: 400,
+          easing: Easing.out(Easing.cubic),
+        });
+        statusRailOffset.value = withTiming(0, {
+          duration: HOME_MORPH_DURATION,
+          easing: Easing.bezier(0.22, 1, 0.36, 1),
+        });
+      }
+    });
+
+    return unsubscribe;
+  }, [homeMorphProgress, statusRailOpacity]);
 
   const contactStoriesMap = useMemo(() => {
     const map = new Map<string, Story[]>();
-    statuses.forEach(s => {
-      const story: Story = {
-        id: s.id,
-        url: proxySupabaseUrl(s.mediaUrl), // Proxy the story URL too
-        type: s.mediaType,
-        timestamp: s.timestamp,
-        seen: false,
-        caption: s.caption || '',
-        userId: s.userId,
-        likes: s.likes || [],
-        views: s.views || [],
-        music: s.music,
-      };
-      if (!map.has(s.userId)) map.set(s.userId, []);
-      map.get(s.userId)?.push(story);
-    });
+    try {
+      (statuses || []).forEach(s => {
+        const story: Story = {
+          id: s.id,
+          url: proxySupabaseUrl(s.mediaUrl),
+          type: s.mediaType,
+          timestamp: s.timestamp,
+          seen: false,
+          caption: s.caption || '',
+          userId: s.userId,
+          likes: s.likes || [],
+          views: s.views || [],
+          music: s.music,
+        };
+        const primaryUserId = (LEGACY_TO_UUID as any)[s.userId] || s.userId;
+        if (!map.has(primaryUserId)) map.set(primaryUserId, []);
+        map.get(primaryUserId)!.push(story);
+      });
+    } catch (e) {
+      console.warn('[HomeScreen] Error building contactStoriesMap:', e);
+    }
     return map;
   }, [statuses]);
 
@@ -365,43 +427,76 @@ export default function HomeScreen() {
   );
 
   const visibleContacts = useMemo(() => {
-    // Hide the current user from their own contact list
-    // We check both the UUID and the legacy string IDs to ensure the user never sees themselves
-    const legacyMap: Record<string, string> = {
+    if (!contacts) return [];
+    const legacyToUuid: Record<string, string> = {
+      'shri': '4d28b137-66ff-4417-b451-b1a421e34b25',
+      'hari': '02e52f08-6c1e-497f-93f6-b29c275b8ca4'
+    };
+    const uuidToLegacy: Record<string, string> = {
       '4d28b137-66ff-4417-b451-b1a421e34b25': 'shri',
       '02e52f08-6c1e-497f-93f6-b29c275b8ca4': 'hari'
     };
     
-    const myLegacyId = currentUser?.id ? legacyMap[currentUser.id] : null;
+    const myLegacyId = currentUser?.id ? uuidToLegacy[currentUser.id] : null;
 
-    const otherContacts = contacts.filter(c => 
-      c.id !== currentUser?.id && 
-      c.id !== myLegacyId
-    );
+    // First pass: group by their "Primary ID" (UUID if available)
+    const grouped = new Map<string, any>();
+    
+    contacts.forEach(c => {
+      const primaryId = legacyToUuid[c.id] || c.id;
+      
+      // Skip self
+      if (primaryId === currentUser?.id || c.id === myLegacyId) return;
+
+      const existing = grouped.get(primaryId);
+      if (!existing) {
+        grouped.set(primaryId, { ...c, id: primaryId });
+      } else {
+        // Merge - keep the one with more info or latest activity
+        const hasBetterInfo = c.avatar && !existing.avatar;
+        const hasLatestMessage = c.lastMessage && c.lastMessage !== 'Start a conversation' && existing.lastMessage === 'Start a conversation';
+        
+        if (hasBetterInfo || hasLatestMessage) {
+           grouped.set(primaryId, { ...c, id: primaryId });
+        }
+      }
+    });
+
+    const otherContacts = Array.from(grouped.values());
     
     const legacyIds = new Set(['shri', 'hari']);
-    const hasRealContacts = otherContacts.some(c => !legacyIds.has(c.id));
-
-    if (!hasRealContacts) return otherContacts;
+    const hasRealContacts = otherContacts.some(c => !legacyIds.has(c.id) && !Object.values(legacyToUuid).includes(c.id));
 
     return otherContacts.filter(contact => {
-      if (!legacyIds.has(contact.id)) return true;
+      const primaryId = contact.id;
+      const altId = uuidToLegacy[primaryId] || primaryId;
 
-      const hasMessages = (messages[contact.id]?.length || 0) > 0;
-      const hasStatus = statuses.some(s => s.userId === contact.id);
+      // Check both primary and alternative ID for activity
+      const hasMessages = (messages?.[primaryId]?.length || 0) > 0 || (messages?.[altId]?.length || 0) > 0;
+      const hasStatus = (statuses || []).some(s => s.userId === primaryId || s.userId === altId);
       const hasMeaningfulLastMessage =
         !!contact.lastMessage && contact.lastMessage !== 'Start a conversation';
 
-      // Hide legacy placeholder contacts when real contacts exist and placeholder has no activity.
+      const isSuperUserContact = legacyIds.has(primaryId) || legacyIds.has(altId);
+      const amISuperUser = currentUser?.id && (legacyIds.has(currentUser.id) || Object.values(legacyToUuid).includes(currentUser.id));
+
+      if (Platform.OS === 'android') return true; // Show all on Android until stability confirmed
+      
+      // Keep if there's any activity
       return hasMessages || hasStatus || hasMeaningfulLastMessage;
     });
   }, [contacts, messages, statuses, currentUser]);
 
   const contactsWithStories = useMemo(() => {
-     return visibleContacts.filter(c => contactStoriesMap.has(c.id)).map(c => ({
-         ...c,
-         stories: contactStoriesMap.get(c.id)
-     }));
+     try {
+       return (visibleContacts || []).filter(c => contactStoriesMap.has(c.id)).map(c => ({
+           ...c,
+           stories: contactStoriesMap.get(c.id) || []
+       }));
+     } catch (e) {
+       console.warn('[HomeScreen] Error building contactsWithStories:', e);
+       return [];
+     }
   }, [visibleContacts, contactStoriesMap]);
 
   const isNoteValid = (timestamp?: string) => {
@@ -412,17 +507,28 @@ export default function HomeScreen() {
     return diff < 24 * 60 * 60 * 1000; // 24 hours
   };
 
-  const handleStatusPress = (contact: Contact) => {
+  const handleStatusPress = (contact: Contact, layout?: { x: number, y: number, width: number, height: number }) => {
     console.log('[HomeScreen] 牒 handleStatusPress triggered for:', contact.name);
-    console.log('[HomeScreen] Stories count:', contact.stories?.length);
+    setStatusInitialLayout(layout || null);
+    homeMorphProgress.value = withSpring(1, {
+      damping: 15,
+      stiffness: 100,
+      mass: 1,
+    });
     setSelectedStatusContact(contact);
     setIsViewerVisible(true);
   };
 
-  const handleMyStatusPress = () => {
+  const handleMyStatusPress = (layout?: { x: number, y: number, width: number, height: number }) => {
     if (!currentUser) return;
 
     if (myStories.length > 0) {
+      setStatusInitialLayout(layout || null);
+      homeMorphProgress.value = withSpring(1, {
+        damping: 15,
+        stiffness: 100,
+        mass: 1,
+      });
       setSelectedStatusContact({
         id: currentUser.id,
         name: currentUser.name,
@@ -442,12 +548,17 @@ export default function HomeScreen() {
   };
 
   const closeModalRobustly = useCallback(() => {
+    homeMorphProgress.value = withSpring(0, {
+      damping: 15,
+      stiffness: 100,
+      mass: 1,
+    });
     setIsViewerVisible(false);
     setIsMediaPickerVisible(false);
     setIsNoteModalVisible(false);
     setStatusMediaPreview(null);
     setSelectedStatusContact(null);
-  }, []);
+  }, [homeMorphProgress]);
 
   const handleSendStatus = async (mediaList: { uri: string; type: 'image' | 'video' | 'audio' }[], caption?: string) => {
     if (!currentUser || mediaList.length === 0) return;
@@ -547,19 +658,11 @@ export default function HomeScreen() {
   };
 
   const handleUserSelect = useCallback((contact: Contact, y: number) => {
-    if (selectedChatResetTimeoutRef.current) {
-      clearTimeout(selectedChatResetTimeoutRef.current);
-      selectedChatResetTimeoutRef.current = null;
-    }
-    setSelectedChatId(contact.id);
+    chatTransitionState.setPhase('entering');
     homeMorphProgress.value = withTiming(1, {
       duration: HOME_MORPH_DURATION,
       easing: Easing.bezier(0.22, 1, 0.36, 1),
     });
-    selectedChatResetTimeoutRef.current = setTimeout(() => {
-      setSelectedChatId((current) => (current === contact.id ? null : current));
-      selectedChatResetTimeoutRef.current = null;
-    }, 420);
     requestAnimationFrame(() => {
       router.push({
         pathname: '/chat/[id]',
@@ -584,7 +687,7 @@ export default function HomeScreen() {
     return map;
   }, [visibleContacts, messages]);
 
-  const renderItem = useCallback(({ item }: { item: Contact }) => {
+  const renderItem = useCallback(({ item, index }: { item: Contact; index: number }) => {
     const lastMsg = lastMessagesMap[item.id] || { text: item.lastMessage, timestamp: '' };
     const isTyping = typingUsers.includes(item.id);
     
@@ -595,15 +698,16 @@ export default function HomeScreen() {
     return (
       <ChatListItem 
           item={itemWithStories} 
+          index={index}
           lastMsg={lastMsg} 
           onSelect={handleUserSelect} 
           isTyping={isTyping}
           onlineUsers={onlineUsers}
           connectivity={connectivity}
-          isHidden={selectedChatId === item.id}
+          homeMorphProgress={homeMorphProgress}
       />
     );
-  }, [lastMessagesMap, typingUsers, handleUserSelect, contactStoriesMap, onlineUsers, connectivity, selectedChatId]);
+  }, [lastMessagesMap, typingUsers, handleUserSelect, contactStoriesMap, onlineUsers, connectivity, homeMorphProgress]);
 
   // Stable keyExtractor for FlashList
   const keyExtractor = useCallback((item: Contact) => item.id, []);
@@ -642,8 +746,13 @@ export default function HomeScreen() {
             const myStoryPreviewUrl = myStories[0]?.url;
             return (
               <Pressable 
+                ref={ref => statusRefs.current['my-status'] = ref}
                 style={styles.statusCard} 
-                onPress={handleMyStatusPress}
+                onPress={() => {
+                  statusRefs.current['my-status']?.measureInWindow((x: number, y: number, width: number, height: number) => {
+                    handleMyStatusPress({ x, y, width, height });
+                  });
+                }}
                 android_ripple={{ color: 'rgba(255,255,255,0.1)' }}
               >
                 <View style={styles.statusCardSurface}>
@@ -699,8 +808,13 @@ export default function HomeScreen() {
           const storyUrl = contact.stories?.[0]?.url;
           return (
             <Pressable 
+                ref={ref => statusRefs.current[contact.id] = ref}
                 style={styles.statusCard} 
-                onPress={() => handleStatusPress(contact)}
+                onPress={() => {
+                  statusRefs.current[contact.id]?.measureInWindow((x: number, y: number, width: number, height: number) => {
+                    handleStatusPress(contact, { x, y, width, height });
+                  });
+                }}
                 android_ripple={{ color: 'rgba(255,255,255,0.1)' }}
             >
               <View style={styles.statusCardSurface}>
@@ -746,6 +860,16 @@ export default function HomeScreen() {
           ListHeaderComponent={renderHeader}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={false}
+              onRefresh={() => {
+                console.log('[HomeScreen] Manual refresh triggered');
+                refreshLocalCache();
+              }}
+              tintColor="#BC002A"
+            />
+          }
         />
       </Animated.View>
 
@@ -782,6 +906,7 @@ export default function HomeScreen() {
         }}
         onClose={closeModalRobustly}
         onComplete={closeModalRobustly}
+        initialLayout={statusInitialLayout}
       />
 
       <MediaPreviewModal
@@ -823,7 +948,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   homeMorphBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#080808',
+    backgroundColor: '#000',
   },
   homeContent: {
     flex: 1,
@@ -905,7 +1030,7 @@ const styles = StyleSheet.create({
   pillContent: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 12 },
   avatarContainer: { position: 'relative' },
   avatar: { width: 46, height: 46, borderRadius: 23 },
-  onlineIndicator: { position: 'absolute', bottom: 0, right: 0, width: 12, height: 12, borderRadius: 6, backgroundColor: '#22c55e', borderWidth: 2, borderColor: '#151515' },
+  onlineIndicator: { position: 'absolute', bottom: 0, right: 0, width: 14, height: 14, borderRadius: 7, backgroundColor: '#22c55e', borderWidth: 2, borderColor: '#151515' },
   chatContent: { flex: 1, justifyContent: 'center' },
   contactName: { color: '#fff', fontSize: 17, fontWeight: '700', letterSpacing: 0.5 },
   lastMessage: { color: 'rgba(255,255,255,0.5)', fontSize: 13, fontWeight: '500' },

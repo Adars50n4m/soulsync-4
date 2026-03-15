@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ⬆️  Bump this number every time you change the schema.
-const DB_TARGET_VERSION = 8;
+const DB_TARGET_VERSION = 9;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper — read the stored schema version (returns 0 if brand-new install)
@@ -298,6 +298,40 @@ async function migration_v8(db: any): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION v9 — Add local chat mirror + pending sync operations
+// ─────────────────────────────────────────────────────────────────────────────
+async function migration_v9(db: any): Promise<void> {
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS chats (
+      id                   TEXT PRIMARY KEY NOT NULL,
+      last_message_preview TEXT,
+      last_message_at      TEXT,
+      unread_count         INTEGER DEFAULT 0,
+      updated_at           TEXT DEFAULT CURRENT_TIMESTAMP
+    );`,
+    `CREATE TABLE IF NOT EXISTS pending_sync_ops (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL,
+      entity_id   TEXT NOT NULL,
+      op_type     TEXT NOT NULL,
+      payload     TEXT NOT NULL,
+      created_at  TEXT NOT NULL,
+      retry_count INTEGER DEFAULT 0
+    );`,
+    `CREATE INDEX IF NOT EXISTS idx_chats_updated_at
+       ON chats(updated_at DESC);`,
+    `CREATE INDEX IF NOT EXISTS idx_pending_sync_ops_entity
+       ON pending_sync_ops(entity_type, entity_id);`,
+    `CREATE INDEX IF NOT EXISTS idx_pending_sync_ops_created_at
+       ON pending_sync_ops(created_at);`,
+  ];
+
+  for (const sql of statements) {
+    await db.execAsync(sql);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN EXPORT — call this once in your app's DB initialisation
 // ─────────────────────────────────────────────────────────────────────────────
 export const MIGRATE_DB = async (db: any): Promise<void> => {
@@ -342,6 +376,9 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
         case 8:
           await migration_v8(db);
           break;
+        case 9:
+          await migration_v9(db);
+          break;
         // ── Add future cases here ──────────────────────────────────────────
         // case 3:
         //   await migration_v3(db);
@@ -372,7 +409,23 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
       `ALTER TABLE messages ADD COLUMN media_thumbnail TEXT;`,
       `ALTER TABLE messages ADD COLUMN delivered_at TEXT;`,
       `ALTER TABLE messages ADD COLUMN read_at TEXT;`,
-      `ALTER TABLE messages ADD COLUMN idempotency_key TEXT;`
+      `ALTER TABLE messages ADD COLUMN idempotency_key TEXT;`,
+      `CREATE TABLE IF NOT EXISTS chats (
+        id TEXT PRIMARY KEY NOT NULL,
+        last_message_preview TEXT,
+        last_message_at TEXT,
+        unread_count INTEGER DEFAULT 0,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );`,
+      `CREATE TABLE IF NOT EXISTS pending_sync_ops (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        op_type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        retry_count INTEGER DEFAULT 0
+      );`
   ];
   for (const sql of repairSteps) {
       try {
