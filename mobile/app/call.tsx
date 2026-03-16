@@ -447,7 +447,9 @@ export default function CallScreen() {
     useEffect(() => {
         // FIX: Start timer if state is connected OR we actually have a remote stream
         // This handles cases where state hasn't updated but media is flowing.
-        const isActuallyConnected = callState === 'connected' || (remoteStream && activeCall?.isAccepted);
+        // FIX: Start timer if state is connected OR we actually have a remote stream with tracks
+        const hasRemoteTracks = remoteStream && (remoteStream.getAudioTracks().length > 0 || remoteStream.getVideoTracks().length > 0);
+        const isActuallyConnected = callState === 'connected' || (hasRemoteTracks && activeCall?.isAccepted);
         
         if (!isActuallyConnected) return;
         
@@ -571,7 +573,7 @@ export default function CallScreen() {
                         )}
                         
                         {/* Connecting Overlay for Video */}
-                        {(callState !== 'connected' && isVideo && activeCall.isAccepted) && (
+                        {(callState !== 'connected' && isVideo && activeCall.isAccepted && (!remoteStream || remoteStream.getVideoTracks().length === 0)) && (
                             <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 10 }]}>
                                 <ActivityIndicator size="small" color="#fff" style={{ marginBottom: 12 }} />
                                 <Text style={{ color: 'white', fontSize: 16, fontWeight: '500' }}>Connecting Soul Video...</Text>

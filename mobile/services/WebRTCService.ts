@@ -571,21 +571,24 @@ class WebRTCService {
             
             if (event.streams && event.streams[0]) {
                 this.remoteStream = event.streams[0];
+            } else {
+                console.warn('[WebRTCService] 📡 Track received but no streams found in event — creating local container');
+                // Fallback: if we have a track but it's not in a stream, create one
+                if (!this.remoteStream) {
+                    this.remoteStream = new MediaStream();
+                }
+                this.remoteStream.addTrack(event.track);
+            }
+
+            if (this.remoteStream) {
                 this.callbacks?.onRemoteStream(this.remoteStream);
                 
-                // If we get an audio track, we are effectively connected for the user
-                if (kind === 'audio' || this.callState !== 'connected') {
-                   this.setState('connected');
-                }
+                // CRITICAL: Any remote media (audio or video) means we are effectively connected
+                // to the other person, even if ICE is still in 'checking' phase.
+                this.setState('connected');
                 
                 // FIX #13: Verify DTLS/SRTP encryption is established
                 this.verifyEncryption();
-            } else {
-                console.warn('[WebRTCService] 📡 Track received but no streams found in event');
-                // Fallback: if we have a stream but it's not in this event properly
-                if (this.remoteStream) {
-                    this.setState('connected');
-                }
             }
         });
 
