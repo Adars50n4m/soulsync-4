@@ -80,7 +80,14 @@ export default function CallScreen() {
     });
 
     const hasRemoteTracks = remoteStream && (remoteStream.getAudioTracks().length > 0 || remoteStream.getVideoTracks().length > 0);
-    const isActuallyConnected = callState === 'connected' || (hasRemoteTracks && activeCall?.isAccepted);
+    const [wasConnected, setWasConnected] = useState(false);
+    
+    // Sticky connection state: once we have tracks, we are connected for the duration of the UI
+    if (!wasConnected && (callState === 'connected' || (hasRemoteTracks && activeCall?.isAccepted))) {
+        setWasConnected(true);
+    }
+
+    const isActuallyConnected = wasConnected || callState === 'connected' || (hasRemoteTracks && activeCall?.isAccepted);
     // const [isMuted, setIsMuted] = useState(false); // Managed by activeCall
     const [isSpeaker, setIsSpeaker] = useState(false);
 

@@ -672,28 +672,20 @@ class WebRTCService {
         // Add ICE connection state handler with recovery
         pc.addEventListener('iceconnectionstatechange', () => {
             const iceState = pc.iceConnectionState;
-            console.log('[WebRTCService] ICE state:', iceState);
+            console.log('[WebRTCService] 🧊 ICE state changed:', iceState);
 
             switch (iceState) {
                 case 'connected':
                 case 'completed':
+                    // Once media is flowing (which we check in 'track' event), 
+                    // ICE states like 'completed' just confirm stability.
                     this.setState('connected');
-                    this.reconnectAttempts = 0;
-                    console.log('[WebRTCService] ✅ ICE connection established (stable)');
                     break;
 
                 case 'disconnected':
                     // ICE layer disconnection is often transient
                     // Wait for auto-recovery before taking action
                     console.warn('[WebRTCService] ⚠️ ICE transiently disconnected. Waiting for auto-repair...');
-
-                    // Give ICE 8 seconds to auto-repair
-                    setTimeout(() => {
-                        if (pc.iceConnectionState === 'disconnected') {
-                            console.log('[WebRTCService] ICE still disconnected after 8 seconds. Checking connection state...');
-                            // Don't end call yet - let connection state handler decide
-                        }
-                    }, 8000);
                     break;
 
                 case 'checking':
@@ -703,12 +695,11 @@ class WebRTCService {
                 case 'failed':
                     console.warn('[WebRTCService] ❌ ICE connection failed');
                     console.warn('[WebRTCService] Note: On 4G/5G networks, ensure TURN server is configured');
-                    // Don't immediately end - connection state will handle it
+                    // Don't immediately end - connectionstatechange handler will handle final failure
                     break;
 
                 case 'closed':
                     console.log('[WebRTCService] ICE connection closed');
-                    this.reconnectAttempts = 0;
                     this.endCall('ice-closed');
                     break;
             }
@@ -772,6 +763,13 @@ class WebRTCService {
     }
 
     private setState(state: CallState): void {
+        // PREVENT DOWNGRADE: If we are already connected, don't go back to connecting
+        // unless the state is failed, ended, or idle.
+        if (this.callState === 'connected' && state === 'connecting') {
+            console.log('[WebRTCService] 🛡️ Ignoring state downgrade from connected to connecting');
+            return;
+        }
+
         console.log(`[WebRTCService] State change: ${this.callState} -> ${state}`);
         this.callState = state;
         this.broadcast('onStateChange', state);
