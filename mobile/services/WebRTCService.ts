@@ -515,13 +515,21 @@ class WebRTCService {
             // If we already have a PeerConnection, add these tracks NOW
             if (this.peerConnection && this.localStream) {
                 console.log('[WebRTCService] Adding local tracks to existing PeerConnection');
+                let tracksAdded = false;
                 this.localStream.getTracks().forEach((track: any) => {
                     try {
                         this.peerConnection!.addTrack(track, this.localStream!);
+                        tracksAdded = true;
                     } catch (e) {
                         console.warn('[WebRTCService] Failed to add track to existing PC:', e);
                     }
                 });
+
+                // CRITICAL: If we added tracks late, we MUST re-negotiate
+                if (tracksAdded && this.peerConnection.signalingState === 'stable') {
+                    console.log('[WebRTCService] 🔄 Late tracks added, triggering re-negotiation...');
+                    this.createOffer().catch(e => console.warn('Late offer failed:', e));
+                }
             }
 
             this.broadcast('onLocalStream', this.localStream);
@@ -794,7 +802,14 @@ class WebRTCService {
 
         console.log(`[WebRTCService] State change: ${this.callState} -> ${state}`);
         this.callState = state;
+        
+        // Force broadcast multiple times to ensure and handle any race conditions in listeners
         this.broadcast('onStateChange', state);
+        if (state === 'connected') {
+            // Also broadcast streams again to be absolutely sure
+            this.broadcast('onLocalStream', this.localStream);
+            this.broadcast('onRemoteStream', this.remoteStream);
+        }
 
         // Start/Stop media tracking
         if (state === 'connected') {

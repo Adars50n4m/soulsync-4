@@ -49,8 +49,7 @@ const getWebRTCModules = () => {
 
 const webrtcModules = getWebRTCModules();
 const RTCView = webrtcModules.RTCView;
-const RTCPIPView = webrtcModules.RTCPIPView;
-const RemoteVideoComponent = RTCPIPView || RTCView;
+const RemoteVideoComponent = RTCView; // Force RTCView for main background
 const startIOSPIP = webrtcModules.startIOSPIP;
 const stopIOSPIP = webrtcModules.stopIOSPIP;
 const webRTCService = webrtcModules.webRTCService;
@@ -91,13 +90,26 @@ export default function CallScreen() {
     
     const [wasConnected, setWasConnected] = useState(false);
     
-    // Sticky connection state: once we are connected, stay connected in the UI
+    // Aggressive Sync: If service is connected or we have tracks, we ARE connected.
     useEffect(() => {
         if (isActuallyConnected && !wasConnected) {
-            console.log('[CallScreen] 🎯 Connection confirmed (Sticky)');
+            console.log('[CallScreen] 🎯 Connection confirmed (Aggressive)');
             setWasConnected(true);
         }
     }, [isActuallyConnected]);
+
+    // Safety Sync: Periodically poll service state to ensure React didn't miss a beat
+    useEffect(() => {
+        const interval = setInterval(() => {
+            const svcState = webRTCService?.getState();
+            if (svcState === 'connected' && !wasConnected) {
+                console.log('[CallScreen] 🔄 Safety Sync: Forcing connected state');
+                setWasConnected(true);
+                setCallState('connected');
+            }
+        }, 2000);
+        return () => clearInterval(interval);
+    }, [wasConnected]);
 
     const uiConnected = wasConnected || isActuallyConnected;
     // const [isMuted, setIsMuted] = useState(false); // Managed by activeCall
@@ -616,13 +628,7 @@ export default function CallScreen() {
                             </View>
                         )}
                         
-                        {/* Connecting Overlay for Video */}
-                        {(!uiConnected && isVideo && activeCall.isAccepted) && (
-                            <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 10 }]}>
-                                <ActivityIndicator size="small" color="#fff" style={{ marginBottom: 12 }} />
-                                <Text style={{ color: 'white', fontSize: 16, fontWeight: '500' }}>Connecting Soul Video...</Text>
-                            </View>
-                        )}
+                        {/* 🚫 Connecting Overlay for Video Removed per User Request 🚫 */}
                     </View>
 
                     {/* 2. Main Content (Visible ONLY when NOT in PiP) */}
@@ -696,8 +702,8 @@ export default function CallScreen() {
                                 <View style={{ width: 44 }} />
                             </View>
 
-                            {/* Center Info (Avatar/Name) - Only show if not connected video */}
-                            {(!isVideo || callState !== 'connected') && (
+                            {/* Center Info (Avatar/Name) - Only show if not connected video or no uiConnection */}
+                            {(!isVideo || !uiConnected) && (
                                 <View style={styles.mainInfo}>
                                     <View style={styles.avatarWrapper}>
                                         <Animated.View style={[styles.pulseRing, pulseStyle]} />
