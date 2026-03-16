@@ -186,6 +186,8 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, isTyping, onl
             <SoulAvatar
               uri={proxySupabaseUrl(item.avatar) || DEFAULT_AVATAR}
               size={40}
+              avatarType={item.avatarType}
+              teddyVariant={item.teddyVariant}
               style={[
                 item.stories && item.stories.length > 0 && {
                   borderWidth: 2,

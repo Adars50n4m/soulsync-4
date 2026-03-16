@@ -108,6 +108,7 @@ class WebRTCService {
     private maxReconnectAttempts: number = 5;
     private reconnectTimeout: NodeJS.Timeout | null = null;
     private connectionWatchdog: NodeJS.Timeout | null = null;
+    private trackMonitorTimer: NodeJS.Timeout | null = null;
     private lastDisconnectTime: number = 0;
 
     /**
@@ -310,6 +311,7 @@ class WebRTCService {
                     if (signal.payload) {
                         try {
                             const candidate = new RTCIceCandidate(signal.payload);
+                            console.log(`[WebRTCService] 🧊 Adding remote ICE candidate: ${candidate.candidate?.split(' ').slice(0, 3).join(' ')}...`);
                             if (this.peerConnection?.remoteDescription) {
                                 await this.peerConnection.addIceCandidate(candidate);
                             } else {
@@ -319,6 +321,7 @@ class WebRTCService {
                                     this.pendingCandidates.shift();
                                 }
                                 this.pendingCandidates.push(candidate);
+                                console.log(`[WebRTCService] 📦 Buffered candidate (Total: ${this.pendingCandidates.length})`);
                             }
                         } catch (e) {
                             console.warn('[WebRTCService] Failed to add ICE candidate:', e);
@@ -457,6 +460,14 @@ class WebRTCService {
         return this.callState;
     }
 
+    getSignalingState(): string {
+        return (this.peerConnection as any)?.signalingState || 'idle';
+    }
+
+    getIceConnectionState(): string {
+        return (this.peerConnection as any)?.iceConnectionState || 'idle';
+    }
+
     // Private methods
 
     private async getMediaStream(): Promise<void> {
@@ -555,20 +566,35 @@ class WebRTCService {
 
         // Handle incoming tracks
         pc.addEventListener('track', (event: any) => {
-            console.log('Remote track received:', event.track?.kind);
+            const kind = event.track?.kind;
+            console.log(`[WebRTCService] 📡 Remote track received: ${kind}`);
+            
             if (event.streams && event.streams[0]) {
                 this.remoteStream = event.streams[0];
                 this.callbacks?.onRemoteStream(this.remoteStream);
-                this.setState('connected');
+                
+                // If we get an audio track, we are effectively connected for the user
+                if (kind === 'audio' || this.callState !== 'connected') {
+                   this.setState('connected');
+                }
+                
                 // FIX #13: Verify DTLS/SRTP encryption is established
                 this.verifyEncryption();
+            } else {
+                console.warn('[WebRTCService] 📡 Track received but no streams found in event');
+                // Fallback: if we have a stream but it's not in this event properly
+                if (this.remoteStream) {
+                    this.setState('connected');
+                }
             }
         });
 
         // Handle ICE candidates
         pc.addEventListener('icecandidate', (event: any) => {
             if (event.candidate) {
-                console.log('Sending ICE candidate');
+                const parts = event.candidate.candidate.split(' ');
+                const type = parts[7] || 'unknown';
+                console.log(`[WebRTCService] 🧊 Local ICE candidate generated: ${type} (${parts[0]} ${parts[1]} ${parts[2]})`);
                 callService.sendIceCandidate(event.candidate);
             }
         });
@@ -576,7 +602,7 @@ class WebRTCService {
         // Update connection state handler with recovery logic
         pc.addEventListener('connectionstatechange', () => {
             const state = pc.connectionState;
-            console.log('[WebRTCService] Connection state:', state);
+            console.log('[WebRTCService] 📶 Connection state changed:', state.toUpperCase());
 
             switch (state) {
                 case 'connected':
@@ -635,7 +661,7 @@ class WebRTCService {
                 case 'completed':
                     this.setState('connected');
                     this.reconnectAttempts = 0;
-                    console.log('[WebRTCService] ✅ ICE connection established');
+                    console.log('[WebRTCService] ✅ ICE connection established (stable)');
                     break;
 
                 case 'disconnected':
@@ -732,6 +758,13 @@ class WebRTCService {
         this.callState = state;
         this.callbacks?.onStateChange(state);
 
+        // Start/Stop media tracking
+        if (state === 'connected') {
+            this.startTrackMonitoring();
+        } else if (state === 'ended' || state === 'idle') {
+            this.stopTrackMonitoring();
+        }
+
         // Connection Watchdog: If we stay in 'connecting' too long, fail the call
         if (this.connectionWatchdog) {
             clearTimeout(this.connectionWatchdog);
@@ -765,8 +798,35 @@ class WebRTCService {
                 }
             }
         } catch (error) {
-            console.warn('[WebRTCService] Failed to verify encryption:', error);
+            console.error('[WebRTCService] Error verifying encryption:', error);
         }
+    }
+
+    private stopTrackMonitoring(): void {
+        if (this.trackMonitorTimer) {
+            console.log('[WebRTCService] 🔍 Stopping media track monitor');
+            clearInterval(this.trackMonitorTimer);
+            this.trackMonitorTimer = null;
+        }
+    }
+
+    private startTrackMonitoring(): void {
+        this.stopTrackMonitoring();
+        console.log('[WebRTCService] 🔍 Starting media track monitor');
+        this.trackMonitorTimer = setInterval(() => {
+            if (!this.peerConnection) {
+                this.stopTrackMonitoring();
+                return;
+            }
+            
+            const localAudio = this.localStream?.getAudioTracks().length || 0;
+            const remoteAudio = this.remoteStream?.getAudioTracks().length || 0;
+            const remoteVideo = this.remoteStream?.getVideoTracks().length || 0;
+            const iceState = this.getIceConnectionState();
+            const sigState = this.getSignalingState();
+
+            console.log(`[WebRTC_STATS] Role: ${this.isInitiator ? 'In' : 'Rx'} | ICE: ${iceState} | SIG: ${sigState} | Audio: L:${localAudio} R:${remoteAudio} | Video: R:${remoteVideo}`);
+        }, 5000);
     }
 
     // Add recovery attempt method

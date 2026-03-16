@@ -63,28 +63,25 @@ import { ResizeMode, Video, Audio } from 'expo-av';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
 const IS_IOS = Platform.OS === 'ios';
-const ENABLE_SHARED_TRANSITIONS = Platform.OS === 'ios';
-const ENABLE_INNER_SHARED_TRANSITIONS = false;
+const ENABLE_SHARED_TRANSITIONS = true;
+const ENABLE_INNER_SHARED_TRANSITIONS = true;
 const IOS_KEYBOARD_SAFE_ADJUST = 0; 
 const HEADER_PILL_TOP = 62;
 const LIST_PILL_HEIGHT = 72;
 const LIST_PILL_RADIUS = 36;
 const MORPH_IN_OUT_DURATION = 520;
 const MORPH_OUT_HANDOFF = Math.round(MORPH_IN_OUT_DURATION * 0.82);
-const pillSharedTransition = SharedTransition.custom((values) => {
+
+const morphTransition = SharedTransition.custom((values) => {
     'worklet';
-    const morph = {
-        duration: 520,
-        easing: Easing.bezier(0.22, 1, 0.36, 1),
-    };
     return {
-        originX: withTiming(values.targetOriginX, morph),
-        originY: withTiming(values.targetOriginY, morph),
-        width: withTiming(values.targetWidth, morph),
-        height: withTiming(values.targetHeight, morph),
-        borderRadius: withTiming(values.targetBorderRadius, morph),
+        width: withSpring(values.targetWidth, { damping: 15, stiffness: 150 }),
+        height: withSpring(values.targetHeight, { damping: 15, stiffness: 150 }),
+        originX: withSpring(values.targetOriginX, { damping: 15, stiffness: 150 }),
+        originY: withSpring(values.targetOriginY, { damping: 15, stiffness: 150 }),
+        borderRadius: withSpring(values.targetBorderRadius, { damping: 15, stiffness: 150 }),
     };
-}).duration(520);
+});
 
 type ChatMediaItem = {
     url: string;
@@ -247,9 +244,9 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     // Support both direct routing (params) and inline rendering (props)
     const rawId = propsUser?.id || (Array.isArray(paramsId) ? paramsId[0] : paramsId);
     // Standardize to UUID if legacy ID is used
-    const id = (rawId && LEGACY_TO_UUID[rawId as string]) || rawId;
-    
     const sourceY = propsSourceY ?? (paramsSourceY ? Number(Array.isArray(paramsSourceY) ? paramsSourceY[0] : paramsSourceY) : undefined);
+    const id = (rawId && LEGACY_TO_UUID[rawId as string]) || rawId;
+    const stringId = Array.isArray(paramsId) ? paramsId[0] : paramsId;
     const isMorphEntry = sourceY !== undefined;
     
     const router = useRouter();
@@ -914,24 +911,34 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     }, []);
 
     const openCallModal = () => {
-        // Measure call button position safely
-        if (callButtonRef.current) {
-            callButtonRef.current.measure((x, y, width, height, pageX, pageY) => {
-                const safeY = (typeof pageY === 'number' && !isNaN(pageY) && pageY > 0) ? pageY : 50;
-                const safeHeight = (typeof height === 'number' && !isNaN(height) && height > 0) ? height : 40;
-                setCallOptionsPosition({ x: 0, y: safeY + safeHeight + 8 });
-            });
-        } else {
-            setCallOptionsPosition({ x: 0, y: 100 }); // Safe generic fallback
-        }
+        console.log('[Chat] 📞 Opening call modal...');
         
+        // Show immediately with a sensible fallback so the overlay appears
+        setCallOptionsPosition({ x: 0, y: 110 });
         setShowCallModal(true);
+        
         RNAnimated.spring(modalAnim, {
             toValue: 1,
             useNativeDriver: true,
-            tension: 100,
-            friction: 10,
+            tension: 110,
+            friction: 9,
         }).start();
+
+        if (callButtonRef.current) {
+            // Refine position if possible
+            requestAnimationFrame(() => {
+                callButtonRef.current?.measure((x, y, width, height, pageX, pageY) => {
+                    console.log(`[Chat] 📍 Measure result: x=${x}, y=${y}, w=${width}, h=${height}, pageX=${pageX}, pageY=${pageY}`);
+                    
+                    const safeY = (typeof pageY === 'number' && !isNaN(pageY) && pageY > 0) ? pageY : 60;
+                    const safeHeight = (typeof height === 'number' && !isNaN(height) && height > 0) ? height : 44;
+                    
+                    const finalPos = { x: 0, y: safeY + safeHeight + 8 };
+                    console.log('[Chat] 🎯 Refining callOptionsPosition:', finalPos);
+                    setCallOptionsPosition(finalPos);
+                });
+            });
+        }
     };
 
     const closeCallModal = () => {
@@ -1509,12 +1516,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             <View style={[StyleSheet.absoluteFill, { zIndex: 2 }]} pointerEvents="box-none">
                 {/* The Morph Target: Dedicated view with matching tag for shared transition */}
                 <Animated.View
-                    {...(ENABLE_SHARED_TRANSITIONS
-                        ? {
-                            sharedTransitionTag: `pill-${id}`,
-                            sharedTransitionStyle: pillSharedTransition,
-                        }
-                        : {})}
                     style={[styles.headerPill, headerMorphAnimatedStyle, { 
                         position: 'absolute', 
                         top: HEADER_PILL_TOP, 
@@ -1561,27 +1562,20 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                 </Pressable>
                             </Animated.View>
 
-                            <Animated.View
-                                {...(ENABLE_INNER_SHARED_TRANSITIONS
-                                    ? {
-                                        sharedTransitionTag: `pill-avatar-${id}`,
-                                        sharedTransitionStyle: pillSharedTransition,
-                                    }
-                                    : {})}
-                            >
+                            <Animated.View>
                                 <Pressable 
                                     style={styles.avatarWrapper} 
                                     onPress={() => {
-                                        if (contact?.stories && contact.stories.length > 0) {
-                                            router.push(`/profile/${contact?.id}` as any);
-                                        } else {
-                                            router.push(`/profile/${contact?.id}` as any);
-                                        }
+                                        router.push(`/profile/${stringId}` as any);
                                     }}
                                 >
                                     <SoulAvatar
                                         uri={contact?.avatar}
                                         size={40}
+                                        avatarType={contact?.avatarType}
+                                        teddyVariant={contact?.teddyVariant}
+                                        sharedTransitionTag="avatar-universal-morph"
+                                        sharedTransitionStyle={morphTransition}
                                         style={[
                                             contact?.stories && contact.stories.length > 0 && {
                                                 borderWidth: 2,
@@ -1595,14 +1589,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             </Animated.View>
 
                             <View style={styles.headerInfo}>
-                                <Animated.View
-                                    {...(ENABLE_INNER_SHARED_TRANSITIONS
-                                        ? {
-                                            sharedTransitionTag: `pill-name-${id}`,
-                                            sharedTransitionStyle: pillSharedTransition,
-                                        }
-                                        : {})}
-                                >
+                                <Animated.View>
                                     <Text style={styles.contactName}>{contact?.name || '...'}</Text>
                                 </Animated.View>
                                 <Animated.View style={headerAccessoryAnimatedStyle}>
@@ -1681,7 +1668,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
             {/* Call Options Dropdown */}
             {showCallModal && (
-                <View style={[StyleSheet.absoluteFill, { zIndex: 100, elevation: 100 }]}>
+                <View style={[StyleSheet.absoluteFill, { zIndex: 9999, elevation: 9999 }]}>
                     <Pressable style={styles.modalOverlay} onPress={closeCallModal}>
                         <RNAnimated.View
                             style={[

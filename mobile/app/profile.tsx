@@ -141,10 +141,10 @@ export default function ProfileScreen() {
                         <Animated.View
                             style={styles.avatarGlowContainer}
                         >
-                            <SoulAvatar 
-                                uri={currentUser.avatar} 
-                                size={120} 
-                                style={styles.profileAvatar} 
+                            <SoulAvatar
+                                uri={currentUser.avatar}
+                                size={120}
+                                style={styles.profileAvatar}
                                 iconSize={60}
                             />
                             <View style={styles.avatarGlassBorder} />
@@ -155,13 +155,16 @@ export default function ProfileScreen() {
                     </Pressable>
                     <Text style={styles.userName}>{currentUser.name}</Text>
                     <Text style={styles.userHandle}>Soul ID: {currentUser.id || 'soul_user'}</Text>
-                    <Pressable 
-                        style={({ pressed }) => [styles.editProfileButton, pressed && styles.editProfileButtonPressed]}
-                        onPress={handleEditProfile}
-                    >
-                        <MaterialIcons name="edit" size={18} color="#ffffff" />
-                        <Text style={styles.editProfileText}>Edit Profile</Text>
-                    </Pressable>
+                    <View style={styles.profileActionContainer}>
+                        <Pressable 
+                            style={({ pressed }) => [styles.circularEditButton, pressed && styles.editProfileButtonPressed]}
+                            onPress={handleEditProfile}
+                        >
+                            <GlassView intensity={40} tint="light" style={styles.circularEditGlass}>
+                                <MaterialIcons name="edit" size={22} color="#ffffff" />
+                            </GlassView>
+                        </Pressable>
+                    </View>
                 </Animated.View>
 
                 {/* Glassmorphism Menu Cards */}
@@ -279,26 +282,28 @@ const styles = StyleSheet.create({
         borderWidth: 3,
         borderColor: '#09090E',
     },
-    editProfileButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: 'rgba(244, 63, 94, 0.2)',
-        paddingHorizontal: 20,
-        paddingVertical: 12,
+    profileActionContainer: {
+        position: 'absolute',
+        bottom: 110, // Adjusted to sit better near the avatar/name
+        right: 40,
+        zIndex: 100,
+    },
+    circularEditButton: {
+        width: 50,
+        height: 50,
         borderRadius: 25,
-        marginTop: 16,
+        overflow: 'hidden',
         borderWidth: 1,
-        borderColor: 'rgba(244, 63, 94, 0.3)',
+        borderColor: 'rgba(255,255,255,0.2)',
+    },
+    circularEditGlass: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     editProfileButtonPressed: {
         opacity: 0.7,
         transform: [{ scale: 0.96 }],
-    },
-    editProfileText: {
-        color: '#ffffff',
-        fontSize: 15,
-        fontWeight: '600',
-        marginLeft: 8,
     },
     userName: {
         color: '#ffffff',

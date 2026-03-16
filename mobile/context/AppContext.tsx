@@ -64,7 +64,11 @@ interface AppContextType {
     activeCall: any;
     calls: any[];
     startCall: any;
+    acceptCall: () => Promise<void>;
     endCall: any;
+    toggleMinimizeCall: (val: boolean) => void;
+    toggleMute: () => void;
+    toggleVideo: () => void;
     deleteCall: (id: string) => Promise<void>;
     clearCalls: () => Promise<void>;
 
@@ -162,7 +166,11 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         activeCall: call.activeCall,
         calls: call.calls,
         startCall: call.startCall,
+        acceptCall: call.acceptCall,
         endCall: call.endCall,
+        toggleMinimizeCall: call.toggleMinimizeCall,
+        toggleMute: call.toggleMute,
+        toggleVideo: call.toggleVideo,
         deleteCall: call.deleteCall,
         clearCalls: call.clearCalls,
 

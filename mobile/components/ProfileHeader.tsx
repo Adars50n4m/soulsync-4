@@ -4,6 +4,7 @@ import { Image } from 'expo-image';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, interpolate, Extrapolation, SharedValue } from 'react-native-reanimated';
 import ProgressiveBlur from './chat/ProgressiveBlur';
+import GlassView from './ui/GlassView';
 
 interface ProfileHeaderProps {
     image: string | any;
@@ -86,9 +87,10 @@ const ProfileHeader = ({
                             <Text style={styles.username}>{username.startsWith('@') ? username : `@${username}`}</Text>
                         </View>
 
-                        <Pressable style={styles.editButton} onPress={onEditPress}>
-                            <Text style={styles.editButtonText}>Edit Profile</Text>
-                            <Ionicons name="pencil" size={14} color="#000" />
+                        <Pressable style={styles.circularEditButton} onPress={onEditPress}>
+                            <GlassView intensity={40} tint="light" style={styles.circularEditGlass}>
+                                <MaterialIcons name="edit" size={20} color="#ffffff" />
+                            </GlassView>
                         </Pressable>
                     </View>
                 </View>
@@ -123,7 +125,7 @@ const styles = StyleSheet.create({
         ...StyleSheet.absoluteFillObject,
         justifyContent: 'flex-end',
         padding: 20,
-        paddingBottom: 4, // Moved even further down for ultra-low placement
+        paddingBottom: 20, // Pushed up from 4 to sit better
         zIndex: 10,
     },
     mainInfo: {
@@ -165,30 +167,18 @@ const styles = StyleSheet.create({
         fontSize: 15,
         fontWeight: '700',
     },
-    editButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        backgroundColor: '#ffffff',
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        borderRadius: 20,
-        ...Platform.select({
-            ios: {
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.1,
-                shadowRadius: 4,
-            },
-            android: {
-                elevation: 3,
-            },
-        }),
+    circularEditButton: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.2)',
     },
-    editButtonText: {
-        color: '#000000',
-        fontSize: 14,
-        fontWeight: '700',
+    circularEditGlass: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
 });
 

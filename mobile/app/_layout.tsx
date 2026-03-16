@@ -2,7 +2,7 @@ import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useContext, Component, ReactNode, useState } from 'react';
-import { View, ActivityIndicator, Platform, AppState, Text } from 'react-native';
+import { View, ActivityIndicator, Platform, AppState, Text, Pressable } from 'react-native';
 
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -204,11 +204,11 @@ function RootContent() {
               gestureEnabled: true,
             }} />
             <Stack.Screen name="profile" options={{
-              animation: 'ios_from_right',
+              animation: 'fade',
               headerShown: false,
             }} />
             <Stack.Screen name="profile/[id]" options={{
-              animation: 'ios_from_right',
+              animation: 'none',
               headerShown: false,
             }} />
             <Stack.Screen name="theme" options={{

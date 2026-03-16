@@ -88,6 +88,7 @@ export default function ProfileEditScreen() {
             if (currentUser.name && !isEditing) setName(currentUser.name);
             if (currentUser.username && !isEditing) setUsername(currentUser.username);
             if (currentUser.bio && !isEditing) setBio(currentUser.bio);
+            if (currentUser.avatar) setAvatar(currentUser.avatar);
             // Only sync birthdate if we aren't currently picking one
             // and the value is actually different from what we have locally
             if (currentUser.birthdate && !showDatePicker && currentUser.birthdate !== birthdate) {
@@ -95,7 +96,7 @@ export default function ProfileEditScreen() {
                 setTempBirthdate(currentUser.birthdate);
             }
         }
-    }, [currentUser?.birthdate, currentUser?.name, currentUser?.bio, isEditing, showDatePicker]);
+    }, [currentUser?.birthdate, currentUser?.name, currentUser?.bio, currentUser?.avatar, isEditing, showDatePicker]);
 
     const slideAnim = useRef(new RNAnimated.Value(0)).current;
     const handleBack = () => {
@@ -562,29 +563,49 @@ export default function ProfileEditScreen() {
                             }
                         ]}
                     >
+                        <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScrollContent}>
                         <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>Edit profile picture</Text>
+                            <Text style={styles.modalTitle}>Choose Avatar</Text>
                             <Pressable onPress={hideModal} style={styles.modalClose}>
                                 <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.5)" />
                             </Pressable>
                         </View>
 
-                        <Pressable style={styles.modalOption} onPress={handleTakePhoto}>
-                            <MaterialIcons name="camera-alt" size={24} color="#ffffff" />
-                            <Text style={styles.modalOptionText}>Take photo</Text>
-                        </Pressable>
+                        {/* Large Avatar Preview - 4:5 Ratio */}
+                        <View style={styles.avatarPreviewContainer}>
+                            <SoulAvatar
+                                uri={avatar}
+                                size={200}
+                                style={styles.avatarPreview}
+                            />
+                        </View>
 
-                        <Pressable style={styles.modalOption} onPress={handleChoosePhoto}>
-                            <MaterialIcons name="photo-library" size={24} color="#ffffff" />
-                            <Text style={styles.modalOptionText}>Choose photo</Text>
-                        </Pressable>
+                        {/* Photo Options */}
+                        <View style={styles.photoOptionsContainer}>
+                            <Pressable style={styles.modalOption} onPress={() => { hideModal(); setTimeout(handleTakePhoto, 300); }}>
+                                <MaterialIcons name="camera-alt" size={24} color="#ffffff" />
+                                <Text style={styles.modalOptionText}>Take photo</Text>
+                            </Pressable>
+
+                            <Pressable style={styles.modalOption} onPress={() => { hideModal(); setTimeout(handleChoosePhoto, 300); }}>
+                                <MaterialIcons name="photo-library" size={24} color="#ffffff" />
+                                <Text style={styles.modalOptionText}>Choose from gallery</Text>
+                            </Pressable>
+
+                            {avatar && (
+                                <Pressable style={styles.modalOption} onPress={handleDeletePhoto}>
+                                    <MaterialIcons name="delete" size={24} color="#ef4444" />
+                                    <Text style={[styles.modalOptionText, { color: '#ef4444' }]}>Remove photo</Text>
+                                </Pressable>
+                            )}
+                        </View>
 
                         <View style={styles.separator} />
 
-                        <Pressable style={styles.modalOption} onPress={handleDeletePhoto}>
-                            <MaterialIcons name="delete" size={24} color="#ef4444" />
-                            <Text style={[styles.modalOptionText, { color: '#ef4444' }]}>Delete photo</Text>
+                        <Pressable style={styles.modalOption} onPress={hideModal}>
+                            <Text style={[styles.modalOptionText, { textAlign: 'center' }]}>Cancel</Text>
                         </Pressable>
+                        </ScrollView>
                     </RNAnimated.View>
                 </View>
             </Modal>
@@ -783,6 +804,14 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
         paddingBottom: 40,
+        paddingTop: 10,
+        overflow: 'visible',
+    },
+    modalScrollView: {
+        flex: 1,
+    },
+    modalScrollContent: {
+        paddingBottom: 20,
     },
     modalHeader: {
         flexDirection: 'row',
@@ -820,5 +849,18 @@ const styles = StyleSheet.create({
         height: 1,
         backgroundColor: 'rgba(255,255,255,0.1)',
         marginVertical: 8,
+    },
+    avatarPreviewContainer: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 20,
+        minHeight: 250,
+    },
+    avatarPreview: {
+        width: 200,
+        height: 250,
+    },
+    photoOptionsContainer: {
+        paddingVertical: 10,
     },
 });

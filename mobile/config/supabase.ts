@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Env from './env';
 
 // Legacy ID mapping for transitioning to Supabase UUIDs
@@ -12,12 +13,20 @@ export const LEGACY_TO_UUID: Record<string, string> = {
     'hari_id': HARI_ID,
 };
 
-// Use direct SUPABASE_URL so Realtime WebSocket connects directly (proxy can't handle WS upgrades).
-// HTTP REST calls are routed through the Cloudflare proxy via custom fetch to bypass ISP blocks.
+// Use DIRECT Supabase URL as base — Realtime WebSocket REQUIRES direct connection.
+// Cloudflare Workers CANNOT proxy WebSocket upgrade requests.
+// HTTP REST calls are routed through the proxy via custom fetch to bypass ISP blocks.
 export const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
+    auth: {
+        storage: AsyncStorage,
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: false,
+    },
     global: {
         fetch: (url: RequestInfo | URL, options?: RequestInit) => {
             // Rewrite direct Supabase HTTP calls → proxy URL (bypasses Jio/Airtel blocks)
+            // But ONLY for HTTP — WebSocket URLs are never passed to fetch()
             const urlString = typeof url === 'string' ? url : url.toString();
             const proxied = urlString.replace(Env.SUPABASE_URL, Env.SUPABASE_PROXY_URL);
             return fetch(proxied, options);

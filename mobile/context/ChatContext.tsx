@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { useState, useEffect, createContext, useContext, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '../config/supabase';
+import { proxySupabaseUrl } from '../config/api';
 import { chatService, type ChatMessage } from '../services/ChatService';
 import { offlineService, type QueuedMessage } from '../services/LocalDBService';
 import { useAuth } from './AuthContext';
@@ -150,22 +151,39 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!currentUser) return;
 
     try {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('profiles')
-        .select('id, name, avatar_url, bio, note, note_timestamp')
+        .select('id, name, avatar_url, bio, note, note_timestamp, avatar_type, teddy_variant')
         .neq('id', currentUser.id);
 
       if (error) {
-        console.error('[ChatContext] Supabase profiles fetch error:', error);
-        return;
+        if (error.code === '42703') {
+          console.warn('[ChatContext] Database columns missing. Please run migrations! Falling back to basic fetch.');
+          const fb = await supabase
+            .from('profiles')
+            .select('id, name, avatar_url, bio')
+            .neq('id', currentUser.id);
+          
+          if (fb.error) {
+            console.error('[ChatContext] Fallback fetch failed:', fb.error);
+            return;
+          }
+          data = fb.data as any;
+        } else {
+          console.error('[ChatContext] Supabase profiles fetch error:', error);
+          return;
+        }
       }
       if (!data) {
         console.warn('[ChatContext] Supabase profiles fetch returned no data');
         return;
       }
-      console.log(`[ChatContext] Fetched ${data.length} profiles from server`);
 
-      for (const profile of data) {
+      // Filter out current user from contacts to prevent self-chat pollution
+      const filteredData = data.filter(p => p.id !== currentUser.id);
+      console.log(`[ChatContext] Fetched ${data.length} profiles, ${filteredData.length} after filtering me`);
+
+      for (const profile of filteredData) {
         const primaryId = LEGACY_TO_UUID[profile.id] || profile.id;
         const existing = contactsRef.current.find((contact) => contact.id === primaryId);
         
@@ -173,6 +191,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
           id: primaryId,
           name: profile.name || existing?.name || 'Unknown',
           avatar: profile.avatar_url || existing?.avatar || '',
+          avatarType: profile.avatar_type || existing?.avatarType || 'default',
+          teddyVariant: profile.teddy_variant || existing?.teddyVariant || null,
           status: existing?.status || 'offline',
           lastMessage: existing?.lastMessage || '',
           unreadCount: existing?.unreadCount || 0,
@@ -465,14 +485,39 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const fetchOtherUserProfile = useCallback(async (userId: string) => {
+    // FIX: Standardize userId first to handle legacy/UUID consistently
+    const sid = (userId && LEGACY_TO_UUID[userId]) || userId;
+
+    // FIX: Support hardcoded bypass users (shri/hari)
+    if (sid === LEGACY_TO_UUID['shri']) {
+      setOtherUser({
+        id: sid,
+        name: 'Shri Ram',
+        avatar: 'https://avatar.iran.liara.run/public/boy?username=shri',
+        bio: 'SoulSync Founder | Jai Shree Ram',
+      });
+      return;
+    }
+    if (sid === LEGACY_TO_UUID['hari']) {
+      setOtherUser({
+        id: sid,
+        name: 'Hari Om',
+        avatar: 'https://avatar.iran.liara.run/public/boy?username=hari',
+        bio: 'SoulSync Dev | Om Namah Shivay',
+      });
+      return;
+    }
+
     try {
-      const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
+      // Use the mapped UUID (sid) instead of raw userId
+      const queryId = sid;
+      const { data } = await supabase.from('profiles').select('*').eq('id', queryId).single();
       if (data) {
         setOtherUser({
           id: data.id,
-          name: data.name,
-          avatar: data.avatar_url,
-          bio: data.bio,
+          name: data.display_name || data.name || 'User',
+          avatar: proxySupabaseUrl(data.avatar_url),
+          bio: data.bio || 'Forever in sync',
         });
       }
     } catch (error) {

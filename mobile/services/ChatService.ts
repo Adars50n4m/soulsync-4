@@ -501,12 +501,11 @@ class ChatService {
       const now = Date.now();
 
       for (const message of pendingMessages) {
-        // Skip if already in-flight
-        if (this.sendingIds.has(message.id)) continue;
+        if (this.sendingIds.has(message.id)) {
+          console.log(`[ChatService] Skipping message ${message.id}: already in flight`);
+          continue;
+        }
 
-        // If a message was previously marked as 'failed', and we are back online processing the queue,
-        // it means we caught it on a reconnect. We should reset its retry state and treat it as 'pending'
-        // so it has a fresh chance to send.
         if (message.status === 'failed') {
           if (message.retryCount >= MAX_TOTAL_RETRIES) {
             console.warn(
@@ -523,7 +522,6 @@ class ChatService {
           await offlineService.updateMessageStatus(message.id, 'pending');
         }
 
-        // Permanently failed — mark and notify UI (Only triggers if it fails max times *during this active session*)
         if (message.retryCount >= MAX_RETRY_COUNT) {
           await offlineService.markMessageAsFailed(
             message.id,
@@ -533,16 +531,16 @@ class ChatService {
           continue;
         }
 
-        // Exponential backoff check
         if (message.lastRetryAt && message.retryCount > 0) {
-          const delay       = Math.min(
+          const delay = Math.min(
             INITIAL_RETRY_DELAY * Math.pow(2, message.retryCount),
             MAX_RETRY_DELAY
           );
           const lastRetryMs = new Date(message.lastRetryAt).getTime();
 
           if (now - lastRetryMs < delay) {
-            continue; // Not time yet
+            console.log(`[ChatService] Skipping message ${message.id}: waiting for backoff (${Math.round((delay - (now - lastRetryMs))/1000)}s left)`);
+            continue;
           }
         }
 
@@ -811,15 +809,16 @@ class ChatService {
       localFileUri: localUri,
     };
 
-    // Step 1: SQLite first
-    await offlineService.savePendingMessage(targetChatId, queuedMsg);
-
-    // FIX #17: Store idempotency key for offline deduplication
-    const idempotencyKey = `${this.userId}:${targetChatId}:${Date.now()}:${Crypto.randomUUID()}`;
+    // Step 1: SQLite first (with protection)
     try {
+      await offlineService.savePendingMessage(targetChatId, queuedMsg);
+      
+      const idempotencyKey = `${this.userId}:${targetChatId}:${Date.now()}:${Crypto.randomUUID()}`;
       await offlineService.updateMessageIdempotencyKey(messageId, idempotencyKey);
     } catch (e: any) {
-      console.warn('[ChatService] Could not store idempotency key:', e.message);
+      console.warn('[ChatService] sendMessage SQLite error (non-fatal for UI):', e.message);
+      // We still proceed to onNewMessage so the user sees their message optimistically,
+      // though it might not survive an app restart if the save actually failed.
     }
 
     const uiMessage: ChatMessage = {

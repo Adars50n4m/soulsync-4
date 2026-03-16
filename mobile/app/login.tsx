@@ -479,7 +479,11 @@ export default function LoginScreen() {
         {/* ── Form Card ─────────────────────────────────────────── */}
         <View style={s.card}>
           {/* Blur backdrop */}
-          <GlassView intensity={Platform.OS === 'ios' ? 80 : 60} tint="dark" style={StyleSheet.absoluteFill} />
+          <GlassView 
+            intensity={80} 
+            tint="dark" 
+            style={StyleSheet.absoluteFill} 
+          />
 
           <Text style={s.title}>
             {isForgotPassword 

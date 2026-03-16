@@ -1,12 +1,14 @@
 import React from 'react';
 import { View, StyleSheet, ViewProps, StyleProp, ViewStyle, Platform } from 'react-native';
 import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 
 export interface GlassViewProps extends ViewProps {
     intensity?: number;
     tint?: 'light' | 'dark' | 'default';
     style?: StyleProp<ViewStyle>;
     children?: React.ReactNode;
+    experimentalBlurMethod?: 'none' | 'dimezisBlurView';
 }
 
 const IS_ANDROID = Platform.OS === 'android';
@@ -16,34 +18,46 @@ export const GlassView = ({
     tint = 'dark',
     style,
     children,
+    experimentalBlurMethod,
     ...rest
 }: GlassViewProps) => {
-    // Android: Use a semi-transparent View instead of BlurView to prevent "Black Screen" issues.
-    // The experimental blur method is unstable on many Android emulators and devices.
-    if (IS_ANDROID) {
-        return (
-            <View
-                style={[
-                    styles.container, 
-                    { backgroundColor: tint === 'dark' ? 'rgba(12, 12, 14, 0.88)' : 'rgba(255, 255, 255, 0.85)' },
-                    style
-                ]}
-                {...rest}
-            >
-                {children}
-            </View>
-        );
-    }
+    const isDark = tint === 'dark' || tint === 'default';
+    
+    // Safety Fallback Layer Styles
+    // We always render a background and gradient on Android behind the blur.
+    // This provides "safety" so if the blur fails (black screen), 
+    // the user still sees the content on a nice background.
+    const baseColor = isDark ? 'rgba(25, 25, 30, 0.75)' : 'rgba(255, 255, 255, 0.75)';
+    const gradColors = isDark 
+        ? ['rgba(40, 40, 50, 0.45)', 'rgba(20, 20, 30, 0.65)'] 
+        : ['rgba(255, 255, 255, 0.5)', 'rgba(240, 240, 250, 0.3)'];
 
     return (
-        <BlurView
-            intensity={intensity}
-            tint={tint}
-            style={[styles.container, style]}
-            {...rest}
-        >
+        <View style={[styles.container, style]}>
+            {IS_ANDROID && (
+                <>
+                    {/* Level 1: Static background */}
+                    <View style={[StyleSheet.absoluteFill, { backgroundColor: baseColor }]} />
+                    {/* Level 2: Aesthetic Gradient */}
+                    <LinearGradient
+                        colors={gradColors as any}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={StyleSheet.absoluteFill}
+                    />
+                </>
+            )}
+            
+            {/* Level 3: Native Blur (Highest visual quality) */}
+            <BlurView
+                intensity={intensity}
+                tint={tint}
+                style={StyleSheet.absoluteFill}
+                experimentalBlurMethod={experimentalBlurMethod || (IS_ANDROID ? 'none' : undefined)}
+                {...rest}
+            />
             {children}
-        </BlurView>
+        </View>
     );
 };
 

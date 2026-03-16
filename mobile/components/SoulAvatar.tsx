@@ -1,47 +1,90 @@
-import React from 'react';
-import Animated from 'react-native-reanimated';
-import { View, StyleSheet, ViewStyle, ImageStyle, Platform } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import Animated, { SharedTransition, withSpring } from 'react-native-reanimated';
+import { View, StyleSheet, Platform } from 'react-native';
+import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
+
 
 interface SoulAvatarProps {
   uri?: string;
   size?: number;
   style?: any;
   iconSize?: number;
+  avatarType?: 'default' | 'teddy' | 'custom';
+  teddyVariant?: 'boy' | 'girl';
   sharedTransitionTag?: string;
   sharedTransitionStyle?: any;
 }
 
 /**
- * SoulAvatar Component
- * Shows user profile image or a "WhatsApp-style" anonymous placeholder if no URI is provided.
+ * SoulAvatar Component - WhatsApp Style
+ * Shows user photo if available, otherwise shows default person icon
  */
-export const SoulAvatar: React.FC<SoulAvatarProps> = ({ 
-  uri, size = 50, style, iconSize, 
-  sharedTransitionTag, sharedTransitionStyle 
+export const SoulAvatar: React.FC<SoulAvatarProps> = ({
+  uri,
+  size = 50,
+  style,
+  iconSize,
+  avatarType = 'default',
+  teddyVariant,
+  sharedTransitionTag,
+  sharedTransitionStyle
 }) => {
-  const sharedProps = Platform.OS === 'ios' && sharedTransitionTag
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    setError(false);
+  }, [uri]);
+
+  const hasAvatar = !!uri && uri !== '' && !error;
+  const imageStyle = [{ width: size, height: size, borderRadius: size / 2 }, style];
+
+  const sharedProps = sharedTransitionTag
     ? {
         sharedTransitionTag,
         sharedTransitionStyle,
       }
     : {};
 
-  const hasAvatar = !!uri && uri !== '' && 
-    !uri.includes('placeholder') && 
-    !uri.includes('pravatar.cc') &&
-    !uri.includes('avatar.iran.liara.run');
-
-  if (hasAvatar) {
+  // Show teddy placeholder if type is teddy but no uri (or fallback)
+  if (avatarType === 'teddy' && !hasAvatar) {
     return (
-      <Animated.Image
+      <View style={[imageStyle, { backgroundColor: '#FFD700', justifyContent: 'center', alignItems: 'center' }]}>
+        <MaterialIcons 
+            name={teddyVariant === 'girl' ? 'face' : 'face'} 
+            size={size * 0.8} 
+            color="#000" 
+        />
+      </View>
+    );
+  }
+
+  // Show user photo if available
+  if (hasAvatar) {
+    if (sharedTransitionTag) {
+      return (
+        <Animated.Image
+          source={{ uri }}
+          {...sharedProps}
+          style={imageStyle}
+          resizeMode="cover"
+          onError={() => setError(true)}
+        />
+      );
+    }
+
+    return (
+      <Image
         source={{ uri }}
-        {...sharedProps}
-        style={[{ width: size, height: size, borderRadius: size / 2 }, style]}
+        style={imageStyle}
+        contentFit="cover"
+        transition={200}
+        onError={() => setError(true)}
       />
     );
   }
 
+  // Default: WhatsApp-style person icon placeholder
   return (
     <View
       style={[
@@ -49,7 +92,7 @@ export const SoulAvatar: React.FC<SoulAvatarProps> = ({
           width: size,
           height: size,
           borderRadius: size / 2,
-          backgroundColor: '#1C1C1E', // Dark grey background like modern WhatsApp dark mode
+          backgroundColor: '#1C1C1E',
           justifyContent: 'center',
           alignItems: 'center',
           borderWidth: 1,
@@ -58,10 +101,10 @@ export const SoulAvatar: React.FC<SoulAvatarProps> = ({
         style,
       ]}
     >
-      <MaterialIcons 
-        name="person" 
-        size={iconSize || size * 0.75} 
-        color="rgba(255,255,255,0.4)" 
+      <MaterialIcons
+        name="person"
+        size={iconSize || size * 0.75}
+        color="rgba(255,255,255,0.4)"
       />
     </View>
   );

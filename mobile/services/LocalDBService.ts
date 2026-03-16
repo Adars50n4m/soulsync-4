@@ -87,68 +87,6 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
       // FIX #19: Setup periodic WAL checkpoint to prevent data loss on crash
       setupWalCheckpoint(db);
 
-      // Idempotent table creation
-      await db.execAsync(`
-        CREATE TABLE IF NOT EXISTS messages (
-          id            TEXT PRIMARY KEY NOT NULL,
-          chat_id       TEXT NOT NULL,
-          sender        TEXT NOT NULL,
-          receiver      TEXT NOT NULL,
-          text          TEXT,
-          media_type    TEXT,
-          media_url     TEXT,
-          media_caption TEXT,
-          media_thumbnail TEXT,
-          media_name    TEXT,
-          reply_to_id   TEXT,
-          timestamp     TEXT NOT NULL,
-          status        TEXT DEFAULT 'pending',
-          retry_count   INTEGER DEFAULT 0,
-          local_file_uri TEXT,
-          is_unsent     INTEGER DEFAULT 0,
-          reaction      TEXT
-        );
-        CREATE TABLE IF NOT EXISTS contacts (
-          id            TEXT PRIMARY KEY NOT NULL,
-          name          TEXT NOT NULL,
-          avatar        TEXT,
-          bio           TEXT,
-          status        TEXT DEFAULT 'offline',
-          last_message  TEXT,
-          unread_count  INTEGER DEFAULT 0,
-          about         TEXT,
-          last_seen     TEXT,
-          last_synced_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS statuses (
-          id            TEXT PRIMARY KEY NOT NULL,
-          user_id       TEXT NOT NULL,
-          type          TEXT NOT NULL,
-          r2_key        TEXT,
-          local_path    TEXT,
-          text_content  TEXT,
-          created_at    INTEGER NOT NULL,
-          expires_at    INTEGER NOT NULL,
-          is_mine       INTEGER DEFAULT 0,
-          is_seen       INTEGER DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS app_sync_queue (
-          id            INTEGER PRIMARY KEY AUTOINCREMENT,
-          action        TEXT NOT NULL,
-          payload       TEXT NOT NULL,
-          created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
-          retry_count   INTEGER DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS media_downloads (
-          message_id    TEXT PRIMARY KEY NOT NULL,
-          remote_url    TEXT NOT NULL,
-          local_uri     TEXT NOT NULL,
-          file_size     INTEGER,
-          downloaded_at TEXT DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY(message_id) REFERENCES messages(id) ON UPDATE CASCADE ON DELETE CASCADE
-        );
-      `);
-
       _db = db;
       return db;
     } catch (error) {
@@ -485,12 +423,40 @@ class OfflineService {
   async getContacts(): Promise<any[]> {
     const db = await getDb();
     const rows = await db.getAllAsync(`SELECT * FROM contacts ORDER BY name ASC;`);
-    return (rows as any[]).map(r => ({ id: r.id, name: r.name, avatar: r.avatar ?? '', status: r.status ?? 'offline', lastMessage: r.last_message ?? '', unreadCount: r.unread_count ?? 0, about: r.about ?? r.bio ?? '', lastSeen: r.last_seen ?? undefined }));
+    return (rows as any[]).map(r => ({ 
+        id: r.id, 
+        name: r.name, 
+        avatar: r.avatar ?? '', 
+        avatarType: r.avatar_type ?? 'default',
+        teddyVariant: r.teddy_variant ?? undefined,
+        status: r.status ?? 'offline', 
+        lastMessage: r.last_message ?? '', 
+        unreadCount: r.unread_count ?? 0, 
+        about: r.about ?? r.bio ?? '', 
+        lastSeen: r.last_seen ?? undefined 
+    }));
   }
 
   async saveContact(contact: any): Promise<void> {
     const db = await getDb();
-    await db.runAsync(`INSERT OR REPLACE INTO contacts (id, name, avatar, status, last_message, unread_count, about, last_seen, last_synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`, [contact.id, contact.name, contact.avatar ?? null, contact.status ?? 'offline', contact.lastMessage ?? null, contact.unreadCount ?? 0, contact.about ?? null, contact.lastSeen ?? null, new Date().toISOString()]);
+    await db.runAsync(
+        `INSERT OR REPLACE INTO contacts 
+            (id, name, avatar, avatar_type, teddy_variant, status, last_message, unread_count, about, last_seen, last_synced_at) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`, 
+        [
+            contact.id, 
+            contact.name, 
+            contact.avatar ?? null, 
+            contact.avatarType ?? 'default',
+            contact.teddyVariant ?? null,
+            contact.status ?? 'offline', 
+            contact.lastMessage ?? null, 
+            contact.unreadCount ?? 0, 
+            contact.about ?? null, 
+            contact.lastSeen ?? null, 
+            new Date().toISOString()
+        ]
+    );
   }
 
   async getStatuses(): Promise<any[]> {
@@ -595,12 +561,38 @@ class OfflineService {
    */
   async migrateLegacyIds(mapping: Record<string, string>): Promise<void> {
     const db = await getDb();
-    console.log('[SQLite] Starting legacy ID migration...');
+    const legacyIds = Object.keys(mapping);
+    if (legacyIds.length === 0) return;
+
+    // Check if any legacy IDs actually exist in the DB before locking everything
+    try {
+      const placeholders = legacyIds.map(() => '?').join(',');
+      const countResult = await db.getFirstAsync(
+        `SELECT COUNT(*) as cnt FROM messages WHERE chat_id IN (${placeholders}) OR receiver IN (${placeholders})`,
+        [...legacyIds, ...legacyIds]
+      );
+      
+      const contactCountResult = await db.getFirstAsync(
+        `SELECT COUNT(*) as cnt FROM contacts WHERE id IN (${placeholders})`,
+        legacyIds
+      );
+
+      const totalPending = ((countResult as any)?.cnt || 0) + ((contactCountResult as any)?.cnt || 0);
+      if (totalPending === 0) {
+        console.log('[SQLite] No legacy IDs found to migrate.');
+        return;
+      }
+      
+      console.log(`[SQLite] Found ${totalPending} legacy records. Starting migration...`);
+    } catch (checkErr) {
+      console.warn('[SQLite] Preliminary migration check failed (table might not exist yet):', checkErr);
+      // Fail open and allow the transaction to try/fail normally
+    }
     
     await db.execAsync('BEGIN TRANSACTION;');
     try {
       for (const [legacyId, uuid] of Object.entries(mapping)) {
-        // 1. Update messages table
+        // 1. Update messages table (no unique constraint on chat_id/receiver)
         await db.runAsync(
           'UPDATE messages SET chat_id = ? WHERE chat_id = ?',
           [uuid, legacyId]
@@ -610,17 +602,23 @@ class OfflineService {
           [uuid, legacyId]
         );
         
-        // 2. Update contacts table
-        await db.runAsync(
-          'UPDATE contacts SET id = ? WHERE id = ?',
-          [uuid, legacyId]
-        );
-        
-        // 3. Update statuses table
+        // 2. Update statuses table
         await db.runAsync(
           'UPDATE statuses SET user_id = ? WHERE user_id = ?',
           [uuid, legacyId]
         );
+        
+        // 3. Handle contacts table (Primary Key conflict potential)
+        const existingUuid = await db.getFirstAsync('SELECT id FROM contacts WHERE id = ?', [uuid]);
+        if (existingUuid) {
+          console.log(`[SQLite] UUID ${uuid} already exists in contacts. Deleting legacy ${legacyId}.`);
+          await db.runAsync('DELETE FROM contacts WHERE id = ?', [legacyId]);
+        } else {
+          await db.runAsync(
+            'UPDATE contacts SET id = ? WHERE id = ?',
+            [uuid, legacyId]
+          );
+        }
         
         console.log(`[SQLite] Migrated ${legacyId} -> ${uuid}`);
       }
@@ -629,6 +627,30 @@ class OfflineService {
     } catch (e) {
       await db.execAsync('ROLLBACK;');
       console.error('[SQLite] Migration failed:', e);
+      throw e;
+    }
+  }
+
+  /**
+   * Clears all user-specific data from the local database.
+   * Used during logout to prevent data pollution between different accounts.
+   */
+  async clearDatabase(): Promise<void> {
+    const db = await getDb();
+    console.log('[SQLite] Clearing user database...');
+    await db.execAsync('BEGIN TRANSACTION;');
+    try {
+      await db.runAsync('DELETE FROM messages;');
+      await db.runAsync('DELETE FROM contacts;');
+      await db.runAsync('DELETE FROM chats;');
+      await db.runAsync('DELETE FROM statuses;');
+      await db.runAsync('DELETE FROM pending_sync_ops;');
+      await db.runAsync('DELETE FROM media_downloads;');
+      await db.execAsync('COMMIT;');
+      console.log('[SQLite] Database cleared successfully.');
+    } catch (e) {
+      await db.execAsync('ROLLBACK;');
+      console.error('[SQLite] Failed to clear database:', e);
       throw e;
     }
   }

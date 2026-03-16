@@ -47,6 +47,8 @@ export interface Contact {
     id: string;
     name: string;
     avatar: string;
+    avatarType?: 'default' | 'teddy' | 'custom';
+    teddyVariant?: 'boy' | 'girl';
     status: 'online' | 'offline' | 'away' | 'busy';
     lastSeen?: string;
     about?: string;

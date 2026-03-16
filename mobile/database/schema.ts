@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ⬆️  Bump this number every time you change the schema.
-const DB_TARGET_VERSION = 9;
+const DB_TARGET_VERSION = 10;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper — read the stored schema version (returns 0 if brand-new install)
@@ -332,9 +332,84 @@ async function migration_v9(db: any): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION v10 — Add avatar_type and teddy_variant to contacts
+// ─────────────────────────────────────────────────────────────────────────────
+async function migration_v10(db: any): Promise<void> {
+  const safeAlter = async (sql: string) => {
+    try { await db.execAsync(sql); } catch (e: any) {
+        const msg = e?.message || String(e);
+        if (!msg.includes('duplicate column name') && !msg.includes('already exists')) {
+            console.warn(`[SQLite] Migration helper WARN v10:`, msg);
+        }
+    }
+  };
+  await safeAlter(`ALTER TABLE contacts ADD COLUMN avatar_type TEXT DEFAULT 'default';`);
+  await safeAlter(`ALTER TABLE contacts ADD COLUMN teddy_variant TEXT;`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN EXPORT — call this once in your app's DB initialisation
 // ─────────────────────────────────────────────────────────────────────────────
 export const MIGRATE_DB = async (db: any): Promise<void> => {
+  // --- REPAIR BLOCK (Self-Healing Schema) ---
+  // We run this BEFORE the version check to ensure that even if a migration 
+  // failed in the past, or a table was created partially, we patch it up.
+  console.log('[SQLite] Running schema repair check...');
+  const repairSteps = [
+      // Ensure chats table and columns exist
+      `CREATE TABLE IF NOT EXISTS chats (
+        id TEXT PRIMARY KEY NOT NULL,
+        last_message_preview TEXT,
+        last_message_at TEXT,
+        unread_count INTEGER DEFAULT 0,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );`,
+      `ALTER TABLE chats ADD COLUMN last_message_preview TEXT;`,
+      `ALTER TABLE chats ADD COLUMN last_message_at TEXT;`,
+      `ALTER TABLE chats ADD COLUMN unread_count INTEGER DEFAULT 0;`,
+      `ALTER TABLE chats ADD COLUMN updated_at TEXT DEFAULT CURRENT_TIMESTAMP;`,
+      
+      // Ensure messages columns exist
+      `ALTER TABLE messages ADD COLUMN last_retry_at TEXT;`,
+      `ALTER TABLE messages ADD COLUMN error_message TEXT;`,
+      `ALTER TABLE messages ADD COLUMN reaction TEXT;`,
+      `ALTER TABLE messages ADD COLUMN media_thumbnail TEXT;`,
+      `ALTER TABLE messages ADD COLUMN delivered_at TEXT;`,
+      `ALTER TABLE messages ADD COLUMN read_at TEXT;`,
+      `ALTER TABLE messages ADD COLUMN idempotency_key TEXT;`,
+      
+      // Ensure contacts columns exist
+      `ALTER TABLE contacts ADD COLUMN about TEXT DEFAULT '';`,
+      `ALTER TABLE contacts ADD COLUMN last_seen TEXT;`,
+      
+      // Ensure sync queue exists
+      `CREATE TABLE IF NOT EXISTS pending_sync_ops (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        op_type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        retry_count INTEGER DEFAULT 0
+      );`,
+      // Ensure contacts columns exist
+      `ALTER TABLE contacts ADD COLUMN avatar_type TEXT DEFAULT 'default';`,
+      `ALTER TABLE contacts ADD COLUMN teddy_variant TEXT;`
+  ];
+
+  for (const sql of repairSteps) {
+      try {
+          await db.execAsync(sql);
+          console.log(`[SQLite] Repair: Executed "${sql.substring(0, 40)}..."`);
+      } catch (e: any) {
+          const msg = e?.message || String(e);
+          // 'duplicate column name' or 'already exists' is expected and means the column/table is there.
+          if (!msg.includes('duplicate column name') && !msg.includes('already exists')) {
+              console.warn(`[SQLite] Repair check warning for "${sql}":`, msg);
+          }
+      }
+  }
+
   let currentVersion = await getCurrentVersion(db);
   console.log(
     `[SQLite] DB version: ${currentVersion}, target: ${DB_TARGET_VERSION}`
@@ -345,100 +420,36 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
     return;
   }
 
-  // Run only the migrations that haven't been applied yet
+  // ── RUN MIGRATIONS ────────────────────────────────────────────────────────
+  // We use a while loop to step through every missing version one by one.
+  // This is the safest way to upgrade a database.
   while (currentVersion < DB_TARGET_VERSION) {
     const nextVersion = currentVersion + 1;
-    console.log(`[SQLite] Running migration v${nextVersion}...`);
+    console.log(`[SQLite] Upgrading schema: v${currentVersion} ➔ v${nextVersion}...`);
 
     try {
       switch (nextVersion) {
-        case 1:
-          await migration_v1(db);
-          break;
-        case 2:
-          await migration_v2(db);
-          break;
-        case 3:
-          await migration_v3(db);
-          break;
-        case 4:
-          await migration_v4(db);
-          break;
-        case 5:
-          await migration_v5(db);
-          break;
-        case 6:
-          await migration_v6(db);
-          break;
-        case 7:
-          await migration_v7(db);
-          break;
-        case 8:
-          await migration_v8(db);
-          break;
-        case 9:
-          await migration_v9(db);
-          break;
-        // ── Add future cases here ──────────────────────────────────────────
-        // case 3:
-        //   await migration_v3(db);
-        //   break;
+        case 1: await migration_v1(db); break;
+        case 2: await migration_v2(db); break;
+        case 3: await migration_v3(db); break;
+        case 4: await migration_v4(db); break;
+        case 5: await migration_v5(db); break;
+        case 6: await migration_v6(db); break;
+        case 7: await migration_v7(db); break;
+        case 8: await migration_v8(db); break;
+        case 9: await migration_v9(db); break;
+        case 10: await migration_v10(db); break;
         default:
-          throw new Error(`[SQLite] No migration defined for v${nextVersion}`);
+          console.error(`[SQLite] No migration logic for v${nextVersion}!`);
       }
 
-      // Only bump the stored version after a successful migration
       await setVersion(db, nextVersion);
       currentVersion = nextVersion;
-      console.log(`[SQLite] Migration v${nextVersion} complete.`);
-    } catch (error) {
-      console.error(`[SQLite] Migration v${nextVersion} FAILED:`, error);
-      // Stop here — do NOT mark this version as applied.
-      // The app will retry the same migration on next launch.
-      throw error;
+      console.log(`[SQLite] Successfully migrated to v${currentVersion}`);
+    } catch (e) {
+      console.error(`[SQLite] FATAL: Migration to v${nextVersion} failed:`, e);
+      throw e; // Stop app boot if migration fails
     }
-  }
-
-  // --- REPAIR BLOCK (Phase 3 Hardening) ---
-  // If migrations v5 or v6 failed silently or were skipped, ensure columns exist.
-  console.log('[SQLite] Running schema repair check...');
-  const repairSteps = [
-      `ALTER TABLE contacts ADD COLUMN about TEXT DEFAULT '';`,
-      `ALTER TABLE contacts ADD COLUMN last_seen TEXT;`,
-      `ALTER TABLE messages ADD COLUMN reaction TEXT;`,
-      `ALTER TABLE messages ADD COLUMN media_thumbnail TEXT;`,
-      `ALTER TABLE messages ADD COLUMN delivered_at TEXT;`,
-      `ALTER TABLE messages ADD COLUMN read_at TEXT;`,
-      `ALTER TABLE messages ADD COLUMN idempotency_key TEXT;`,
-      `CREATE TABLE IF NOT EXISTS chats (
-        id TEXT PRIMARY KEY NOT NULL,
-        last_message_preview TEXT,
-        last_message_at TEXT,
-        unread_count INTEGER DEFAULT 0,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-      );`,
-      `CREATE TABLE IF NOT EXISTS pending_sync_ops (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        entity_type TEXT NOT NULL,
-        entity_id TEXT NOT NULL,
-        op_type TEXT NOT NULL,
-        payload TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        retry_count INTEGER DEFAULT 0
-      );`
-  ];
-  for (const sql of repairSteps) {
-      try {
-          await db.execAsync(sql);
-          console.log(`[SQLite] Repair: Executed "${sql.substring(0, 30)}..."`);
-      } catch (e: any) {
-          const msg = e?.message || String(e);
-          if (msg.includes('duplicate column name') || msg.includes('already exists')) {
-              // This is GOOD - means column is already there.
-          } else {
-              console.warn('[SQLite] Repair check warning:', msg);
-          }
-      }
   }
 
   console.log('[SQLite] All migrations complete. App is ready.');

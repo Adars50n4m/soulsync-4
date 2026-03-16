@@ -16,12 +16,12 @@ export const SoulLogo = ({ className, width = 160, height = 160 }: { className?:
             overflow: 'hidden'
         }}
     >
-        <Image 
-            source={require('../assets/images/logo.png')} 
-            style={{ 
-                width: '100%', 
+        <Image
+            source={require('../assets/images/logo_new.jpg')}
+            style={{
+                width: '100%',
                 height: '100%',
-            }} 
+            }}
             resizeMode="cover"
         />
     </StyledView>

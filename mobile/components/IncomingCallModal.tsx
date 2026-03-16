@@ -26,6 +26,10 @@ export const IncomingCallModal = () => {
     // Simplified visibility: Incoming and not yet accepted
     const isVisible = !!activeCall && activeCall.isIncoming && !activeCall.isAccepted;
 
+    useEffect(() => {
+        console.log(`[IncomingCallModal] Visibility state changed: ${isVisible}. Call type: ${activeCall?.type}, From: ${activeCall?.contactId}`);
+    }, [isVisible, activeCall]);
+
     const contact = contacts.find(c => c.id === activeCall?.contactId);
     const displayAvatar = contact?.avatar || activeCall?.callerAvatar || 'https://via.placeholder.com/150';
     const displayName = contact?.name || activeCall?.callerName || activeCall?.contactId || 'Unknown User';
@@ -92,7 +96,7 @@ export const IncomingCallModal = () => {
     if (!isVisible) return null;
 
     return (
-        <Modal visible={isVisible} transparent animationType="fade">
+        <View style={[StyleSheet.absoluteFill, { zIndex: 9999, elevation: 10 }]}>
             <View style={styles.container}>
                 <GlassView intensity={90} tint="dark" style={styles.blurContainer} >
                     <Image
@@ -123,7 +127,7 @@ export const IncomingCallModal = () => {
                             </Text>
                         </View>
 
-                        {/* Slide to Answer Hint or just buttons */}
+                        {/* Actions */}
                         <View style={styles.actionsContainer}>
                             <View style={styles.actionColumn}>
                                 <Pressable
@@ -148,7 +152,7 @@ export const IncomingCallModal = () => {
                     </View>
                 </GlassView>
             </View>
-        </Modal>
+        </View>
     );
 };
 

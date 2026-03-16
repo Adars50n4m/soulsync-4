@@ -69,7 +69,12 @@ export default function CallScreen() {
     useKeepAwake(); // Prevents screen from sleeping during call
 
     const [callDuration, setCallDuration] = useState(0);
-    const [callState, setCallState] = useState<CallState>('ringing');
+    // FIX: If this is an incoming call that was already accepted (navigated to call screen after accept),
+    // start in 'connecting' state instead of 'ringing'
+    const [callState, setCallState] = useState<CallState>(() => {
+        if (activeCall?.isIncoming && activeCall?.isAccepted) return 'connecting';
+        return 'ringing';
+    });
     const [localStream, setLocalStream] = useState<any>(null);
     const [remoteStream, setRemoteStream] = useState<any>(null);
     // const [isMuted, setIsMuted] = useState(false); // Managed by activeCall
@@ -125,6 +130,16 @@ export default function CallScreen() {
     // Keep a ref to the latest endAppCall to avoid stale closures in listeners
     const endAppCallRef = useRef(endAppCall);
     useEffect(() => { endAppCallRef.current = endAppCall; }, [endAppCall]);
+
+    // FIX: When callee accepts (activeCall.isAccepted becomes true on caller side),
+    // upgrade callState from 'ringing' → 'connecting' so UI shows "Connecting..."
+    // instead of being stuck on "Ringing..." until WebRTC completes.
+    useEffect(() => {
+        if (activeCall?.isAccepted && callState === 'ringing') {
+            console.log('[CallScreen] Call accepted by remote — upgrading callState: ringing → connecting');
+            setCallState('connecting');
+        }
+    }, [activeCall?.isAccepted]);
 
     // Animations
     const pulseScale = useSharedValue(1);
@@ -340,7 +355,24 @@ export default function CallScreen() {
 
                 hasInitiated.current = true;
 
-                // Prepare media and start signaling protocol
+                // 1. Set Audio Mode for VOIP (Communication)
+                // This is CRITICAL for echo cancellation and microphone access on iOS/Android
+                try {
+                    console.log('[CallScreen] Setting audio mode for VOIP...');
+                    await ExpoAudio.setAudioModeAsync({
+                        allowsRecordingIOS: true, // Vital for mic
+                        playsInSilentModeIOS: true,
+                        staysActiveInBackground: true,
+                        interruptionModeIOS: 1, // InterruptionModeIOS.DoNotMix
+                        shouldDuckAndroid: true,
+                        interruptionModeAndroid: 1, // InterruptionModeAndroid.DoNotMix
+                        playThroughEarpieceAndroid: false, // Default to speaker for now
+                    });
+                } catch (audioError) {
+                    console.warn('[CallScreen] Failed to set VOIP audio mode:', audioError);
+                }
+
+                // 2. Prepare media and start signaling protocol
                 await webRTCService.prepareCall(activeCall.type);
 
                 if (activeCall.isIncoming) {
@@ -413,12 +445,18 @@ export default function CallScreen() {
 
     // Timer - only start if call is connected AND accepted
     useEffect(() => {
-        if (callState !== 'connected' || !activeCall?.isAccepted) return;
+        // FIX: Start timer if state is connected OR we actually have a remote stream
+        // This handles cases where state hasn't updated but media is flowing.
+        const isActuallyConnected = callState === 'connected' || (remoteStream && activeCall?.isAccepted);
+        
+        if (!isActuallyConnected) return;
+        
+        console.log('[CallScreen] ⏱️ Starting call timer');
         const interval = setInterval(() => {
             setCallDuration(prev => prev + 1);
         }, 1000);
         return () => clearInterval(interval);
-    }, [callState, activeCall?.isAccepted]);
+    }, [callState, activeCall?.isAccepted, !!remoteStream]);
 
     // Pulse Animation
     useEffect(() => {
@@ -548,23 +586,50 @@ export default function CallScreen() {
                             {showDiagnostics && (
                                 <View style={styles.diagnosticsContainer}>
                                     <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
-                                    <Text style={styles.diagnosticTitle}>Connection Diagnostics</Text>
+                                    <Text style={styles.diagnosticTitle}>Soul Diagnostics</Text>
+                                    
                                     <View style={styles.diagnosticRow}>
-                                        <Text style={styles.diagnosticLabel}>Audio Stream:</Text>
-                                        <Text style={[styles.diagnosticValue, { color: localStream?.getAudioTracks().length ? '#22c55e' : '#ef4444' }]}>
-                                            {localStream?.getAudioTracks().length ? 'ACTIVE' : 'NONE'}
+                                        <Text style={styles.diagnosticLabel}>Connection:</Text>
+                                        <Text style={[styles.diagnosticValue, { color: callState === 'connected' ? '#22c55e' : '#eab308' }]}>
+                                            {callState.toUpperCase()}
                                         </Text>
                                     </View>
+
+                                    <View style={styles.diagnosticRow}>
+                                        <Text style={styles.diagnosticLabel}>ICE State:</Text>
+                                        <Text style={styles.diagnosticValue}>
+                                            {webRTCService?.getIceConnectionState()?.toUpperCase()}
+                                        </Text>
+                                    </View>
+
+                                    <View style={styles.diagnosticRow}>
+                                        <Text style={styles.diagnosticLabel}>Signaling:</Text>
+                                        <Text style={styles.diagnosticValue}>
+                                            {webRTCService?.getSignalingState()?.toUpperCase()}
+                                        </Text>
+                                    </View>
+
+                                    <View style={styles.diagnosticRow}>
+                                        <Text style={styles.diagnosticLabel}>Local Audio:</Text>
+                                        <Text style={[styles.diagnosticValue, { color: localStream?.getAudioTracks().length ? '#22c55e' : '#ef4444' }]}>
+                                            {localStream?.getAudioTracks().length || 0} tracks
+                                        </Text>
+                                    </View>
+
+                                    <View style={styles.diagnosticRow}>
+                                        <Text style={styles.diagnosticLabel}>Remote Audio:</Text>
+                                        <Text style={[styles.diagnosticValue, { color: remoteStream?.getAudioTracks().length ? '#22c55e' : '#ef4444' }]}>
+                                            {remoteStream?.getAudioTracks().length || 0} tracks
+                                        </Text>
+                                    </View>
+
                                     <View style={styles.diagnosticRow}>
                                         <Text style={styles.diagnosticLabel}>Remote Video:</Text>
-                                        <Text style={[styles.diagnosticValue, { color: remoteStream ? '#22c55e' : '#ef4444' }]}>
-                                            {remoteStream ? 'CONNECTED' : 'WAITING...'}
+                                        <Text style={[styles.diagnosticValue, { color: remoteStream?.getVideoTracks().length ? '#22c55e' : '#ef4444' }]}>
+                                            {remoteStream?.getVideoTracks().length || 0} tracks
                                         </Text>
                                     </View>
-                                    <View style={styles.diagnosticRow}>
-                                        <Text style={styles.diagnosticLabel}>Call State:</Text>
-                                        <Text style={styles.diagnosticValue}>{callState.toUpperCase()}</Text>
-                                    </View>
+
                                     <Pressable onPress={() => setShowDiagnostics(false)} style={styles.closeDiagnostics}>
                                         <Text style={{color: '#fff', fontWeight: 'bold'}}>CLOSE</Text>
                                     </Pressable>

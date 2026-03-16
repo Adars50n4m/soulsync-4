@@ -81,8 +81,9 @@ class StatusService {
    * Logic: note_timestamp is within last 24 hours.
    */
   async fetchActiveNotes(userId: string): Promise<any[]> {
+    let friendIds: string[] = [];
     try {
-      const friendIds = await this.getMutualFriendIds(userId);
+      friendIds = await this.getMutualFriendIds(userId);
       if (friendIds.length === 0) return [];
 
       const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -96,7 +97,15 @@ class StatusService {
       if (error) throw error;
 
       return data || [];
-    } catch (error) {
+    } catch (error: any) {
+      if (error.code === '42703') {
+        console.warn('[StatusService] Profiles table missing note columns. Fetching basic profile data.');
+        const { data } = await supabase
+          .from('profiles')
+          .select('id, name, avatar_url')
+          .in('id', friendIds);
+        return data || [];
+      }
       console.error('[StatusService] Error fetching notes:', error);
       return [];
     }
