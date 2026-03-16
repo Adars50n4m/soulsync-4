@@ -73,21 +73,33 @@ export default function CallScreen() {
     const [remoteStream, setRemoteStream] = useState<any>(null);
     const webrtcListenerRef = useRef<any>(null);
 
-    // FIX: If this is an incoming call that was already accepted, start in 'connecting'
     const [callState, setCallState] = useState<CallState>(() => {
         if (activeCall?.isIncoming && activeCall?.isAccepted) return 'connecting';
         return 'ringing';
     });
 
-    const hasRemoteTracks = remoteStream && (remoteStream.getAudioTracks().length > 0 || remoteStream.getVideoTracks().length > 0);
+    const [remoteStreamUpdate, setRemoteStreamUpdate] = useState(0);
+
+    const hasRemoteTracks = remoteStream && (
+        (remoteStream.getAudioTracks && remoteStream.getAudioTracks().length > 0) || 
+        (remoteStream.getVideoTracks && remoteStream.getVideoTracks().length > 0) ||
+        (remoteStream._tracks && remoteStream._tracks.length > 0)
+    );
+    
+    // isActuallyConnected: Either the protocol says 'connected' OR we have media flowing
+    const isActuallyConnected = callState === 'connected' || (hasRemoteTracks && activeCall?.isAccepted);
+    
     const [wasConnected, setWasConnected] = useState(false);
     
-    // Sticky connection state: once we have tracks, we are connected for the duration of the UI
-    if (!wasConnected && (callState === 'connected' || (hasRemoteTracks && activeCall?.isAccepted))) {
-        setWasConnected(true);
-    }
+    // Sticky connection state: once we are connected, stay connected in the UI
+    useEffect(() => {
+        if (isActuallyConnected && !wasConnected) {
+            console.log('[CallScreen] 🎯 Connection confirmed (Sticky)');
+            setWasConnected(true);
+        }
+    }, [isActuallyConnected]);
 
-    const isActuallyConnected = wasConnected || callState === 'connected' || (hasRemoteTracks && activeCall?.isAccepted);
+    const uiConnected = wasConnected || isActuallyConnected;
     // const [isMuted, setIsMuted] = useState(false); // Managed by activeCall
     const [isSpeaker, setIsSpeaker] = useState(false);
 
@@ -336,8 +348,9 @@ export default function CallScreen() {
                         setLocalStream(stream);
                     },
                     onRemoteStream: (stream: any) => {
-                        console.log('Got remote stream');
+                        console.log('[CallScreen] Got remote stream, updating tracks');
                         setRemoteStream(stream);
+                        setRemoteStreamUpdate(prev => prev + 1);
                     },
                     onError: (error: string) => {
                         console.error('WebRTC error:', error);
@@ -464,20 +477,14 @@ export default function CallScreen() {
 
     // Timer - only start if call is connected AND accepted
     useEffect(() => {
-        // FIX: Start timer if state is connected OR we actually have a remote stream
-        // This handles cases where state hasn't updated but media is flowing.
-        // FIX: Start timer if state is connected OR we actually have a remote stream with tracks
-        const hasRemoteTracks = remoteStream && (remoteStream.getAudioTracks().length > 0 || remoteStream.getVideoTracks().length > 0);
-        const isActuallyConnected = callState === 'connected' || (hasRemoteTracks && activeCall?.isAccepted);
-        
-        if (!isActuallyConnected) return;
+        if (!uiConnected) return;
         
         console.log('[CallScreen] ⏱️ Starting call timer');
         const interval = setInterval(() => {
             setCallDuration(prev => prev + 1);
         }, 1000);
         return () => clearInterval(interval);
-    }, [callState, activeCall?.isAccepted, !!remoteStream]);
+    }, [uiConnected]);
 
     // Pulse Animation
     useEffect(() => {
@@ -592,7 +599,7 @@ export default function CallScreen() {
                         )}
                         
                         {/* Connecting Overlay for Video */}
-                        {(callState !== 'connected' && isVideo && activeCall.isAccepted && (!remoteStream || remoteStream.getVideoTracks().length === 0)) && (
+                        {(!uiConnected && isVideo && activeCall.isAccepted) && (
                             <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 10 }]}>
                                 <ActivityIndicator size="small" color="#fff" style={{ marginBottom: 12 }} />
                                 <Text style={{ color: 'white', fontSize: 16, fontWeight: '500' }}>Connecting Soul Video...</Text>
@@ -686,7 +693,7 @@ export default function CallScreen() {
                                             delayLongPress={2000}
                                         >
                                             <Text style={styles.callStatus}>
-                                                {isActuallyConnected ? formatDuration(callDuration) : 
+                                                {uiConnected ? formatDuration(callDuration) : 
                                                 callState === 'ended' ? 'Ending...' :
                                                 (activeCall.isIncoming && !activeCall.isAccepted) ? 'Incoming Soul Call...' : 
                                                 (callState === 'ringing' && !activeCall.isIncoming) ? 'Ringing...' : 
