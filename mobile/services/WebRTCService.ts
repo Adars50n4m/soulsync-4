@@ -607,7 +607,7 @@ class WebRTCService {
                 if (this.callType === 'video') {
                     this.peerConnection.addTransceiver('video', { direction: 'sendrecv' });
                 }
-                console.log('[WebRTCService] Transceivers added successfully');
+                console.log('[WebRTCService] Transceivers (sendrecv) added successfully');
             }
         } catch (e) {
             console.log('[WebRTCService] Transceivers not supported, falling back to addTrack');
@@ -832,6 +832,7 @@ class WebRTCService {
         this.broadcast('onStateChange', state);
         if (state === 'connected') {
             // Also broadcast streams again to be absolutely sure
+            console.log('[WebRTCService] 📡 Connected! Broadcasting tracks. Local:', this.localStream?.getTracks().length, 'Remote:', this.remoteStream?.getTracks().length);
             this.broadcast('onLocalStream', this.localStream);
             this.broadcast('onRemoteStream', this.remoteStream);
         }

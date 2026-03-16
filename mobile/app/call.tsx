@@ -98,18 +98,30 @@ export default function CallScreen() {
         }
     }, [isActuallyConnected]);
 
-    // Safety Sync: Periodically poll service state to ensure React didn't miss a beat
+    // Safety Sync: Periodically poll service state and streams to ensure React didn't miss a beat
     useEffect(() => {
         const interval = setInterval(() => {
-            const svcState = webRTCService?.getState();
+            if (!webRTCService) return;
+            
+            const svcState = webRTCService.getState();
+            const svcRemote = webRTCService.getRemoteStream();
+            
+            // Sync state
             if (svcState === 'connected' && !wasConnected) {
                 console.log('[CallScreen] 🔄 Safety Sync: Forcing connected state');
                 setWasConnected(true);
                 setCallState('connected');
             }
+            
+            // Sync remote stream (Critical for video visibility)
+            if (svcRemote && !remoteStream) {
+                console.log('[CallScreen] 🔄 Safety Sync: Recovered missing remote stream');
+                setRemoteStream(svcRemote);
+                setRemoteStreamUpdate(prev => prev + 1);
+            }
         }, 2000);
         return () => clearInterval(interval);
-    }, [wasConnected]);
+    }, [wasConnected, remoteStream]);
 
     const uiConnected = wasConnected || isActuallyConnected || (!!remoteStream && activeCall?.isAccepted);
     // const [isMuted, setIsMuted] = useState(false); // Managed by activeCall
@@ -594,30 +606,31 @@ export default function CallScreen() {
                 <Animated.View style={[styles.container, { backgroundColor: '#000', width, height }, screenStyle]}>
                     <StatusBar hidden />
 
-                    {/* 1. Background Layer (Remote Video or Blurred Avatar) */}
-                    <View style={[StyleSheet.absoluteFill, { backgroundColor: '#111' }]}>
-                        {/* Blurred avatar background — only if avatar URI exists */}
-                        {!!contact.avatar && (
-                            <Image
-                                source={{ uri: contact.avatar }}
-                                style={[styles.backgroundImage, { width, height }]}
-                                blurRadius={isVideo ? 60 : 50}
-                            />
-                        )}
-                        <View style={styles.overlay} />
-
-                        {/* Remote Video Stream */}
-                        {isVideo && remoteStream && activeCall.isAccepted && !activeCall.remoteVideoOff && (
-                            <RemoteVideoComponent
-                                key={`remote-video-${remoteStreamUpdate}`}
-                                ref={rtcPipRef}
-                                streamURL={typeof remoteStream.toURL === 'function' ? remoteStream.toURL() : remoteStream}
-                                style={[styles.remoteVideo, { zIndex: 1 }]}
-                                objectFit="cover"
-                                mirror={false}
-                                zOrder={0}
-                            />
-                        )}
+                        {/* 1. Background Media Layer */}
+                        <View style={[StyleSheet.absoluteFill, { backgroundColor: '#111' }]}>
+                            {/* PRIORITY A: Remote Video Stream */}
+                            {(isVideo && remoteStream && activeCall.isAccepted && !activeCall.remoteVideoOff) ? (
+                                <RemoteVideoComponent
+                                    key={`remote-video-v${remoteStreamUpdate}`}
+                                    ref={rtcPipRef}
+                                    streamURL={typeof remoteStream.toURL === 'function' ? remoteStream.toURL() : remoteStream}
+                                    style={[StyleSheet.absoluteFill, { zIndex: 0 }]}
+                                    objectFit="cover"
+                                    mirror={false}
+                                    zOrder={0}
+                                />
+                            ) : (
+                                // PRIORITY B: Blurred avatar background (Fallback only)
+                                !!contact.avatar && (
+                                    <Image
+                                        source={{ uri: contact.avatar }}
+                                        style={[styles.backgroundImage, { width, height }]}
+                                        blurRadius={isVideo ? 60 : 50}
+                                    />
+                                )
+                            )}
+                            <View style={[styles.overlay, { zIndex: 1 }]} />
+                        </View>
 
                         {/* Video Toggled Off Overlay (Remote Side) */}
                         {isVideo && activeCall.remoteVideoOff && (
@@ -630,7 +643,6 @@ export default function CallScreen() {
                         )}
                         
                         {/* 🚫 Connecting Overlay for Video Removed per User Request 🚫 */}
-                    </View>
 
                     {/* 2. Main Content (Visible ONLY when NOT in PiP) */}
                     {!isInPipMode ? (
