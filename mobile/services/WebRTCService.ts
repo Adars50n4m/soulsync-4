@@ -505,11 +505,25 @@ class WebRTCService {
                 return res;
             });
             
+            // INCREASE TIMEOUT: 5s is too short for some hardware/permissions prompts
             const timeoutPromise = new Promise<MediaStream>((_, reject) => {
-                timer = setTimeout(() => reject(new Error('getUserMedia timed out after 5 seconds')), 5000);
+                timer = setTimeout(() => reject(new Error('getUserMedia timed out after 15 seconds')), 15000);
             });
 
             this.localStream = await Promise.race([mediaPromise, timeoutPromise]);
+            
+            // If we already have a PeerConnection, add these tracks NOW
+            if (this.peerConnection && this.localStream) {
+                console.log('[WebRTCService] Adding local tracks to existing PeerConnection');
+                this.localStream.getTracks().forEach((track: any) => {
+                    try {
+                        this.peerConnection!.addTrack(track, this.localStream!);
+                    } catch (e) {
+                        console.warn('[WebRTCService] Failed to add track to existing PC:', e);
+                    }
+                });
+            }
+
             this.broadcast('onLocalStream', this.localStream);
             console.log('[WebRTCService] Local stream obtained successfully');
 
@@ -537,10 +551,18 @@ class WebRTCService {
                         return res;
                     });
                     const audioTimeout = new Promise<MediaStream>((_, reject) => {
-                        audioTimer = setTimeout(() => reject(new Error('Audio-only fallback also timed out')), 5000);
+                        audioTimer = setTimeout(() => reject(new Error('Audio-only fallback also timed out')), 10000);
                     });
                     
                     this.localStream = await Promise.race([audioOnlyPromise, audioTimeout]);
+                    
+                    // If we already have a PeerConnection, add these tracks NOW
+                    if (this.peerConnection && this.localStream) {
+                        this.localStream.getTracks().forEach((track: any) => {
+                            try { this.peerConnection!.addTrack(track, this.localStream!); } catch (e) {}
+                        });
+                    }
+
                     this.broadcast('onLocalStream', this.localStream);
                     return;
                 } catch (e: any) {

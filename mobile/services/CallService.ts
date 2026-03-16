@@ -54,9 +54,6 @@ class CallService {
     private reconnectAttempts: number = 0;
     private reconnectTimer: NodeJS.Timeout | null = null;
     private personalChannelSubscribed: boolean = false;
-    // DB-based signaling (HTTP fallback — works even when WebSocket is blocked)
-    private signalPollTimer: NodeJS.Timeout | null = null;
-    private lastSignalTimestamp: string = new Date(Date.now() - 60000).toISOString(); // FIX: 1-minute initial buffer
     private processedSignalIds: Set<string> = new Set();
 
     addStatusListener(handler: (connected: boolean) => void): void {
@@ -100,12 +97,8 @@ class CallService {
 
         this.userId = userId;
         this.reconnectAttempts = 0;
-        // FIX: Start with a 1-minute buffer to catch signals sent during app splash/load
-        this.lastSignalTimestamp = new Date(Date.now() - 60000).toISOString();
         this.processedSignalIds.clear();
         this._subscribePersonalChannel(userId);
-        // Always start DB polling as fallback (works even when WebSocket is blocked)
-        this.startSignalPolling(userId);
     }
 
     private _subscribePersonalChannel(userId: string): void {
@@ -533,15 +526,6 @@ class CallService {
         const signalType = signal.type;
         const recipientId = this.getRecipientId(signal);
 
-        // 1. PRIMARY: Send via database INSERT (HTTP through proxy — always works)
-        // FIX: For high-frequency signals like ICE candidates, don't await the DB insert.
-        // This prevents the "waiting for signal" bottleneck that kills connection speed on slow networks.
-        if (signalType === 'ice-candidate') {
-            this.sendSignalViaDB(signal, recipientId).catch(() => {});
-        } else {
-            await this.sendSignalViaDB(signal, recipientId);
-        }
-
         // 2. BONUS: Also try broadcast (faster if WebSocket works)
         try {
             if (signalType === 'call-request' || signalType === 'call-accept' || 
@@ -566,85 +550,6 @@ class CallService {
         if (signal.type === 'call-request') return signal.calleeId;
         if (this.userId === signal.callerId) return signal.calleeId;
         return signal.callerId;
-    }
-
-    // ── DB-BASED SIGNALING ────────────────────────────────────────────────
-    //
-    // Uses Supabase REST API (HTTP through proxy) to send/receive signals.
-    // This works even when WebSocket is blocked by ISP.
-
-    private async sendSignalViaDB(signal: CallSignal, recipientId: string): Promise<void> {
-        try {
-            console.log(`[CallService] 🗄️ Inserting DB signal: ${signal.type} for ${recipientId}`);
-            const { error } = await supabase.from('call_signals').insert({
-                sender_id: this.userId,
-                recipient_id: recipientId,
-                signal_type: signal.type,
-                payload: signal,
-                // created_at removed to let DB set it (prevents clock skew)
-            });
-            if (error) {
-                console.warn(`[CallService] ❌ DB signal send failed for ${recipientId}:`, error.message);
-            } else {
-                console.log(`[CallService] ✅ Sent ${signal.type} via DB to ${recipientId}`);
-            }
-        } catch (e: any) {
-            console.warn(`[CallService] ❌ DB signal send exception for ${recipientId}:`, e?.message);
-        }
-    }
-
-    private startSignalPolling(userId: string): void {
-        this.stopSignalPolling();
-        console.log(`[CallService] 🔄 Starting DB signal polling for ${userId}`);
-
-        this.signalPollTimer = setInterval(async () => {
-            if (this.userId !== userId) {
-                this.stopSignalPolling();
-                return;
-            }
-            try {
-                // FIXED POLLING LOGIC:
-                // We use a fixed 30-second lookback window from "Now".
-                // This is immune to device clock skew because we don't rely on 'lastSignalTimestamp' 
-                // crossing between devices. We deduplicate using 'processedSignalIds' (row IDs).
-                const pollStartTime = new Date(Date.now() - 30000).toISOString();
-                
-                const { data, error } = await supabase
-                    .from('call_signals')
-                    .select('*')
-                    .eq('recipient_id', userId)
-                    .gt('created_at', pollStartTime)
-                    .order('created_at', { ascending: true })
-                    .limit(50); // Increased limit to handle active polling
-
-                if (error || !data || data.length === 0) return;
-
-                for (const row of data) {
-                    // Skip if already seen (Deduplication)
-                    if (this.processedSignalIds.has(row.id)) continue;
-                    this.processedSignalIds.add(row.id);
-                    
-                    const signal = row.payload as CallSignal;
-                    console.log(`📞 [CallService] DB poll: received [${signal.type}] from ${signal.callerId}`);
-                    this.handleIncomingSignal(signal);
-                }
-
-                // Keep processedSignalIds set size under control
-                if (this.processedSignalIds.size > 200) {
-                    const arr = Array.from(this.processedSignalIds);
-                    this.processedSignalIds = new Set(arr.slice(-100));
-                }
-            } catch (_) {
-                // Polling error — silently retry next interval
-            }
-        }, 500); // Poll every 500ms — fast enough for WebRTC offer/answer/ICE exchange
-    }
-
-    private stopSignalPolling(): void {
-        if (this.signalPollTimer) {
-            clearInterval(this.signalPollTimer);
-            this.signalPollTimer = null;
-        }
     }
 
     // ── WebRTC signal helpers ────────────────────────────────────────────

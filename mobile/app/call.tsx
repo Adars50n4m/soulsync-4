@@ -334,9 +334,11 @@ export default function CallScreen() {
                 // 1. Setup multi-listener callbacks
                 const callbacks = {
                     onStateChange: (state: CallState) => {
-                        console.log('[CallScreen] WebRTC state changed:', state);
-                        if (state === 'connecting' && callState === 'connected') return;
-                        setCallState(state);
+                        console.log('[CallScreen] WebRTC state changed callback:', state);
+                        setCallState(prev => {
+                            if (state === 'connecting' && prev === 'connected') return prev;
+                            return state;
+                        });
 
                         if (state === 'ended') {
                             console.log('[CallScreen] WebRTC ended internally — triggering app-level endCall');
@@ -344,25 +346,41 @@ export default function CallScreen() {
                         }
                     },
                     onLocalStream: (stream: any) => {
-                        console.log('Got local stream');
+                        console.log('[CallScreen] Local stream updated');
                         setLocalStream(stream);
                     },
                     onRemoteStream: (stream: any) => {
-                        console.log('[CallScreen] Got remote stream, updating tracks');
+                        console.log('[CallScreen] Remote stream updated, version:', remoteStreamUpdate + 1);
                         setRemoteStream(stream);
                         setRemoteStreamUpdate(prev => prev + 1);
                     },
                     onError: (error: string) => {
-                        console.error('WebRTC error:', error);
-                        // Alert.alert('Call Error', error);
+                        console.error('[CallScreen] WebRTC error:', error);
                     },
                 };
 
                 // Store for cleanup
                 webrtcListenerRef.current = callbacks;
-                
-                webRTCService.setInitiator(!activeCall.isIncoming);
                 webRTCService.addListener(callbacks);
+
+                // 2. Immediate State Sync: 
+                // Pick up whatever the service already has (critical for re-mounts/PiP)
+                const currentLocal = webRTCService.getLocalStream();
+                const currentRemote = webRTCService.getRemoteStream();
+                const currentState = webRTCService.getState();
+                
+                if (currentLocal) setLocalStream(currentLocal);
+                if (currentRemote) {
+                    setRemoteStream(currentRemote);
+                    setRemoteStreamUpdate(prev => prev + 1);
+                }
+                
+                if (currentState !== 'idle') {
+                    console.log('[CallScreen] 🔄 Syncing existing service state:', currentState);
+                    setCallState(currentState);
+                }
+
+                webRTCService.setInitiator(!activeCall.isIncoming);
 
                 // 2. PROTOCOL ENGINE: Only start or answer ONCE per session
                 // This prevents re-running logic if UI re-renders (e.g. state change to ringing)
