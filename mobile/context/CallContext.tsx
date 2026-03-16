@@ -157,7 +157,8 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             // Ensure WebRTC is initialized before calling onCallAccepted
                             if (!webRTCService.peerConnection) {
                                 console.log('[CallContext] Initializing WebRTC before onCallAccepted...');
-                                webRTCService.initialize({
+                                webRTCService.setInitiator(true);
+                                webRTCService.addListener({
                                     onStateChange: (state: any) => {
                                         console.log('[CallContext] WebRTC state changed:', state);
                                     },
@@ -170,7 +171,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                     onError: (error: string) => {
                                         console.error('[CallContext] WebRTC error:', error);
                                     },
-                                }, true); // isInitiator = true for caller
+                                });
                             }
                             webRTCService.onCallAccepted();
                         } catch (e) {
@@ -218,7 +219,8 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             if (signal.type === 'offer' && !webRTCService.peerConnection) {
                                 console.log('[CallContext] Initializing WebRTC before handling offer...');
                                 const isInitiator = signal.callerId === currentUser?.id;
-                                webRTCService.initialize({
+                                webRTCService.setInitiator(isInitiator);
+                                webRTCService.addListener({
                                     onStateChange: (state: any) => {
                                         console.log('[CallContext] WebRTC state changed:', state);
                                     },
@@ -231,7 +233,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                     onError: (error: string) => {
                                         console.error('[CallContext] WebRTC error:', error);
                                     },
-                                }, isInitiator);
+                                });
                             }
                             webRTCService.handleSignal(signal);
                         } catch (e) {

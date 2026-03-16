@@ -91,17 +91,17 @@ interface WebRTCCallbacks {
 
 class WebRTCService {
     private peerConnection: RTCPeerConnection | null = null;
+    private listeners: WebRTCCallbacks[] = [];
     private localStream: MediaStream | null = null;
     private remoteStream: MediaStream | null = null;
     private callType: CallType = 'audio';
     private callState: CallState = 'idle';
-    private callbacks: WebRTCCallbacks | null = null;
     private isInitiator: boolean = false;
     private partnerHasAccepted: boolean = false;
     private pendingCandidates: RTCIceCandidate[] = [];
-    private pendingCandidatesMutex: boolean = false; // FIX #2: Prevent race condition in ICE candidate processing
+    private pendingCandidatesMutex: boolean = false;
     private mediaStreamAttempted: boolean = false;
-    private readonly MAX_PENDING_CANDIDATES = 50; // FIX #1: Limit pending candidates to prevent memory leak
+    private readonly MAX_PENDING_CANDIDATES = 50;
 
     // Recovery tracking
     private reconnectAttempts: number = 0;
@@ -112,22 +112,37 @@ class WebRTCService {
     private lastDisconnectTime: number = 0;
 
     /**
-     * Initialize WebRTC service with callbacks
+     * Add a listener for WebRTC events
+     */
+    addListener(listener: WebRTCCallbacks): void {
+        if (!this.listeners.includes(listener)) {
+            this.listeners.push(listener);
+            console.log(`[WebRTCService] Listener added. Total: ${this.listeners.length}`);
+            
+            // Immediately sync current state to new listener
+            listener.onStateChange(this.callState);
+            if (this.localStream) listener.onLocalStream(this.localStream);
+            if (this.remoteStream) listener.onRemoteStream(this.remoteStream);
+        }
+    }
+
+    /**
+     * Remove a listener
+     */
+    removeListener(listener: WebRTCCallbacks): void {
+        this.listeners = this.listeners.filter(l => l !== listener);
+        console.log(`[WebRTCService] Listener removed. Total: ${this.listeners.length}`);
+    }
+
+    /**
+     * @deprecated Use addListener
      */
     initialize(callbacks: WebRTCCallbacks, isInitiator: boolean): void {
-        this.callbacks = callbacks;
         this.isInitiator = isInitiator;
-        
-        console.log(`[WebRTCService] Initializing. Role: ${isInitiator ? 'Initiator' : 'Receiver'}, CurrentPC: ${!!this.peerConnection}`);
+        this.addListener(callbacks);
+        console.log(`[WebRTCService] Initializing (Compatible Mode). Role: ${isInitiator ? 'Initiator' : 'Receiver'}`);
 
-        // If we already have a peer connection, we are re-attaching callbacks
-        if (this.peerConnection) {
-            console.log('[WebRTCService] Re-attaching callbacks to existing call');
-            this.callbacks.onStateChange(this.callState);
-            if (this.localStream) this.callbacks.onLocalStream(this.localStream);
-            if (this.remoteStream) this.callbacks.onRemoteStream(this.remoteStream);
-        } else {
-            // Fresh call
+        if (!this.peerConnection) {
             this.localStream = null;
             this.mediaStreamAttempted = false;
             this.remoteStream = null;
@@ -138,10 +153,12 @@ class WebRTCService {
     }
 
     /**
-     * Update callbacks without resetting state (used for PiP/Minimize)
+     * @deprecated Use addListener/removeListener
      */
     setCallbacks(callbacks: WebRTCCallbacks | null): void {
-        this.callbacks = callbacks;
+        if (callbacks) {
+            this.addListener(callbacks);
+        }
     }
 
     /**
@@ -210,7 +227,7 @@ class WebRTCService {
             }
         } catch (error: any) {
             console.error('[WebRTCService] ❌ Failed to start call:', error);
-            this.callbacks?.onError(`Failed to start call: ${error.message}`);
+            this.broadcast('onError', `Failed to start call: ${error.message}`);
             this.endCall('start-failed');
         }
     }
@@ -272,7 +289,7 @@ class WebRTCService {
 
         } catch (error: any) {
             console.error('[WebRTCService] ❌ Failed to answer call:', error);
-            this.callbacks?.onError(`Failed to answer call: ${error.message}`);
+            this.broadcast('onError', `Failed to answer call: ${error.message}`);
             this.endCall('answer-failed');
         }
     }
@@ -341,7 +358,7 @@ class WebRTCService {
                 return;
             }
             console.error('Failed to handle signal:', error);
-            this.callbacks?.onError(`Signal handling failed: ${error.message}`);
+            this.broadcast('onError', `Signal handling failed: ${error.message}`);
         }
     }
 
@@ -389,11 +406,9 @@ class WebRTCService {
         this.partnerHasAccepted = false;
         this.isInitiator = false;
 
-        // Notify callbacks
-        if (this.callbacks) {
-            this.callbacks.onLocalStream(null);
-            this.callbacks.onRemoteStream(null);
-        }
+        // Notify listeners
+        this.broadcast('onLocalStream', null);
+        this.broadcast('onRemoteStream', null);
 
         // NOTE: Do NOT call callService.endCall() here.
         // The endCall signal is sent by AppContext.endCall() to avoid
@@ -401,7 +416,7 @@ class WebRTCService {
 
         // Reset state after short delay, but only if not cleaned up
         setTimeout(() => {
-            if (this.callbacks && this.callState === 'ended') {
+            if (this.listeners.length > 0 && this.callState === 'ended') {
                 this.setState('idle');
             }
         }, 1000);
@@ -495,7 +510,7 @@ class WebRTCService {
             });
 
             this.localStream = await Promise.race([mediaPromise, timeoutPromise]);
-            this.callbacks?.onLocalStream(this.localStream);
+            this.broadcast('onLocalStream', this.localStream);
             console.log('[WebRTCService] Local stream obtained successfully');
 
         } catch (error: any) {
@@ -506,7 +521,7 @@ class WebRTCService {
             if (isSimulator && Platform.OS === 'ios') {
                 console.log('[WebRTCService] 🛡️ Simulator detected. Avoiding audio hardware retry to prevent SIGABRT.');
                 this.localStream = null;
-                this.callbacks?.onLocalStream(null);
+                this.broadcast('onLocalStream', null);
                 return;
             }
             
@@ -526,7 +541,7 @@ class WebRTCService {
                     });
                     
                     this.localStream = await Promise.race([audioOnlyPromise, audioTimeout]);
-                    this.callbacks?.onLocalStream(this.localStream);
+                    this.broadcast('onLocalStream', this.localStream);
                     return;
                 } catch (e: any) {
                     if (audioTimer) clearTimeout(audioTimer);
@@ -537,7 +552,7 @@ class WebRTCService {
             // Critical fail-soft: even if NO media is available (Simulator/Busy Hardware), 
             // do NOT crash. Let signaling proceed so the call can at least connect.
             this.localStream = null;
-            this.callbacks?.onLocalStream(null);
+            this.broadcast('onLocalStream', null);
             console.log('[WebRTCService] ⚠️ Proceeding with NO local stream. Signaling will still attempt to connect.');
         }
     }
@@ -581,7 +596,7 @@ class WebRTCService {
             }
 
             if (this.remoteStream) {
-                this.callbacks?.onRemoteStream(this.remoteStream);
+                this.broadcast('onRemoteStream', this.remoteStream);
                 
                 // CRITICAL: Any remote media (audio or video) means we are effectively connected
                 // to the other person, even if ICE is still in 'checking' phase.
@@ -759,7 +774,7 @@ class WebRTCService {
     private setState(state: CallState): void {
         console.log(`[WebRTCService] State change: ${this.callState} -> ${state}`);
         this.callState = state;
-        this.callbacks?.onStateChange(state);
+        this.broadcast('onStateChange', state);
 
         // Start/Stop media tracking
         if (state === 'connected') {
@@ -779,10 +794,18 @@ class WebRTCService {
                 if (this.callState === 'connecting') {
                     console.warn('[WebRTCService] 🚨 Connection watchdog timeout! Call failed to connect in 20s.');
                     this.endCall('connection-timeout');
-                    this.callbacks?.onError('Call connection timed out. Please check your network.');
+                    this.broadcast('onError', 'Call connection timed out. Please check your network.');
                 }
             }, 20000);
         }
+    }
+
+    private broadcast(method: string, data: any): void {
+        this.listeners.forEach((listener: any) => {
+            if (typeof listener[method] === 'function') {
+                listener[method](data);
+            }
+        });
     }
 
     // FIX #13: Verify DTLS/SRTP encryption is established
@@ -870,7 +893,7 @@ class WebRTCService {
      * Cleanup resources
      */
     cleanup(): void {
-        this.callbacks = null; // Prevent further state updates
+        this.listeners = []; // Clear all listeners
         this.endCall();
     }
 }

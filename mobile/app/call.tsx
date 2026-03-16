@@ -69,14 +69,18 @@ export default function CallScreen() {
     useKeepAwake(); // Prevents screen from sleeping during call
 
     const [callDuration, setCallDuration] = useState(0);
-    // FIX: If this is an incoming call that was already accepted (navigated to call screen after accept),
-    // start in 'connecting' state instead of 'ringing'
+    const [localStream, setLocalStream] = useState<any>(null);
+    const [remoteStream, setRemoteStream] = useState<any>(null);
+    const webrtcListenerRef = useRef<any>(null);
+
+    // FIX: If this is an incoming call that was already accepted, start in 'connecting'
     const [callState, setCallState] = useState<CallState>(() => {
         if (activeCall?.isIncoming && activeCall?.isAccepted) return 'connecting';
         return 'ringing';
     });
-    const [localStream, setLocalStream] = useState<any>(null);
-    const [remoteStream, setRemoteStream] = useState<any>(null);
+
+    const hasRemoteTracks = remoteStream && (remoteStream.getAudioTracks().length > 0 || remoteStream.getVideoTracks().length > 0);
+    const isActuallyConnected = callState === 'connected' || (hasRemoteTracks && activeCall?.isAccepted);
     // const [isMuted, setIsMuted] = useState(false); // Managed by activeCall
     const [isSpeaker, setIsSpeaker] = useState(false);
 
@@ -308,8 +312,8 @@ export default function CallScreen() {
 
         const initCall = async () => {
             try {
-                // 1. Initialize logic (attach callbacks and set role)
-                webRTCService.initialize({
+                // 1. Setup multi-listener callbacks
+                const callbacks = {
                     onStateChange: (state: CallState) => {
                         console.log('[CallScreen] WebRTC state changed:', state);
                         if (state === 'connecting' && callState === 'connected') return;
@@ -330,9 +334,15 @@ export default function CallScreen() {
                     },
                     onError: (error: string) => {
                         console.error('WebRTC error:', error);
-                        Alert.alert('Call Error', error);
+                        // Alert.alert('Call Error', error);
                     },
-                }, !activeCall.isIncoming);
+                };
+
+                // Store for cleanup
+                webrtcListenerRef.current = callbacks;
+                
+                webRTCService.setInitiator(!activeCall.isIncoming);
+                webRTCService.addListener(callbacks);
 
                 // 2. PROTOCOL ENGINE: Only start or answer ONCE per session
                 // This prevents re-running logic if UI re-renders (e.g. state change to ringing)
@@ -397,8 +407,10 @@ export default function CallScreen() {
             console.log('[CallScreen] ⚠️ WebRTC useEffect CLEANUP triggered. isMinimizing:', isMinimizing.current);
             if (webRTCService) {
                 // Always detach callbacks to prevent stale state updates
-                // (callbacks point to this component's stale state setters)
-                try { webRTCService.setCallbacks(null); } catch (e) { }
+                if (webrtcListenerRef.current) {
+                    try { webRTCService.removeListener(webrtcListenerRef.current); } catch (e) { }
+                    webrtcListenerRef.current = null;
+                }
 
                 if (isMinimizing.current) {
                     // Minimizing: keep call alive, just detach the UI callbacks (done above)
@@ -667,7 +679,7 @@ export default function CallScreen() {
                                             delayLongPress={2000}
                                         >
                                             <Text style={styles.callStatus}>
-                                                {callState === 'connected' ? formatDuration(callDuration) : 
+                                                {isActuallyConnected ? formatDuration(callDuration) : 
                                                 callState === 'ended' ? 'Ending...' :
                                                 (activeCall.isIncoming && !activeCall.isAccepted) ? 'Incoming Soul Call...' : 
                                                 (callState === 'ringing' && !activeCall.isIncoming) ? 'Ringing...' : 
