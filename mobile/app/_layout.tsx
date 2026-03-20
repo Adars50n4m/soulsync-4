@@ -69,12 +69,12 @@ function RootContent() {
   // Default values if context is not available
   const { activeCall, currentUser, isReady } = context || { activeCall: null, currentUser: null, isReady: false };
 
-  console.log('[RootLayout] isReady:', isReady, 'segments:', segments, 'currentUser:', !!currentUser);
+  console.log('[RootLayout] Render: isReady=', isReady, 'segments=', segments, 'hasUser=', !!currentUser, 'hasContext=', !!context);
 
   // Show error screen if context failed
   if (contextError) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+      <View style={{ flex: 1, backgroundColor: 'red', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
         <Text style={{ color: '#fff', fontSize: 16, textAlign: 'center' }}>Failed to initialize app</Text>
         <Text style={{ color: '#666', fontSize: 12, marginTop: 10 }}>{contextError.message}</Text>
       </View>
@@ -84,7 +84,7 @@ function RootContent() {
   // Show loading indicator while waiting for context to initialize (safety fallback for Android)
   if (!context) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }}>
+      <View style={{ flex: 1, backgroundColor: 'green', justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" color="#BC002A" />
       </View>
     );
@@ -108,6 +108,7 @@ function RootContent() {
 
     // --- AUTH GUARD ---
     useEffect(() => {
+        console.log('[RootLayout] Auth Guard Check - isReady:', isReady, 'segments:', segments, 'currentUser:', !!currentUser);
         // Wait for everything to be ready before attempting any navigation
         if (!context || !isReady || !segments || (segments as any[]).length === 0) return;
 
@@ -133,7 +134,10 @@ function RootContent() {
 
     // --- TRAFFIC CONTROLLER FOR CALLS ---
     useEffect(() => {
-        if (!activeCall || !segments || !isReady) return;
+        if (!activeCall || !segments || !isReady) {
+            console.log('[TrafficController] Skip: activeCall=', !!activeCall, 'segments=', !!segments, 'isReady=', isReady);
+            return;
+        }
 
         const handleNavigation = () => {
             const path = segments.join('/');
@@ -142,14 +146,31 @@ function RootContent() {
             // 1. If call is outgoing (just initiated) or accepted, navigate to call screen
             const shouldBeInCallScreen = !activeCall.isIncoming || activeCall.isAccepted;
 
+            console.log('[TrafficController] Check:', {
+                shouldBeInCallScreen,
+                isMinimized: activeCall.isMinimized,
+                inCallScreen,
+                path
+            });
+
             if (shouldBeInCallScreen && !activeCall.isMinimized && !inCallScreen) {
-                console.log(`[TrafficController] Navigating to Call Screen. Current: ${path}, Should: /call`);
-                // Force a slightly longer delay on Android to ensure UI stack is ready
-                const delay = Platform.OS === 'android' ? 250 : 100;
+                console.log(`[TrafficController] 🚀 Navigating to Call Screen. Current: ${path}, Should: /call`);
+                // Increase delay for Android to ensure IncomingCallModal is gone
+                const delay = Platform.OS === 'android' ? 300 : 100;
                 setTimeout(() => {
-                    // Re-check condition before pushing
-                    if (!activeCall.isMinimized) {
+                    // Critical: Use the most fresh state from context for the final check
+                    const freshCall = context?.activeCall;
+                    const inCallNow = segments.join('/').includes('call');
+
+                    if (freshCall && !freshCall.isMinimized && !inCallNow) {
+                        console.log('[TrafficController] ✅ Executing router.push("/call")');
                         router.push('/call');
+                    } else {
+                        console.log('[TrafficController] 🛑 Navigation aborted - State changed or already there:', {
+                            hasCall: !!freshCall,
+                            isMinimized: freshCall?.isMinimized,
+                            inCallNow
+                        });
                     }
                 }, delay);
             }
@@ -165,7 +186,7 @@ function RootContent() {
         });
 
         return () => subscription.remove();
-    }, [activeCall?.isAccepted, activeCall?.isIncoming, activeCall?.isMinimized, segments, isReady]);
+    }, [activeCall, segments, isReady]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#000' }}>
@@ -189,7 +210,8 @@ function RootContent() {
             <Stack.Screen name="music" options={{
               presentation: 'transparentModal',
               animation: 'fade',
-              headerShown: false
+              headerShown: false,
+              contentStyle: { backgroundColor: 'transparent' }
             }} />
             <Stack.Screen name="chat/[id]" options={{
               presentation: 'card',

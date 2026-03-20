@@ -24,9 +24,7 @@ let isTaskRegistered = false;
  */
 // Silent task registration
 try {
-  // Only register background tasks on Android for now as iOS needs native capability.
-  // TaskManager.defineTask MUST be top-level.
-  if (Platform.OS === 'android') {
+    // TaskManager.defineTask MUST be top-level and defined on all platforms that use it.
     const isDefined = TaskManager.isTaskDefined && TaskManager.isTaskDefined(BACKGROUND_SYNC_TASK);
     if (isDefined) {
       console.log(`[BackgroundSync] Task ${BACKGROUND_SYNC_TASK} already defined`);
@@ -74,7 +72,6 @@ try {
       });
       console.log(`[BackgroundSync] Task ${BACKGROUND_SYNC_TASK} defined successfully`);
     }
-  }
 } catch (error) {
   console.warn('[BackgroundSync] Failed to check/define task:', error);
 }
@@ -139,39 +136,24 @@ async function syncMessagesFromServer(userId: string): Promise<number> {
 
 /**
  * Update contact's last message preview
+ * ONLY updates existing contacts - never adds new contacts
  */
 async function updateContactLastMessage(contactId: string, msg: any): Promise<void> {
   try {
     // Get existing contact
     const contacts = await offlineService.getContacts();
     const existingContact = contacts.find(c => c.id === contactId);
-    
+
     if (existingContact) {
-      // Update last message
+      // Update last message only for EXISTING contacts
       await offlineService.saveContact({
         ...existingContact,
         lastMessage: msg.text?.substring(0, 50) || (msg.media_url ? '📷 Media' : ''),
         unreadCount: (existingContact.unreadCount || 0) + (msg.sender === contactId ? 1 : 0)
       });
-    } else {
-      // Fetch contact info from Supabase
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', contactId)
-        .single();
-      
-      if (profile) {
-        await offlineService.saveContact({
-          id: contactId,
-          name: profile.name || 'Unknown',
-          avatar: profile.avatar_url || profile.avatar || '',
-          status: 'offline',
-          lastMessage: msg.text?.substring(0, 50) || '📷 Media',
-          unreadCount: 1
-        });
-      }
     }
+    // NOTE: We NO LONGER auto-create contacts for message senders
+    // Contacts should only exist after a connection request is ACCEPTED
   } catch (error) {
     console.error('[BackgroundSync] Update contact error:', error);
   }

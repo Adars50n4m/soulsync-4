@@ -37,7 +37,7 @@ class MusicSyncService {
         }
 
         // We use a shared channel for the "room" (current pair of users)
-        // For simplicity in SoulSync, we can use a channel named after the user pair
+        // For simplicity in Soul, we can use a channel named after the user pair
         // Sort IDs to ensure both users join the same channel name
         const ids = [this.userId, this.partnerId].filter(Boolean).sort();
         const channelName = ids.length > 1 ? `music_sync_${ids[0]}_${ids[1]}` : `music_sync_${this.userId}`;

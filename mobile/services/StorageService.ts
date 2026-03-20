@@ -101,7 +101,7 @@ export const storageService = {
                 uri,
                 {
                     httpMethod: 'PUT',
-                    uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+                    uploadType: (FileSystem as any).FileSystemUploadType?.BINARY_CONTENT || (FileSystem as any).UploadType?.BINARY_CONTENT,
                     headers: {
                         'Content-Type': contentType,
                     }
@@ -231,7 +231,7 @@ export const storageService = {
             const ext = r2Key.split('.').pop() || 'tmp';
             // Sanitize filename from key
             const safeName = r2Key.replace(/[^a-zA-Z0-9.-]/g, '_');
-            const localUri = `${FileSystem.documentDirectory}cached_media_${Date.now()}_${safeName}`;
+            const localUri = `${(FileSystem as any).documentDirectory}cached_media_${Date.now()}_${safeName}`;
 
             console.log(`[StorageService] Downloading to: ${localUri}`);
             const downloadRes = await FileSystem.downloadAsync(presignedUrl, localUri);
@@ -256,5 +256,48 @@ export const storageService = {
             }
             return r2Key.startsWith('http') ? r2Key : null;
         }
+    },
+
+    /**
+     * Get avatar with local caching - WhatsApp-like reliability
+     * Returns cached local path if available, otherwise downloads and caches
+     */
+    async getAvatarUrl(userId: string, avatarUrl: string | null | undefined): Promise<string> {
+        if (!avatarUrl) return '';
+
+        // 1. Check local cache first
+        const cached = await offlineService.getCachedAvatar(userId);
+        if (cached) {
+            // Check if cached file exists
+            const info = await FileSystem.getInfoAsync(cached.localPath);
+            if (info.exists) {
+                // If remote URL changed, re-download
+                if (cached.remoteUrl !== avatarUrl) {
+                    console.log('[StorageService] Avatar URL changed, re-downloading:', userId);
+                } else {
+                    console.log('[StorageService] Avatar cache hit:', userId);
+                    return cached.localPath;
+                }
+            }
+        }
+
+        // 2. Download avatar and cache locally
+        try {
+            const localPath = `${(FileSystem as any).documentDirectory}avatar_${userId}_${Date.now()}.jpg`;
+
+            // Try direct download first (works offline with public URLs)
+            const downloadRes = await FileSystem.downloadAsync(avatarUrl, localPath);
+
+            if (downloadRes.status === 200) {
+                await offlineService.saveCachedAvatar(userId, avatarUrl, localPath);
+                console.log('[StorageService] Avatar cached:', userId);
+                return localPath;
+            }
+        } catch (error) {
+            console.warn('[StorageService] Avatar download failed:', error);
+        }
+
+        // 3. Return original URL as fallback
+        return avatarUrl;
     }
 };

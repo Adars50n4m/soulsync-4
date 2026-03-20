@@ -206,7 +206,7 @@ export const networkMonitor = {
 };
 
 // FIX #10: Connection state persistence
-const CONNECTION_STATE_KEY = 'soulsync_connection_state';
+const CONNECTION_STATE_KEY = 'Soul_connection_state';
 
 export interface PersistedConnectionState {
   lastOnlineAt: string | null;

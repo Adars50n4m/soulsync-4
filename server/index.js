@@ -226,7 +226,10 @@ app.post('/api/status/view', async (req, res) => {
 
 // Middleware to authenticate user via Header (Dev/Prototype style)
 const authenticateUser = (req, res, next) => {
-    const userId = req.headers['x-user-id'] || req.query.userId || req.body.userId;
+    const userId = req.headers['x-user-id'] || 
+                   (req.query && req.query.userId) || 
+                   (req.body && req.body.userId);
+                   
     if (!userId) {
         return res.status(401).json({ error: 'Unauthorized: No user ID provided' });
     }
@@ -262,7 +265,7 @@ app.get('/api/users/search', authenticateUser, async (req, res) => {
         const { data: requests } = await supabase.from('connection_requests')
             .select('*')
             .or(`sender_id.eq.${currentUserId},receiver_id.eq.${currentUserId}`)
-            .filter('status', 'in', '("pending", "rejected")');
+            .in('status', ['pending', 'rejected']);
 
         const { data: connections } = await supabase.from('connections')
             .select('*')
@@ -348,6 +351,9 @@ app.post('/api/connections/request', authenticateUser, async (req, res) => {
         res.json({ success: true, request: data });
     } catch (err) {
         console.error('Error sending request:', err);
+        if (err.code === '23503' && err.message.includes('sender_id')) {
+            return res.status(401).json({ error: 'Your account session is invalid or deleted. Please log out and sign up again.' });
+        }
         res.status(500).json({ error: 'Failed to send request' });
     }
 });
@@ -377,8 +383,8 @@ app.get('/api/connections/requests', authenticateUser, async (req, res) => {
         userIds.delete(userId);
 
         const { data: profiles } = await supabase
-            .from('users')
-            .select('id, username, full_name, avatar_url')
+            .from('profiles')
+            .select('id, username, full_name:display_name, avatar_url')
             .in('id', Array.from(userIds));
 
         const incoming = requests
@@ -436,11 +442,11 @@ app.put('/api/connections/request/:requestId/accept', authenticateUser, async (r
             .single();
 
         if (connErr) throw connErr;
-        
+
         // Fetch receiver (me) username for notification
         const { data: receiver } = await supabase.from('profiles').select('username').eq('id', userId).single();
 
-        // 4. Notify sender
+        // 4. Notify sender via socket.io (mobile app listens via socket.io-client)
         io.to(request.sender_id).emit('connection:request_accepted', {
             connection,
             receiverId: userId,
@@ -462,12 +468,25 @@ app.put('/api/connections/request/:requestId/reject', authenticateUser, async (r
     try {
         if (!supabase) throw new Error('Supabase client not initialized');
 
+        // Get request info first
+        const { data: request } = await supabase
+            .from('connection_requests')
+            .select('sender_id')
+            .eq('id', requestId)
+            .single();
+
         const { error } = await supabase
             .from('connection_requests')
             .update({ status: 'rejected', responded_at: new Date().toISOString() })
             .match({ id: requestId, receiver_id: userId });
 
         if (error) throw error;
+
+        // Notify sender via socket.io
+        if (request?.sender_id) {
+            io.to(request.sender_id).emit('connection:request_rejected', { requestId });
+        }
+
         res.json({ success: true });
     } catch (err) {
         console.error('Error rejecting request:', err);
@@ -492,6 +511,27 @@ app.delete('/api/connections/request/:requestId/cancel', authenticateUser, async
         res.json({ success: true });
     } catch (err) {
         console.error('Error canceling request:', err);
+        res.status(500).json({ error: 'Failed to cancel request' });
+    }
+});
+
+// 4.6 Cancel Connection Request by Receiver ID (Outgoing)
+app.delete('/api/connections/request/receiver/:receiverId', authenticateUser, async (req, res) => {
+    const { receiverId } = req.params;
+    const userId = req.user.id;
+
+    try {
+        if (!supabase) throw new Error('Supabase client not initialized');
+
+        const { error } = await supabase
+            .from('connection_requests')
+            .delete()
+            .match({ sender_id: userId, receiver_id: receiverId, status: 'pending' });
+
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error canceling request by receiver:', err);
         res.status(500).json({ error: 'Failed to cancel request' });
     }
 });

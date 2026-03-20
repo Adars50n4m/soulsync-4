@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View, ViewStyle, TextStyle } from 'react-native';
-import { Accordion as BaseAccordion } from '@animatereactnative/accordion';
+import { Accordion } from '@animatereactnative/accordion';
+const BaseAccordion = Accordion;
 import { Feather } from '@expo/vector-icons';
 
 interface CustomAccordionProps {
@@ -16,7 +17,7 @@ interface CustomAccordionProps {
 /**
  * Global CustomAccordion Component
  * 
- * A standardized, branded accordion for use across the SoulSync app.
+ * A standardized, branded accordion for use across the Soul app.
  * Wraps @animatereactnative/accordion with custom styling.
  */
 export const CustomAccordion = ({
@@ -26,17 +27,19 @@ export const CustomAccordion = ({
   footer,
   containerStyle,
   titleStyle,
-  iconColor = '#EC4899', // SoulSync Pink
+  iconColor = '#EC4899', // Soul Pink
 }: CustomAccordionProps) => {
   return (
     <BaseAccordion.Accordion 
       style={[styles.container, containerStyle]}
     >
-      <BaseAccordion.Header style={styles.header}>
-        <Text style={[styles.title, titleStyle]}>{title}</Text>
-        <BaseAccordion.HeaderIcon>
-          <Feather name="chevron-down" size={20} color={iconColor} />
-        </BaseAccordion.HeaderIcon>
+      <BaseAccordion.Header>
+        <View style={styles.header}>
+          <Text style={[styles.title, titleStyle]}>{title}</Text>
+          <BaseAccordion.HeaderIcon>
+            <Feather name="chevron-down" size={20} color={iconColor} />
+          </BaseAccordion.HeaderIcon>
+        </View>
       </BaseAccordion.Header>
 
       {preview && (

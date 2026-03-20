@@ -1,5 +1,5 @@
 {
-  "name": "SoulSync",
+  "name": "Soul",
   "description": "A futuristic messaging and social platform featuring immersive glassmorphic UI, real-time status updates, and integrated media playback.",
   "requestFramePermissions": [
     "camera",

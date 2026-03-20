@@ -1,7 +1,9 @@
 import React from 'react';
 import { ViewStyle, StyleProp } from 'react-native';
-import { Stagger } from '@animatereactnative/stagger';
+import { Stagger as StaggerComponent } from '@animatereactnative/stagger';
 import { FadeInDown, FadeOutDown } from 'react-native-reanimated';
+
+const Stagger = StaggerComponent as any;
 
 interface StaggeredViewProps {
   /**

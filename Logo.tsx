@@ -1,7 +1,7 @@
 
 import React from 'react';
 
-export const SoulSyncLogo = ({ className = "size-24" }: { className?: string }) => (
+export const SoulLogo = ({ className = "size-24" }: { className?: string }) => (
   <svg viewBox="0 0 200 200" className={className} xmlns="http://www.w3.org/2000/svg">
     <defs>
       <linearGradient id="soulGradient" x1="0%" y1="0%" x2="100%" y2="100%">

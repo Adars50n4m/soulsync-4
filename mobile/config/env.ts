@@ -2,7 +2,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 /**
- * SoulSync-4 Centralized Environment Configuration
+ * Soul-4 Centralized Environment Configuration
  * 
  * This file serves as the single source for all URLs, keys, and feature flags.
  * It intelligently selects values based on the environment (Dev, Prod, Mobile, Web).
@@ -18,7 +18,7 @@ export const SUPABASE_URL = getEnvVar('EXPO_PUBLIC_SUPABASE_URL', SUPABASE_BASE_
 export const SUPABASE_ANON_KEY = getEnvVar('EXPO_PUBLIC_SUPABASE_ANON_KEY', 'sb_publishable_9cVY_6oQHMZnV9CaxmMs9Q_7QlUxqlD');
 
 // 2. Gateway Proxy (Bypasses ISP blocks on Supabase)
-export const SUPABASE_PROXY_URL = getEnvVar('EXPO_PUBLIC_SUPABASE_PROXY_URL', 'https://soulsync-supabase-proxy.adarshark.workers.dev');
+export const SUPABASE_PROXY_URL = getEnvVar('EXPO_PUBLIC_SUPABASE_PROXY_URL', 'https://Soul-supabase-proxy.adarshark.workers.dev');
 
 // 3. App Server (Node.js/Localtunnel)
 export const IS_DEV = __DEV__;
@@ -78,7 +78,7 @@ console.log(`[Env] FINAL SERVER_URL: ${SERVER_URL}`);
 export const MUSIC_API_URL = getEnvVar('EXPO_PUBLIC_MUSIC_API_URL', 'https://saavn.sumit.co/api');
 
 // 5. Cloudflare R2 / Upload Worker
-export const R2_WORKER_URL = getEnvVar('EXPO_PUBLIC_R2_WORKER_URL', 'https://soulsync-upload-worker.adarshark.workers.dev');
+export const R2_WORKER_URL = getEnvVar('EXPO_PUBLIC_R2_WORKER_URL', 'https://Soul-upload-worker.adarshark.workers.dev');
 export const R2_PUBLIC_URL = getEnvVar('EXPO_PUBLIC_R2_PUBLIC_URL', 'https://pub-XXXXXXXXXXXX.r2.dev');
 
 // 6. WebRTC TURN Servers

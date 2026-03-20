@@ -4,15 +4,15 @@ You already have an R2 bucket! Let's use it. 🎉
 
 ## Your Existing Bucket
 
-- **Bucket Name:** `soulsync`
-- **Internal URL:** `https://89f30de5dacc7b409e4abdae5f99a3a6.r2.cloudflarestorage.com/soulsync`
+- **Bucket Name:** `Soul`
+- **Internal URL:** `https://89f30de5dacc7b409e4abdae5f99a3a6.r2.cloudflarestorage.com/Soul`
 
 ## Quick Setup (10 mins)
 
 ### Step 1: Get Public URL (FREE r2.dev)
 
 1. Go to https://dash.cloudflare.com/ → **R2**
-2. Click on `soulsync` bucket
+2. Click on `Soul` bucket
 3. Go to **Settings** tab
 4. Under **Public Access**, click **Allow Access**
 5. Click **Connect R2.dev subdomain** (FREE!)
@@ -21,7 +21,7 @@ You already have an R2 bucket! Let's use it. 🎉
 ### Step 2: Deploy Worker
 
 ```bash
-cd /Volumes/Work/soulsync-4/cloudflare-worker
+cd /Volumes/Work/Soul-4/cloudflare-worker
 
 # Install
 npm install
@@ -38,14 +38,14 @@ wrangler secret put R2_PUBLIC_DOMAIN
 npm run deploy
 ```
 
-Save the Worker URL! (e.g., `https://soulsync-upload-worker.xyz.workers.dev`)
+Save the Worker URL! (e.g., `https://Soul-upload-worker.xyz.workers.dev`)
 
 ### Step 3: Configure Mobile App
 
-Create `/Volumes/Work/soulsync-4/mobile/.env`:
+Create `/Volumes/Work/Soul-4/mobile/.env`:
 
 ```env
-EXPO_PUBLIC_R2_WORKER_URL=https://soulsync-upload-worker.YOUR-SUBDOMAIN.workers.dev
+EXPO_PUBLIC_R2_WORKER_URL=https://Soul-upload-worker.YOUR-SUBDOMAIN.workers.dev
 EXPO_PUBLIC_R2_PUBLIC_URL=https://pub-XXXXXXXXXXXX.r2.dev
 EXPO_PUBLIC_USE_R2=false
 ```
@@ -56,10 +56,10 @@ Replace with your actual URLs from Steps 1 & 2!
 
 ```bash
 # Test Worker
-curl https://soulsync-upload-worker.YOUR-SUBDOMAIN.workers.dev/health
+curl https://Soul-upload-worker.YOUR-SUBDOMAIN.workers.dev/health
 
 # Test mobile app
-cd /Volumes/Work/soulsync-4/mobile
+cd /Volumes/Work/Soul-4/mobile
 npx expo start -c
 ```
 
@@ -70,7 +70,7 @@ npx expo start -c
 
 ### Step 5: Verify
 
-Dashboard → R2 → `soulsync` → Objects
+Dashboard → R2 → `Soul` → Objects
 
 You should see:
 ```
@@ -80,9 +80,9 @@ status-media/{userId}/{timestamp}.mp4
 
 ## Done! 🎉
 
-Your existing `soulsync` bucket is now integrated!
+Your existing `Soul` bucket is now integrated!
 
-**Important:** The wrangler.toml has been updated to use `bucket_name = "soulsync"` ✅
+**Important:** The wrangler.toml has been updated to use `bucket_name = "Soul"` ✅
 
 ## FREE Tier Limits
 
@@ -95,7 +95,7 @@ Your existing `soulsync` bucket is now integrated!
 
 Save storage by auto-deleting old statuses:
 
-1. R2 → `soulsync` → Settings → Lifecycle Rules
+1. R2 → `Soul` → Settings → Lifecycle Rules
 2. Add Rule:
    - Prefix: `status-media/`
    - Delete after: 1 day

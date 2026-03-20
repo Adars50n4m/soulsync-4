@@ -1,8 +1,9 @@
 import * as React from 'react';
 import { useState, useEffect, createContext, useContext, useCallback, useRef } from 'react';
-import { supabase, LEGACY_TO_UUID } from '../config/supabase';
+import { supabase } from '../config/supabase';
 import { authService } from '../services/AuthService';
 import { offlineService } from '../services/LocalDBService';
+import { storageService } from '../services/StorageService';
 import { proxySupabaseUrl } from '../config/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
@@ -23,7 +24,7 @@ export const DEFAULT_PRIVACY: PrivacySettings = {
     readReceipts: true,
 };
 
-export type AvatarType = 'default' | 'teddy' | 'custom';
+export type AvatarType = 'default' | 'teddy' | 'custom' | 'uploaded' | 'google';
 export type TeddyVariant = 'boy' | 'girl';
 
 export interface User {
@@ -65,21 +66,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const synchronizeSession = useCallback(async (userId: string) => {
         try {
-            console.log('[AuthContext] Synchronizing session for:', userId);
+            console.log('[AuthContext] synchronizeSession start:', userId);
             // Add timeout to prevent hanging
             const profile = await Promise.race([
                 authService.getProfile(userId),
                 new Promise<null>((resolve) => setTimeout(() => {
-                    console.warn('[AuthContext] getProfile timed out');
+                    console.warn('[AuthContext] synchronizeSession: getProfile timed out (5s)');
                     resolve(null);
                 }, 5000))
             ]);
+
             if (profile) {
+                console.log('[AuthContext] synchronizeSession: Profile fetched successfully');
+                // Use server avatar URL immediately (fast), cache in background
+                const avatarUrl = profile.avatarUrl || '';
+
+                // Background cache avatar after startup
+                setTimeout(() => {
+                    if (avatarUrl) {
+                        storageService.getAvatarUrl(profile.id, avatarUrl).catch(() => {});
+                    }
+                }, 2000);
+
                 const userObj: User = {
                     id: profile.id,
                     name: profile.displayName || profile.username || 'User',
                     username: profile.username,
-                    avatar: proxySupabaseUrl(profile.avatarUrl) || '',
+                    avatar: proxySupabaseUrl(avatarUrl) || '',
                     avatarType: profile.avatarType || 'default',
                     bio: profile.bio || '',
                     birthdate: profile.birthdate || undefined,
@@ -89,32 +102,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 };
                 setCurrentUser(userObj);
                 await AsyncStorage.setItem('ss_current_user', userId);
+                console.log('[AuthContext] synchronizeSession: Session linked and persisted');
             } else {
-                // FALLBACK: For Developer Bypass users (shri/hari) who don't exist in Supabase DB
-                if (userId === LEGACY_TO_UUID['shri']) {
-                    setCurrentUser({
-                        id: userId,
-                        name: 'Shri Ram',
-                        username: 'shri',
-                        avatar: 'https://avatar.iran.liara.run/public/boy?username=shri',
-                        avatarType: 'teddy',
-                        bio: 'SoulSync Founder | Jai Shree Ram'
-                    });
-                    await AsyncStorage.setItem('ss_current_user', userId);
-                } else if (userId === LEGACY_TO_UUID['hari']) {
-                    setCurrentUser({
-                        id: userId,
-                        name: 'Hari Om',
-                        username: 'hari',
-                        avatar: 'https://avatar.iran.liara.run/public/boy?username=hari',
-                        avatarType: 'teddy',
-                        bio: 'SoulSync Dev | Om Namah Shivay'
-                    });
-                    await AsyncStorage.setItem('ss_current_user', userId);
-                }
+                console.warn('[AuthContext] synchronizeSession: No profile data found for user:', userId);
             }
         } catch (e) {
-            console.error('[AuthContext] Session synchronization failed:', e);
+            console.error('[AuthContext] synchronizeSession: Failed:', e);
         }
     }, []);
 
@@ -127,10 +120,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 .single();
 
             if (data && !error) {
+                // Use server URL immediately, cache in background
+                const avatarUrl = data.avatar_url || '';
+
+                // Background cache avatar
+                if (avatarUrl) {
+                    storageService.getAvatarUrl(userId, avatarUrl).catch(() => {});
+                }
+
                 setCurrentUser(prev => prev ? {
                     ...prev,
-                    name: data.name || prev.name,
-                    avatar: proxySupabaseUrl(data.avatar_url) || prev.avatar,
+                    name: data.display_name || data.name || prev.name,
+                    avatar: proxySupabaseUrl(avatarUrl) || prev.avatar,
                     avatarType: data.avatar_type || prev.avatarType,
                     teddyVariant: data.teddy_variant || prev.teddyVariant,
                     bio: data.bio || prev.bio,
@@ -167,16 +168,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     useEffect(() => {
         let isMounted = true;
         let timeoutId: ReturnType<typeof setTimeout>;
+        let safetyTimeoutId: ReturnType<typeof setTimeout>;
 
-        console.log('[AuthContext] Initializing - checking session...');
+        console.log('[AuthContext] useEffect[auth-init]: Initializing auth state...');
 
-        // Set a safety timeout to prevent app from hanging forever
+        // Overall safety timeout for the entire readying process (8s)
+        safetyTimeoutId = setTimeout(() => {
+            if (isMounted && !isReady) {
+                console.warn('[AuthContext] SAFETY TIMEOUT: Forcing app state to READY');
+                setIsReady(true);
+            }
+        }, 8000);
+
+        // Set a short timeout for the session check specifically
         const sessionPromise = supabase.auth.getSession();
         const timeoutPromise = new Promise<null>((resolve) => {
             timeoutId = setTimeout(() => {
-                console.log('[AuthContext] Session check timed out (10s), continuing anyway');
+                console.log('[AuthContext] session check: Timed out (3s), continuing anyway');
                 resolve(null);
-            }, 10000); // Increased to 10 seconds for better reliability in slow networks
+            }, 3000); // Reduced to 3 seconds to avoid iOS Watchdog timeout (10s limit)
         });
 
         Promise.race([sessionPromise, timeoutPromise]).then((sessionResult: any) => {
@@ -185,6 +195,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
             // If timeout fired (null), skip session check
             if (!sessionResult) {
+                console.log('[AuthContext] session check: Using fallback (timeout)');
                 setIsReady(true);
                 return;
             }
@@ -193,61 +204,63 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const error = sessionResult?.error;
 
             if (error) {
-                console.error('[AuthContext] Session check error:', error);
+                console.error('[AuthContext] session check: Supabase error:', error);
                 setIsReady(true); // Signal ready even on error to unblock UI
                 return;
             }
 
             if (session) {
-                console.log('[AuthContext] Session found, syncing profile...');
+                console.log('[AuthContext] session check: Session found, syncing profile for:', session.user.id);
                 synchronizeSession(session.user.id).finally(() => {
                     if (isMounted) {
-                        console.log('[AuthContext] Profile sync complete, readying app');
+                        if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
+                        console.log('[AuthContext] session check: Profile sync complete, readying app');
                         setIsReady(true);
                     }
                 });
             } else {
-                // FIX: Fallback to AsyncStorage for Developer Bypass accounts (shri/hari) 
-                // or if Supabase is slow but we have a cached user.
+                console.log('[AuthContext] session check: No session found, checking cache...');
                 AsyncStorage.getItem('ss_current_user').then(cachedUserId => {
                     if (isMounted) {
                         if (cachedUserId) {
-                            console.log('[AuthContext] No Supabase session, but found cached user:', cachedUserId);
+                            console.log('[AuthContext] session check: Found cached user, syncing:', cachedUserId);
                             synchronizeSession(cachedUserId).finally(() => {
-                                if (isMounted) setIsReady(true);
+                                if (isMounted) {
+                                    if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
+                                    setIsReady(true);
+                                }
                             });
                         } else {
-                            console.log('[AuthContext] No session or cached user found');
+                            console.log('[AuthContext] session check: No session or cached user found');
+                            if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
                             setIsReady(true);
                         }
                     }
-                }).catch(() => {
-                    if (isMounted) setIsReady(true);
+                }).catch((e) => {
+                    console.error('[AuthContext] cache check: Failed:', e);
+                    if (isMounted) {
+                        if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
+                        setIsReady(true);
+                    }
                 });
             }
         }).catch((err) => {
             if (!isMounted) return;
             clearTimeout(timeoutId);
-            console.error('[AuthContext] Session check exception:', err);
+            if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
+            console.error('[AuthContext] session check chain: Fatal exception:', err);
             setIsReady(true); // Unblock UI on error
         });
 
         return () => {
             isMounted = false;
             if (timeoutId) clearTimeout(timeoutId);
+            if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
         };
     }, [synchronizeSession]);
 
     const login = useCallback(async (emailOrUsername: string, password: string): Promise<boolean> => {
         const result = await authService.signInWithPassword(emailOrUsername, password);
-        
-        // FIX: If bypass login succeeds, manually sync session since onAuthStateChange won't trigger
-        if (result.success && result.user) {
-            const userId = result.user.id;
-            if (userId === LEGACY_TO_UUID['shri'] || userId === LEGACY_TO_UUID['hari']) {
-                await synchronizeSession(userId);
-            }
-        }
         
         return result.success;
     }, [synchronizeSession]);
@@ -273,11 +286,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const updateProfile = useCallback(async (updates: Partial<User>) => {
         if (!currentUser) return;
+        
+        // Optimistic local UI update immediately changes the DP/Name across the app
+        setCurrentUser(prev => prev ? { ...prev, ...updates } as User : null);
+
         try {
             const { error } = await supabase
                 .from('profiles')
                 .update({
                     name: updates.name,
+                    display_name: updates.name,
                     bio: updates.bio,
                     avatar_url: updates.avatar,
                     avatar_type: updates.avatarType,

@@ -1,16 +1,16 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, StatusBar, Alert, Platform } from 'react-native';
+import { View, Text, Pressable, StyleSheet, StatusBar, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { useApp } from '../../context/AppContext';
-import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
 import * as Linking from 'expo-linking';
 import Animated, {
-    useAnimatedScrollHandler,
     useSharedValue,
 } from 'react-native-reanimated';
 
 import ProfileHeader from '../../components/ProfileHeader';
+import { useScrollMotion } from '../../components/navigation/ScrollMotionProvider';
 
 const SettingItem = ({ icon, title, subtitle, onPress, rightElement, danger, activeTheme }: any) => (
     <Pressable style={styles.settingItem} onPress={onPress}>
@@ -31,16 +31,20 @@ export default function SettingsScreen() {
     const [notifications, setNotifications] = useState(true);
     const isNavigatingRef = useRef(false);
     const scrollY = useSharedValue(0);
+    const { onScroll: onMotionScroll, reset } = useScrollMotion('settings');
 
-    const onScroll = useAnimatedScrollHandler((event) => {
-        scrollY.value = event.contentOffset.y;
-    });
+    const onScroll = useCallback((event: any) => {
+        const y = event.nativeEvent.contentOffset.y;
+        scrollY.value = y;
+        onMotionScroll(event);
+    }, [onMotionScroll, scrollY]);
 
     useFocusEffect(
         useCallback(() => {
             isNavigatingRef.current = false;
+            reset();
             return undefined;
-        }, [])
+        }, [reset])
     );
 
     const openProfileEdit = () => {
@@ -71,7 +75,7 @@ export default function SettingsScreen() {
         const url = 'mailto:work.adarshthakur@gmail.com?subject=Soul%20-%20Problem%20Report';
         try {
             await Linking.openURL(url);
-        } catch (error) {
+        } catch {
             Alert.alert(
                 'Unable to open mail',
                 'Please contact us directly at:\n\nwork.adarshthakur@gmail.com',

@@ -2,16 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Env from './env';
 
-// Legacy ID mapping for transitioning to Supabase UUIDs
-export const SHRI_ID = '4d28b137-66ff-4417-b451-b1a421e34b25';
-export const HARI_ID = '02e52f08-6c1e-497f-93f6-b29c275b8ca4';
 
-export const LEGACY_TO_UUID: Record<string, string> = {
-    'shri': SHRI_ID,
-    'hari': HARI_ID,
-    'shri_id': SHRI_ID,
-    'hari_id': HARI_ID,
-};
 
 // Use DIRECT Supabase URL as base — Realtime WebSocket REQUIRES direct connection.
 // Cloudflare Workers CANNOT proxy WebSocket upgrade requests.

@@ -1,19 +1,33 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Platform } from 'react-native';
+import { View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Platform, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { SERVER_URL, safeFetchJson, proxySupabaseUrl } from '../config/api';
 import { useApp } from '../context/AppContext';
-import { MaterialIcons } from '@expo/vector-icons';
+import { useChat } from '../context/ChatContext';
+import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import GlassView from '../components/ui/GlassView';
 import { SoulAvatar } from '../components/SoulAvatar';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
+const SUPERUSERS: any[] = [];
+
+const SUPERUSERS_IDS: string[] = [];
+
 export default function SearchScreen() {
     const { currentUser } = useApp();
+    const { 
+        updateContactPreview, 
+        contacts, 
+        outgoingRequestIds, 
+        refreshRequests 
+    } = useChat();
+    
     const [query, setQuery] = useState('');
-    const [results, setResults] = useState([]);
+    const [results, setResults] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
+    const [connectingId, setConnectingId] = useState<string | null>(null);
     const [searchError, setSearchError] = useState<string | null>(null);
     const router = useRouter();
 
@@ -35,20 +49,76 @@ export default function SearchScreen() {
                 }
             );
 
-            if (success && data?.success) {
-                setResults(data.users);
-            } else {
+            let serverUsers = (success && data?.success) ? data.users : [];
+            
+            // Add local fallback for superusers if they match the query
+            const lowerText = text.toLowerCase();
+            const matchedSuperusers = SUPERUSERS.filter(s => 
+                s.username.toLowerCase().includes(lowerText) || 
+                s.full_name.toLowerCase().includes(lowerText)
+            );
+
+            // Filter out duplicates if server already returned them
+            const additionalUsers = matchedSuperusers.filter(s => !serverUsers.some((u: any) => u.id === s.id));
+
+            // Map statuses based on global context (more reliable than just server results)
+            const finalUsers = [...serverUsers, ...additionalUsers].map(user => {
+                if (contacts.find(c => c.id === user.id)) {
+                    return { ...user, connectionStatus: 'connected' };
+                }
+                if (outgoingRequestIds.includes(user.id)) {
+                    return { ...user, connectionStatus: 'request_sent' };
+                }
+                return { ...user, connectionStatus: user.connectionStatus || 'not_connected' };
+            });
+
+            console.log(`[Search] Text: "${text}", Found: ${finalUsers.length} (Server: ${serverUsers.length}, Local: ${additionalUsers.length})`);
+            setResults(finalUsers);
+            
+            if (!success && finalUsers.length === 0) {
                 const msg = error || 'Search failed';
                 console.warn('[Search] Search failed:', msg);
                 setSearchError(msg);
+            } else {
+                setSearchError(null);
             }
         } catch (err: any) {
             console.warn('[Search] Unexpected error:', err);
-            setSearchError(err?.message || 'Network error');
+            
+            // Even on error, show matched superusers as fallback
+            const lowerText = text.toLowerCase();
+            const fallback = SUPERUSERS.filter(s => 
+                s.username.toLowerCase().includes(lowerText) || 
+                s.full_name.toLowerCase().includes(lowerText)
+            );
+            
+            if (fallback.length > 0) {
+                // Map statuses even for fallback results
+                const mappedFallback = fallback.map(user => {
+                    if (contacts.find(c => c.id === user.id)) {
+                        return { ...user, connectionStatus: 'connected' };
+                    }
+                    if (outgoingRequestIds.includes(user.id)) {
+                        return { ...user, connectionStatus: 'request_sent' };
+                    }
+                    return { ...user, connectionStatus: 'not_connected' };
+                });
+                setResults(mappedFallback);
+                setSearchError(null);
+            } else {
+                setSearchError(err?.message || 'Network error');
+            }
         } finally {
             setLoading(false);
         }
-    }, [currentUser]);
+    }, [currentUser, contacts, outgoingRequestIds]);
+
+    useFocusEffect(
+        useCallback(() => {
+            // Refresh requests every time the screen comes into focus
+            refreshRequests();
+        }, [refreshRequests])
+    );
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -58,7 +128,10 @@ export default function SearchScreen() {
     }, [query, searchUsers]);
 
     const sendRequest = async (receiverId: string) => {
+        setConnectingId(receiverId);
         try {
+            const isSuperuser = SUPERUSERS_IDS.includes(receiverId);
+
             const { success, data, error } = await safeFetchJson<any>(
                 `${SERVER_URL}/api/connections/request`, 
                 {
@@ -72,13 +145,42 @@ export default function SearchScreen() {
             );
 
             if (success && data?.success) {
-                // Update local status optimistically
+                // Update local status ONLY if server confirmed success
                 setResults(prev => prev.map(u => u.id === receiverId ? { ...u, connectionStatus: 'request_sent' } : u));
-            } else if (error) {
+                
+                // Refresh global requests state to sync other screens
+                refreshRequests();
+            } else {
                 console.warn('[Search] Request failed:', error);
+                Alert.alert('Connection Error', error || 'Could not send request. Please ensure the server is running.');
             }
         } catch (err) {
             console.warn('[Search] Unexpected request error:', err);
+        } finally {
+            setConnectingId(null);
+        }
+    };
+
+    const cancelRequest = async (receiverId: string) => {
+        setConnectingId(receiverId);
+        try {
+            // Use the new dedicated receiver-based endpoint for reliability
+            const { success, data } = await safeFetchJson<any>(
+                `${SERVER_URL}/api/connections/request/receiver/${receiverId}`, 
+                {
+                    method: 'DELETE',
+                    headers: { 'x-user-id': currentUser?.id || '' }
+                }
+            );
+
+            if (success && data?.success) {
+                setResults(prev => prev.map(u => u.id === receiverId ? { ...u, connectionStatus: 'not_connected' } : u));
+                refreshRequests();
+            }
+        } catch (err) {
+            console.warn('[Search] Cancel error:', err);
+        } finally {
+            setConnectingId(null);
         }
     };
 
@@ -93,31 +195,59 @@ export default function SearchScreen() {
                         <Text style={styles.fullName}>{item.full_name || `@${item.username}`}</Text>
                     </View>
                     
-                    {item.connectionStatus === 'not_connected' && (
-                        <TouchableOpacity style={styles.connectButton} onPress={() => sendRequest(item.id)}>
-                            <Text style={styles.connectText}>Connect</Text>
-                        </TouchableOpacity>
-                    )}
-                    
-                    {item.connectionStatus === 'request_sent' && (
-                        <View style={styles.pendingBadge}>
-                            <MaterialIcons name="hourglass-empty" size={14} color="rgba(255,255,255,0.6)" />
-                            <Text style={styles.pendingText}>Sent</Text>
-                        </View>
-                    )}
-
-                    {item.connectionStatus === 'request_received' && (
+                    {item.connectionStatus === 'connected' ? (
                         <TouchableOpacity 
-                            style={[styles.connectButton, { backgroundColor: '#22c55e' }]} 
-                            onPress={() => router.push('/requests')} // We'll implement this screen next
+                            style={styles.chatButton} 
+                            onPress={() => router.push({
+                                pathname: '/chat/[id]',
+                                params: { id: item.id, name: item.username }
+                            })}
                         >
-                            <Text style={styles.connectText}>Accept</Text>
+                            <LinearGradient
+                                colors={['#22c55e', '#15803d']}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 1 }}
+                                style={styles.chatButtonGradient}
+                            >
+                                <Ionicons name="chatbubble-ellipses" size={20} color="#fff" />
+                            </LinearGradient>
                         </TouchableOpacity>
-                    )}
-                    
-                    {item.connectionStatus === 'connected' && (
-                        <TouchableOpacity style={styles.chatButton} onPress={() => router.push(`/chat/${item.id}`)}>
-                            <MaterialIcons name="chat" size={20} color="#fff" />
+                    ) : item.connectionStatus === 'request_sent' ? (
+                        <View style={styles.requestSentGroup}>
+                            <View style={styles.pendingBadge}>
+                                <MaterialIcons name="done" size={16} color="rgba(255,255,255,0.8)" />
+                                <Text style={styles.pendingText}>Sent</Text>
+                            </View>
+                            <TouchableOpacity 
+                                style={styles.cancelButton} 
+                                onPress={() => cancelRequest(item.id)}
+                                disabled={connectingId === item.id}
+                            >
+                                {connectingId === item.id ? (
+                                    <ActivityIndicator size="small" color="#ff4444" />
+                                ) : (
+                                    <Text style={styles.cancelText}>Cancel</Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    ) : (
+                        <TouchableOpacity 
+                            style={styles.connectButtonWrapper} 
+                            onPress={() => sendRequest(item.id)}
+                            disabled={connectingId === item.id}
+                        >
+                            <LinearGradient
+                                colors={['#FF6A88', '#FF1E56']}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 1 }}
+                                style={styles.connectButton}
+                            >
+                                {connectingId === item.id ? (
+                                    <ActivityIndicator size="small" color="#fff" />
+                                ) : (
+                                    <Text style={styles.connectText}>Send Request</Text>
+                                )}
+                            </LinearGradient>
                         </TouchableOpacity>
                     )}
                 </View>
@@ -215,7 +345,8 @@ const styles = StyleSheet.create({
     userInfo: { flex: 1, marginLeft: 16 },
     username: { color: '#fff', fontSize: 17, fontWeight: '700' },
     fullName: { color: 'rgba(255,255,255,0.5)', fontSize: 14, marginTop: 2 },
-    connectButton: { backgroundColor: '#3b82f6', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20 },
+    connectButtonWrapper: { borderRadius: 20, overflow: 'hidden' },
+    connectButton: { paddingHorizontal: 16, paddingVertical: 10, justifyContent: 'center', alignItems: 'center', minWidth: 110 },
     connectText: { color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.5 },
     pendingBadge: { 
         flexDirection: 'row', 
@@ -227,18 +358,39 @@ const styles = StyleSheet.create({
         gap: 6
     },
     pendingText: { color: 'rgba(255,255,255,0.5)', fontWeight: '600', fontSize: 13 },
+    requestSentGroup: { 
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        gap: 8 
+    },
+    cancelButton: {
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        backgroundColor: 'rgba(255,255,255,0.05)',
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)'
+    },
+    cancelText: {
+        color: '#ff4444',
+        fontSize: 12,
+        fontWeight: '700'
+    },
     chatButton: { 
-        backgroundColor: '#22c55e', 
         width: 44, 
         height: 44, 
         borderRadius: 22, 
-        justifyContent: 'center', 
-        alignItems: 'center',
+        overflow: 'hidden',
         shadowColor: '#22c55e',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 8,
         elevation: 4
+    },
+    chatButtonGradient: {
+        flex: 1,
+        justifyContent: 'center', 
+        alignItems: 'center',
     },
     emptyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: 100 },
     emptyText: { color: 'rgba(255,255,255,0.3)', textAlign: 'center', marginTop: 16, fontSize: 16, fontWeight: '500' },

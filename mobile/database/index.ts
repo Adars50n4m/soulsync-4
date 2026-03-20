@@ -22,7 +22,7 @@ export const getDB = async (): Promise<any> => {
         return null;
     }
 
-    dbInstance = await SQLite.openDatabaseAsync('soulsync.db');
+    dbInstance = await SQLite.openDatabaseAsync('Soul.db');
     await MIGRATE_DB(dbInstance);
     return dbInstance;
   } catch (error) {

@@ -310,7 +310,7 @@ const SettingsScreen: React.FC = () => {
                 </div>
                 <div className="flex flex-col gap-1">
                   <h4 className="font-black text-[13px] tracking-tight text-danger uppercase">Logout</h4>
-                  <p className="text-[9px] text-danger/30 font-black uppercase tracking-[0.15em]">Sign out of SoulSync</p>
+                  <p className="text-[9px] text-danger/30 font-black uppercase tracking-[0.15em]">Sign out of Soul</p>
                 </div>
             </button>
           </div>

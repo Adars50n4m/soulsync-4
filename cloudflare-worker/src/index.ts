@@ -1,5 +1,5 @@
 /**
- * SoulSync Upload Worker
+ * Soul Upload Worker
  * Handles media uploads (avatars, status images/videos) to Cloudflare R2
  */
 

@@ -10,16 +10,25 @@ import { useStatus, StatusProvider } from './StatusContext';
 // We'll define basic types here if they aren't easily importable, 
 // but try to keep it lean.
 export type ThemeName = 'midnight' | 'ocean' | 'forest' | 'sunset' | 'lavender' | 'crimson' | 'cyberpunk';
+export type PrivacyValue = 'everyone' | 'contacts' | 'nobody';
+
+export interface AppTheme {
+    primary: string;
+    accent: string;
+    background: string;
+    surface: string;
+    bg: string;
+}
 
 const THEME_MAP = {
-    midnight: { primary: '#BC002A', accent: '#FF6A88', background: '#000', surface: '#12101A' },
-    ocean: { primary: '#0EA5E9', accent: '#67E8F9', background: '#03131D', surface: '#0A2230' },
-    forest: { primary: '#22C55E', accent: '#86EFAC', background: '#04120A', surface: '#102216' },
-    sunset: { primary: '#F97316', accent: '#FDBA74', background: '#160904', surface: '#2A140C' },
-    lavender: { primary: '#A855F7', accent: '#E9D5FF', background: '#100517', surface: '#1D0F29' },
-    crimson: { primary: '#DC2626', accent: '#FCA5A5', background: '#140607', surface: '#2A1114' },
-    cyberpunk: { primary: '#FACC15', accent: '#67E8F9', background: '#08080A', surface: '#18181B' },
-} satisfies Record<ThemeName, { primary: string; accent: string; background: string; surface: string }>;
+    midnight: { primary: '#BC002A', accent: '#FF6A88', background: '#000', surface: '#12101A', bg: '#000' },
+    ocean: { primary: '#0EA5E9', accent: '#67E8F9', background: '#03131D', surface: '#0A2230', bg: '#03131D' },
+    forest: { primary: '#22C55E', accent: '#86EFAC', background: '#04120A', surface: '#102216', bg: '#04120A' },
+    sunset: { primary: '#F97316', accent: '#FDBA74', background: '#160904', surface: '#2A140C', bg: '#160904' },
+    lavender: { primary: '#A855F7', accent: '#E9D5FF', background: '#100517', surface: '#1D0F29', bg: '#100517' },
+    crimson: { primary: '#DC2626', accent: '#FCA5A5', background: '#140607', surface: '#2A1114', bg: '#140607' },
+    cyberpunk: { primary: '#FACC15', accent: '#67E8F9', background: '#08080A', surface: '#18181B', bg: '#08080A' },
+} satisfies Record<ThemeName, AppTheme>;
 
 export const USERS: Record<string, { id: string }> = {};
 
@@ -36,6 +45,8 @@ interface AppContextType {
 
     // Chat
     contacts: any[];
+    setContacts: any;
+    refreshContactsFromServer: any;
     messages: any;
     sendChatMessage: any;
     updateMessage: any;
@@ -50,6 +61,8 @@ interface AppContextType {
     uploadProgressTracker: Record<string, number>;
     otherUser: any | null;
     fetchOtherUserProfile: any;
+    pendingRequestsCount: number;
+    broadcastProfileUpdate: (updates: Partial<any>) => void;
     
     // Status
     statuses: any[];
@@ -76,6 +89,9 @@ interface AppContextType {
     musicState: any;
     playSong: any;
     togglePlayMusic: any;
+    toggleFavoriteSong: any;
+    getPlaybackPosition: any;
+    seekTo: any;
 
     // Core Settings
     theme: ThemeName;
@@ -90,7 +106,27 @@ interface AppContextType {
     // Security
     isLocked: boolean;
     unlockApp: () => void;
+    biometricEnabled: boolean;
+    pinEnabled: boolean;
+    pin: string | null;
+    setBiometricEnabled: (val: boolean) => void;
+    setPinEnabled: (val: boolean) => void;
+    setPin: (val: string | null) => void;
+    
+    // Status helpers
+    saveNote: (text: string) => Promise<boolean>;
+    deleteNote: () => Promise<boolean>;
     refreshLocalCache: () => Promise<void>;
+    toggleHeart: (chatId: string, messageId: string) => Promise<void>;
+    
+    // Privacy
+    privacySettings: {
+        lastSeen: PrivacyValue;
+        profilePhoto: PrivacyValue;
+        status: PrivacyValue;
+        readReceipts: boolean;
+    };
+    updatePrivacy: (settings: Partial<AppContextType['privacySettings']>) => void;
 }
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -109,6 +145,54 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         isRealtimeConnected: true
     });
     const [isLocked, setIsLocked] = useState(false);
+    const [biometricEnabled, setBiometricEnabledState] = useState(false);
+    const [pinEnabled, setPinEnabledState] = useState(false);
+    const [pin, setPinState] = useState<string | null>(null);
+
+    const [privacySettings, setPrivacySettingsState] = useState({
+        lastSeen: 'everyone' as PrivacyValue,
+        profilePhoto: 'everyone' as PrivacyValue,
+        status: 'everyone' as PrivacyValue,
+        readReceipts: true
+    });
+
+    useEffect(() => {
+        const loadSettings = async () => {
+            const [b, pe, p, priv] = await Promise.all([
+                AsyncStorage.getItem('ss_biometric_enabled'),
+                AsyncStorage.getItem('ss_pin_enabled'),
+                AsyncStorage.getItem('ss_pin'),
+                AsyncStorage.getItem('ss_privacy')
+            ]);
+            if (b) setBiometricEnabledState(b === 'true');
+            if (pe) setPinEnabledState(pe === 'true');
+            if (p) setPinState(p);
+            if (priv) setPrivacySettingsState(JSON.parse(priv));
+        };
+        loadSettings();
+    }, []);
+
+    const updatePrivacy = (newSettings: Partial<AppContextType['privacySettings']>) => {
+        const updated = { ...privacySettings, ...newSettings };
+        setPrivacySettingsState(updated);
+        AsyncStorage.setItem('ss_privacy', JSON.stringify(updated));
+    };
+
+    const setBiometricEnabled = (val: boolean) => {
+        setBiometricEnabledState(val);
+        AsyncStorage.setItem('ss_biometric_enabled', val ? 'true' : 'false');
+    };
+
+    const setPinEnabled = (val: boolean) => {
+        setPinEnabledState(val);
+        AsyncStorage.setItem('ss_pin_enabled', val ? 'true' : 'false');
+    };
+
+    const setPin = (val: string | null) => {
+        setPinState(val);
+        if (val) AsyncStorage.setItem('ss_pin', val);
+        else AsyncStorage.removeItem('ss_pin');
+    };
 
     useEffect(() => {
         AsyncStorage.getItem('ss_theme').then(t => {
@@ -138,6 +222,8 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
 
         // Chat
         contacts: chat.contacts,
+        setContacts: chat.setContacts,
+        refreshContactsFromServer: chat.refreshContactsFromServer,
         messages: chat.messages,
         sendChatMessage: chat.sendChatMessage,
         updateMessage: chat.updateMessage,
@@ -152,6 +238,8 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         uploadProgressTracker: chat.uploadProgressTracker,
         otherUser: chat.otherUser,
         fetchOtherUserProfile: chat.fetchOtherUserProfile,
+        pendingRequestsCount: chat.pendingRequestsCount,
+        broadcastProfileUpdate: chat.broadcastProfileUpdate,
 
         // Status
         statuses: status.stories,
@@ -178,19 +266,47 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         musicState: music.musicState,
         playSong: music.playSong,
         togglePlayMusic: music.togglePlayMusic,
+        toggleFavoriteSong: music.toggleFavoriteSong,
+        getPlaybackPosition: music.getPlaybackPosition,
+        seekTo: music.seekTo,
 
         // Settings
         theme,
         activeTheme: THEME_MAP[theme],
+        // Setting helper methods
         setTheme,
         connectivity,
         isLocked,
         unlockApp: () => setIsLocked(false),
-        refreshLocalCache: chat.refreshLocalCache
+        biometricEnabled,
+        pinEnabled,
+        pin,
+        setBiometricEnabled,
+        setPinEnabled,
+        setPin,
+        
+        // Status Helpers
+        saveNote: status.updateNote,
+        deleteNote: () => status.updateNote(null),
+        refreshLocalCache: chat.refreshLocalCache,
+        toggleHeart: async (chatId: string, messageId: string) => {
+            const chatMessages = chat.messages[chatId] || [];
+            const msg = chatMessages.find((m: any) => m.id === messageId);
+            const hasHeart = msg?.reactions?.some((r: string) => 
+                ['❤️', '❤', '\u2764\uFE0F', '\u2764'].includes(r)
+            );
+            await chat.addReaction(chatId, messageId, hasHeart ? null : '❤️');
+        },
+        
+        // Privacy
+        privacySettings,
+        updatePrivacy
     };
 
     return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 };
+
+export const THEMES: Record<ThemeName, AppTheme> = THEME_MAP;
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     return (

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import Animated, { SharedTransition, withSpring } from 'react-native-reanimated';
+import Animated, { withSpring } from 'react-native-reanimated';
+const SharedTransition = (require('react-native-reanimated') as any).SharedTransition;
 import { View, StyleSheet, Platform } from 'react-native';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';

@@ -20,10 +20,10 @@ Go to: https://dash.cloudflare.com/
 
 ### 3. Create Bucket & Deploy Worker
 ```bash
-cd /Volumes/Work/soulsync-4/cloudflare-worker
+cd /Volumes/Work/Soul-4/cloudflare-worker
 
 # Create bucket (FREE)
-wrangler r2 bucket create soulsync-media
+wrangler r2 bucket create Soul-media
 
 # Install dependencies
 npm install
@@ -36,10 +36,10 @@ wrangler secret put SUPABASE_JWT_SECRET
 npm run deploy
 ```
 
-**Save the Worker URL shown!** (e.g., `https://soulsync-upload-worker.abc123.workers.dev`)
+**Save the Worker URL shown!** (e.g., `https://Soul-upload-worker.abc123.workers.dev`)
 
 ### 4. Get R2 Public URL (FREE r2.dev)
-Go to: https://dash.cloudflare.com/ → R2 → `soulsync-media`
+Go to: https://dash.cloudflare.com/ → R2 → `Soul-media`
 - Click **Settings** tab
 - Under **Public Access**, click **Allow Access**
 - Click **Connect R2.dev subdomain**
@@ -54,15 +54,15 @@ wrangler secret put R2_PUBLIC_DOMAIN
 ### 6. Test Worker
 ```bash
 # Replace with YOUR Worker URL
-curl https://soulsync-upload-worker.YOUR-SUBDOMAIN.workers.dev/health
+curl https://Soul-upload-worker.YOUR-SUBDOMAIN.workers.dev/health
 ```
 
 Should show: `{"status":"ok","timestamp":"..."}`
 
 ### 7. Configure Mobile App
-Create `/Volumes/Work/soulsync-4/mobile/.env`:
+Create `/Volumes/Work/Soul-4/mobile/.env`:
 ```env
-EXPO_PUBLIC_R2_WORKER_URL=https://soulsync-upload-worker.YOUR-SUBDOMAIN.workers.dev
+EXPO_PUBLIC_R2_WORKER_URL=https://Soul-upload-worker.YOUR-SUBDOMAIN.workers.dev
 EXPO_PUBLIC_R2_PUBLIC_URL=https://pub-XXXXXXXXXXXX.r2.dev
 EXPO_PUBLIC_USE_R2=false
 ```
@@ -71,7 +71,7 @@ Replace `YOUR-SUBDOMAIN` and `XXXXXXXXXXXX` with your actual values!
 
 ### 8. Test in App
 ```bash
-cd /Volumes/Work/soulsync-4/mobile
+cd /Volumes/Work/Soul-4/mobile
 npx expo start -c
 ```
 
@@ -82,7 +82,7 @@ npx expo start -c
 5. Check console for: `✅ Upload successful`
 
 ### 9. Verify Upload
-Go to: https://dash.cloudflare.com/ → R2 → `soulsync-media` → **Objects**
+Go to: https://dash.cloudflare.com/ → R2 → `Soul-media` → **Objects**
 
 You should see your uploaded file! 🎉
 

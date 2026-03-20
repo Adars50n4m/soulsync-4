@@ -1,5 +1,5 @@
 /**
- * SoulSync Supabase Proxy Worker
+ * Soul Supabase Proxy Worker
  *
  * Proxies all Supabase traffic (REST API, Auth, Storage, Realtime WebSocket)
  * through Cloudflare to bypass ISP-level blocks on *.supabase.co in India.

@@ -6,7 +6,7 @@ import App from './App.tsx';
 const container = document.getElementById('root');
 
 if (!container) {
-  throw new Error('SoulSync Matrix: Root container not found.');
+  throw new Error('Soul Matrix: Root container not found.');
 }
 
 const root = createRoot(container);

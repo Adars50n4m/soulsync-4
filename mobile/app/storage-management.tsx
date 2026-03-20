@@ -100,7 +100,7 @@ export default function StorageManagementScreen() {
             let appCacheSize = 0;
 
             // SQLite DB size
-            const dbPath = `${FileSystem.documentDirectory}SQLite/soulsync.db`;
+            const dbPath = `${(FileSystem as any).documentDirectory}SQLite/Soul.db`;
             try {
                 const dbInfo = await FileSystem.getInfoAsync(dbPath);
                 if (dbInfo.exists && 'size' in dbInfo) {
@@ -110,13 +110,13 @@ export default function StorageManagementScreen() {
 
             // Cache directory size
             try {
-                if (FileSystem.cacheDirectory) {
-                    const files = await FileSystem.readDirectoryAsync(FileSystem.cacheDirectory);
+                if ((FileSystem as any).cacheDirectory) {
+                    const files = await FileSystem.readDirectoryAsync((FileSystem as any).cacheDirectory);
                     const sizes = await Promise.all(
                         files.map(async (file) => {
                             try {
                                 const info = await FileSystem.getInfoAsync(
-                                    `${FileSystem.cacheDirectory}${file}`
+                                    `${(FileSystem as any).cacheDirectory}${file}`
                                 );
                                 return info.exists && 'size' in info ? (info.size || 0) : 0;
                             } catch { return 0; }
@@ -249,12 +249,12 @@ export default function StorageManagementScreen() {
                     onPress: async () => {
                         setClearingCache(true);
                         try {
-                            if (FileSystem.cacheDirectory) {
-                                const files = await FileSystem.readDirectoryAsync(FileSystem.cacheDirectory);
+                            if ((FileSystem as any).cacheDirectory) {
+                                const files = await FileSystem.readDirectoryAsync((FileSystem as any).cacheDirectory);
                                 await Promise.all(
                                     files.map(file =>
                                         FileSystem.deleteAsync(
-                                            `${FileSystem.cacheDirectory}${file}`,
+                                            `${(FileSystem as any).cacheDirectory}${file}`,
                                             { idempotent: true }
                                         )
                                     )
@@ -286,15 +286,15 @@ export default function StorageManagementScreen() {
                     onPress: async () => {
                         try {
                             await AsyncStorage.clear();
-                            if (FileSystem.cacheDirectory) {
-                                const files = await FileSystem.readDirectoryAsync(FileSystem.cacheDirectory);
+                            if ((FileSystem as any).cacheDirectory) {
+                                const files = await FileSystem.readDirectoryAsync((FileSystem as any).cacheDirectory);
                                 await Promise.all(
                                     files.map(f =>
-                                        FileSystem.deleteAsync(`${FileSystem.cacheDirectory}${f}`, { idempotent: true })
+                                        FileSystem.deleteAsync(`${(FileSystem as any).cacheDirectory}${f}`, { idempotent: true })
                                     )
                                 );
                             }
-                            const dbPath = `${FileSystem.documentDirectory}SQLite/soulsync.db`;
+                            const dbPath = `${(FileSystem as any).documentDirectory}SQLite/Soul.db`;
                             await FileSystem.deleteAsync(dbPath, { idempotent: true });
                             Alert.alert('Done', 'All data cleared. Please restart the app.');
                         } catch {
@@ -394,16 +394,16 @@ export default function StorageManagementScreen() {
                     </View>
                 )}
 
-                {/* Section 2: SoulSync App Storage */}
+                {/* Section 2: Soul App Storage */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionHeader}>SoulSync Storage</Text>
+                    <Text style={styles.sectionHeader}>Soul Storage</Text>
                     <GlassView intensity={10} tint="dark" style={styles.glassContainer} >
                         <View style={styles.appStorageHeader}>
                             <View style={[styles.appIconContainer, { backgroundColor: `${activeTheme.primary}20` }]}>
                                 <Ionicons name="infinite" size={24} color={activeTheme.primary} />
                             </View>
                             <View style={{ flex: 1 }}>
-                                <Text style={styles.appStorageTitle}>SoulSync</Text>
+                                <Text style={styles.appStorageTitle}>Soul</Text>
                                 <Text style={styles.appStorageSubtitle}>
                                     {formatBytes((storageInfo?.dbSize || 0) + (storageInfo?.appCacheSize || 0))}
                                 </Text>

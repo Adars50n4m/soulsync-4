@@ -12,6 +12,7 @@ interface MusicContextType {
     togglePlayMusic: () => Promise<void>;
     toggleFavoriteSong: (song: Song) => Promise<void>;
     seekTo: (position: number) => Promise<void>;
+    getPlaybackPosition: () => Promise<number>;
 }
 
 export const MusicContext = createContext<MusicContextType | undefined>(undefined);
@@ -83,7 +84,20 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         playSong,
         togglePlayMusic,
         toggleFavoriteSong,
-        seekTo: async () => {}, // TODO
+        seekTo: async (position: number) => {
+            if (soundRef.current) {
+                await soundRef.current.setPositionAsync(position);
+            }
+        },
+        getPlaybackPosition: async () => {
+            if (soundRef.current) {
+                const status = await soundRef.current.getStatusAsync();
+                if (status.isLoaded) {
+                    return status.positionMillis;
+                }
+            }
+            return 0;
+        }
     };
 
     return <MusicContext.Provider value={value}>{children}</MusicContext.Provider>;

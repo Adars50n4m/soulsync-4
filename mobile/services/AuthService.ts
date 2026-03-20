@@ -37,8 +37,8 @@
 
 import { supabase } from '../config/supabase';
 
-const SHRI_ID = '4d28b137-66ff-4417-b451-b1a421e34b25';
-const HARI_ID = '02e52f08-6c1e-497f-93f6-b29c275b8ca4';
+const SHRI_ID = 'f00f00f0-0000-0000-0000-000000000002';
+const HARI_ID = 'f00f00f0-0000-0000-0000-000000000001';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { makeRedirectUri } from 'expo-auth-session';
@@ -57,6 +57,7 @@ export interface UserProfile {
   username: string;
   displayName: string;
   avatarUrl: string | null;
+  avatarType?: 'default' | 'uploaded' | 'google';
   bio: string | null;
   email: string;
   createdAt: string;
@@ -95,35 +96,6 @@ class AuthService {
 
       let targetInput = input;
       let targetPassword = password;
-
-      // ── DEVELOPER BYPASS (Internal Testing & Owner Accounts) ──────────────
-      // Allows quick access for Shri & Hari without needing real Auth emails.
-      if (input === 'shri' && password.toLowerCase() === 'hari') {
-        return {
-          success: true,
-          isNewUser: false,
-          user: {
-            id: SHRI_ID,
-            username: 'shri',
-            displayName: 'Shri Account',
-            email: 'shri@internal',
-            createdAt: new Date().toISOString(),
-          } as any,
-        };
-      }
-      if (input === 'hari' && password.toLowerCase() === 'shri') {
-        return {
-          success: true,
-          isNewUser: false,
-          user: {
-            id: HARI_ID,
-            username: 'hari',
-            displayName: 'Hari Account',
-            email: 'hari@internal',
-            createdAt: new Date().toISOString(),
-          } as any,
-        };
-      }
 
       // Resolve username → email if needed
       let email = input;
@@ -432,7 +404,8 @@ class AuthService {
         path: 'auth/callback',
       });
 
-      console.log(`[Auth] Redirect URI: ${redirectUri}`);
+      console.info(`[Auth] 🔗 Using Redirect URI: ${redirectUri}`);
+      console.log(`[Auth] Full redirect URI details:`, { scheme: 'mobile', path: 'auth/callback', generated: redirectUri });
 
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
@@ -480,9 +453,19 @@ class AuthService {
 
     } catch (err: any) {
       console.error('[Auth] signInWithGoogle error:', err);
+      const msg = err?.message ?? '';
+      
+      // Specifically handle Google internal-only restriction errors
+      if (msg.includes('org_internal') || msg.includes('403')) {
+        return { 
+          success: false, 
+          error: 'Access restricted: This app is set to "Internal Only" in Google Console. Please ask the developer to set the User Type to "External".' 
+        };
+      }
+      
       return {
         success: false,
-        error: err?.message ?? 'Google sign-in failed. Please try again.',
+        error: msg || 'Google sign-in failed. Please try again.',
       };
     }
   }
@@ -605,6 +588,7 @@ class AuthService {
           id:           user.id,
           username:     params.username.trim().toLowerCase(),
           display_name: params.displayName.trim(),
+          name:         params.displayName.trim(),
           avatar_url:   avatarUrl,
           updated_at:   new Date().toISOString(),
         }, { onConflict: 'id' });
@@ -648,7 +632,7 @@ class AuthService {
       }
 
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: makeRedirectUri({ scheme: 'soulsync', path: 'forgot-password' }),
+        redirectTo: makeRedirectUri({ scheme: 'Soul', path: 'forgot-password' }),
       });
 
       if (error) throw error;

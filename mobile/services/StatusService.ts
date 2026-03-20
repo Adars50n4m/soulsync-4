@@ -16,10 +16,6 @@ export interface PostStatusParams {
 }
 
 class StatusService {
-  /**
-   * Fetches active mutual friends IDs.
-   * Stories and Notes are only visible if both users have accepted each other.
-   */
   async getMutualFriendIds(userId: string): Promise<string[]> {
     try {
       const { data, error } = await supabase

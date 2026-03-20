@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../../Downloads/Refference"
+		}
+	],
+	"settings": {
+		"geminicodeassist.outlines.automaticOutlineGeneration": true
+	}
+}

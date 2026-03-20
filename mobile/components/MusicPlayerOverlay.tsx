@@ -247,7 +247,7 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                                             {musicState.currentSong?.name || 'Select a Song'}
                                         </Text>
                                         <Text style={styles.trackArtist} numberOfLines={1}>
-                                            {musicState.currentSong?.artist || 'SoulSync Music'}
+                                            {musicState.currentSong?.artist || 'Soul Music'}
                                         </Text>
                                     </View>
 

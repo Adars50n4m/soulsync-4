@@ -18,6 +18,15 @@ export type MessageStatus =
   | 'read'       // Receiver opened it
   | 'failed';    // Gave up after MAX_RETRY_COUNT attempts
 
+export type MediaStatus = 
+  | 'not_downloaded'
+  | 'downloading'
+  | 'downloaded'
+  | 'download_failed'
+  | 'uploading'
+  | 'uploaded'
+  | 'upload_failed';
+
 export interface QueuedMessage {
   id: string;
   chatId: string;
@@ -74,7 +83,7 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
   _dbPromise = (async () => {
     try {
       console.log('[SQLite] Opening database...');
-      const db = await SQLite.openDatabaseAsync('soulsync.db');
+      const db = await SQLite.openDatabaseAsync('Soul.db');
 
       await db.execAsync('PRAGMA journal_mode = WAL;');
       await db.execAsync('PRAGMA foreign_keys = ON;');
@@ -123,7 +132,7 @@ async function checkDatabaseIntegrity(db: SQLite.SQLiteDatabase): Promise<boolea
 }
 
 // FIX #19: Periodic WAL checkpoint to prevent data loss on crash
-let checkpointInterval: NodeJS.Timeout | null = null;
+let checkpointInterval: any = null;
 
 function setupWalCheckpoint(db: SQLite.SQLiteDatabase): void {
   // Run checkpoint every 30 seconds to consolidate WAL data
@@ -209,7 +218,6 @@ class OfflineService {
 
   async saveMessage(chatId: string, msg: LocalMessage): Promise<void> {
     const db = await getDb();
-    // Ensure receiver is set correctly based on sender
     const receiver = msg.sender === 'me' ? chatId : 'me';
     
     await db.runAsync(
@@ -306,6 +314,26 @@ class OfflineService {
     await db.runAsync(sql, params);
   }
 
+  async updateMediaStatus(messageId: string, status: MediaStatus): Promise<void> {
+    const db = await getDb();
+    // Map media status to message status for UI consistency if needed
+    // or just track it separately. Here we update the error_message or similar if failed.
+    if (status === 'download_failed') {
+      await db.runAsync(`UPDATE messages SET status = 'failed', error_message = 'Download failed' WHERE id = ?;`, [messageId]);
+    } else if (status === 'downloading') {
+       // Optional: track downloading state
+    }
+  }
+
+  async updateLocalFileUri(messageId: string, uri: string, fileSize?: number): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(`UPDATE messages SET local_file_uri = ? WHERE id = ?;`, [uri, messageId]);
+    if (fileSize) {
+      await db.runAsync(`INSERT OR REPLACE INTO media_downloads (message_id, remote_url, local_uri, file_size) 
+                         SELECT id, media_url, ?, ? FROM messages WHERE id = ?;`, [uri, fileSize, messageId]);
+    }
+  }
+
   // FIX #16: Get message acknowledgment timestamps
   async getMessageAcknowledgments(messageId: string): Promise<{ deliveredAt?: string; readAt?: string } | null> {
     const db = await getDb();
@@ -365,13 +393,11 @@ class OfflineService {
             await db.runAsync(`DELETE FROM messages WHERE id = ?;`, [oldId]);
             console.log(`[LocalDBService] ✅ Merge complete for ${newId}`);
         } else {
-            // Normal case: swap the ID
             await db.runAsync(`UPDATE messages SET id = ? WHERE id = ?;`, [newId, oldId]);
             console.log(`[LocalDBService] ✅ Swapped temp ID ${oldId} for server ID ${newId}`);
         }
     } catch (err: any) {
         console.error(`[LocalDBService] ❌ updateMessageId error:`, err);
-        // Best effort cleanup if we hit a unexpected constraint
         if (err?.message?.includes('UNIQUE constraint failed')) {
             console.warn(`[LocalDBService] UNIQUE constraint hit for ${newId}, attempting cleanup of old row ${oldId}`);
             try { await db.runAsync(`DELETE FROM messages WHERE id = ?;`, [oldId]); } catch (_) {}
@@ -459,24 +485,34 @@ class OfflineService {
     );
   }
 
-  async getStatuses(): Promise<any[]> {
+  async clearAllContacts(): Promise<void> {
     const db = await getDb();
-    return await db.getAllAsync(`SELECT * FROM statuses WHERE expires_at > ? ORDER BY created_at DESC;`, [Date.now()]);
+    await db.runAsync('DELETE FROM contacts;');
   }
 
-  async saveStatus(status: any): Promise<void> {
+  // ─────────────────────────────────────────────────────────────────────────────
+  // AVATAR CACHING - WhatsApp-like reliable avatar loading
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async saveCachedAvatar(userId: string, avatarUrl: string, localPath: string): Promise<void> {
     const db = await getDb();
-    await db.runAsync(`INSERT OR REPLACE INTO statuses (id, user_id, type, r2_key, local_path, text_content, created_at, expires_at, is_mine) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`, [status.id, status.userId, status.type, status.r2Key ?? null, status.localPath ?? null, status.textContent ?? null, status.createdAt, status.expiresAt, status.isMine ? 1 : 0]);
+    await db.runAsync(
+      `INSERT OR REPLACE INTO avatar_cache (user_id, remote_url, local_uri)
+       VALUES (?, ?, ?);`,
+      [userId, avatarUrl, localPath]
+    );
   }
 
-  async deleteStatus(statusId: string): Promise<void> {
+  async getCachedAvatar(userId: string): Promise<{ localPath: string; remoteUrl: string } | null> {
     const db = await getDb();
-    await db.runAsync(`DELETE FROM statuses WHERE id = ?;`, [statusId]);
-  }
-
-  async markStatusAsSeen(statusId: string): Promise<void> {
-    const db = await getDb();
-    await db.runAsync(`UPDATE statuses SET is_seen = 1 WHERE id = ?;`, [statusId]);
+    const row = await db.getFirstAsync(
+      `SELECT local_uri, remote_url FROM avatar_cache WHERE user_id = ? LIMIT 1;`,
+      [userId]
+    ) as any;
+    if (row?.local_uri) {
+      return { localPath: row.local_uri, remoteUrl: row.remote_url };
+    }
+    return null;
   }
 
   async getPendingSyncActions(): Promise<any[]> {
@@ -509,16 +545,63 @@ class OfflineService {
 
   async clearChat(partnerId: string): Promise<void> {
     const db = await getDb();
-    await db.execAsync('BEGIN TRANSACTION;');
-    try {
-      await db.runAsync(`DELETE FROM messages WHERE chat_id = ?;`, [partnerId]);
-      await db.runAsync(`UPDATE contacts SET last_message = '', unread_count = 0 WHERE id = ?;`, [partnerId]);
-      await db.runAsync(`DELETE FROM chats WHERE id = ?;`, [partnerId]);
-      await db.execAsync('COMMIT;');
-    } catch (e) {
-      await db.execAsync('ROLLBACK;');
-      throw e;
+    await db.runAsync(`DELETE FROM messages WHERE chat_id = ?;`, [partnerId]);
+    await db.runAsync(`UPDATE contacts SET last_message = '', unread_count = 0 WHERE id = ?;`, [partnerId]);
+    await db.runAsync(`DELETE FROM chats WHERE id = ?;`, [partnerId]);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // CONNECTIONS & REQUESTS
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async saveConnections(connections: any[]): Promise<void> {
+    const db = await getDb();
+    for (const conn of connections) {
+      await db.runAsync(
+        `INSERT OR REPLACE INTO connections 
+          (id, user_1_id, user_2_id, is_favorite, custom_name, mute_notifications, connected_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?);`,
+        [
+          conn.id,
+          conn.user_1_id,
+          conn.user_2_id,
+          conn.is_favorite ? 1 : 0,
+          conn.custom_name || null,
+          conn.mute_notifications ? 1 : 0,
+          conn.connected_at
+        ]
+      );
     }
+  }
+
+  async getLocalConnections(): Promise<any[]> {
+    const db = await getDb();
+    return await db.getAllAsync(`SELECT * FROM connections;`);
+  }
+
+  async saveConnectionRequests(requests: any[]): Promise<void> {
+    const db = await getDb();
+    for (const req of requests) {
+      await db.runAsync(
+        `INSERT OR REPLACE INTO connection_requests 
+          (id, sender_id, receiver_id, status, message, created_at, responded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?);`,
+        [
+          req.id,
+          req.sender_id,
+          req.receiver_id,
+          req.status,
+          req.message || null,
+          req.created_at,
+          req.responded_at || null
+        ]
+      );
+    }
+  }
+
+  async getLocalConnectionRequests(): Promise<any[]> {
+    const db = await getDb();
+    return await db.getAllAsync(`SELECT * FROM connection_requests;`);
   }
 
   async removePendingSyncOpsForEntity(entityType: string, entityId: string): Promise<void> {
@@ -589,7 +672,6 @@ class OfflineService {
       // Fail open and allow the transaction to try/fail normally
     }
     
-    await db.execAsync('BEGIN TRANSACTION;');
     try {
       for (const [legacyId, uuid] of Object.entries(mapping)) {
         // 1. Update messages table (no unique constraint on chat_id/receiver)
@@ -602,11 +684,6 @@ class OfflineService {
           [uuid, legacyId]
         );
         
-        // 2. Update statuses table
-        await db.runAsync(
-          'UPDATE statuses SET user_id = ? WHERE user_id = ?',
-          [uuid, legacyId]
-        );
         
         // 3. Handle contacts table (Primary Key conflict potential)
         const existingUuid = await db.getFirstAsync('SELECT id FROM contacts WHERE id = ?', [uuid]);
@@ -622,10 +699,8 @@ class OfflineService {
         
         console.log(`[SQLite] Migrated ${legacyId} -> ${uuid}`);
       }
-      await db.execAsync('COMMIT;');
       console.log('[SQLite] Migration completed successfully');
     } catch (e) {
-      await db.execAsync('ROLLBACK;');
       console.error('[SQLite] Migration failed:', e);
       throw e;
     }
@@ -638,18 +713,14 @@ class OfflineService {
   async clearDatabase(): Promise<void> {
     const db = await getDb();
     console.log('[SQLite] Clearing user database...');
-    await db.execAsync('BEGIN TRANSACTION;');
     try {
       await db.runAsync('DELETE FROM messages;');
       await db.runAsync('DELETE FROM contacts;');
       await db.runAsync('DELETE FROM chats;');
-      await db.runAsync('DELETE FROM statuses;');
       await db.runAsync('DELETE FROM pending_sync_ops;');
       await db.runAsync('DELETE FROM media_downloads;');
-      await db.execAsync('COMMIT;');
       console.log('[SQLite] Database cleared successfully.');
     } catch (e) {
-      await db.execAsync('ROLLBACK;');
       console.error('[SQLite] Failed to clear database:', e);
       throw e;
     }

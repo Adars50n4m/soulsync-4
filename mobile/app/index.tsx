@@ -8,9 +8,9 @@ export default function Index() {
   const router = useRouter();
 
   useEffect(() => {
+    if (!context?.isReady) return;
+    
     // Only attempt redirect if context is available and session is loaded
-    if (!context || !context.isReady) return;
-
     if (!context.currentUser) {
       console.log('[Index] Redirecting to /login');
       router.replace('/login');
@@ -19,6 +19,14 @@ export default function Index() {
       router.replace('/(tabs)');
     }
   }, [context?.isReady, context?.currentUser, router]);
+
+  if (!context || !context.isReady) {
+    return (
+      <View style={{ flex: 1, backgroundColor: 'pink', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#BC002A" />
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: 'pink', justifyContent: 'center', alignItems: 'center' }}>

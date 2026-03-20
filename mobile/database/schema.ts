@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ⬆️  Bump this number every time you change the schema.
-const DB_TARGET_VERSION = 10;
+const DB_TARGET_VERSION = 12;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper — read the stored schema version (returns 0 if brand-new install)
@@ -348,6 +348,51 @@ async function migration_v10(db: any): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION v11 — Add connection_requests and connections tables
+// ─────────────────────────────────────────────────────────────────────────────
+async function migration_v11(db: any): Promise<void> {
+  const statements = [
+    `CREATE TABLE IF NOT EXISTS connection_requests (
+      id           TEXT PRIMARY KEY NOT NULL,
+      sender_id    TEXT NOT NULL,
+      receiver_id  TEXT NOT NULL,
+      status       TEXT DEFAULT 'pending',
+      message      TEXT,
+      created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+      responded_at TEXT
+    );`,
+    `CREATE TABLE IF NOT EXISTS connections (
+      id                 TEXT PRIMARY KEY NOT NULL,
+      user_1_id          TEXT NOT NULL,
+      user_2_id          TEXT NOT NULL,
+      is_favorite        INTEGER DEFAULT 0,
+      custom_name        TEXT,
+      mute_notifications INTEGER DEFAULT 0,
+      connected_at       TEXT DEFAULT CURRENT_TIMESTAMP
+    );`,
+    `CREATE INDEX IF NOT EXISTS idx_conn_req_receiver ON connection_requests(receiver_id);`,
+    `CREATE INDEX IF NOT EXISTS idx_connections_users ON connections(user_1_id, user_2_id);`
+  ];
+  for (const sql of statements) {
+    await db.execAsync(sql);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION v12 — Add avatar_cache table
+// ─────────────────────────────────────────────────────────────────────────────
+async function migration_v12(db: any): Promise<void> {
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS avatar_cache (
+      user_id      TEXT PRIMARY KEY NOT NULL,
+      remote_url   TEXT NOT NULL,
+      local_uri    TEXT NOT NULL,
+      cached_at    TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN EXPORT — call this once in your app's DB initialisation
 // ─────────────────────────────────────────────────────────────────────────────
 export const MIGRATE_DB = async (db: any): Promise<void> => {
@@ -394,7 +439,34 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
       );`,
       // Ensure contacts columns exist
       `ALTER TABLE contacts ADD COLUMN avatar_type TEXT DEFAULT 'default';`,
-      `ALTER TABLE contacts ADD COLUMN teddy_variant TEXT;`
+      `ALTER TABLE contacts ADD COLUMN teddy_variant TEXT;`,
+      
+      // Ensure connection tables exist
+      `CREATE TABLE IF NOT EXISTS connection_requests (
+        id TEXT PRIMARY KEY NOT NULL,
+        sender_id TEXT NOT NULL,
+        receiver_id TEXT NOT NULL,
+        status TEXT DEFAULT 'pending',
+        message TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        responded_at TEXT
+      );`,
+      `CREATE TABLE IF NOT EXISTS connections (
+        id TEXT PRIMARY KEY NOT NULL,
+        user_1_id TEXT NOT NULL,
+        user_2_id TEXT NOT NULL,
+        is_favorite INTEGER DEFAULT 0,
+        custom_name TEXT,
+        mute_notifications INTEGER DEFAULT 0,
+        connected_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );`,
+      // Ensure avatar_cache table exists
+      `CREATE TABLE IF NOT EXISTS avatar_cache (
+        user_id      TEXT PRIMARY KEY NOT NULL,
+        remote_url   TEXT NOT NULL,
+        local_uri    TEXT NOT NULL,
+        cached_at    TEXT DEFAULT CURRENT_TIMESTAMP
+      );`
   ];
 
   for (const sql of repairSteps) {
@@ -439,6 +511,8 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
         case 8: await migration_v8(db); break;
         case 9: await migration_v9(db); break;
         case 10: await migration_v10(db); break;
+        case 11: await migration_v11(db); break;
+        case 12: await migration_v12(db); break;
         default:
           console.error(`[SQLite] No migration logic for v${nextVersion}!`);
       }

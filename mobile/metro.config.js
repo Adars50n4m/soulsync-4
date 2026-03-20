@@ -15,23 +15,6 @@ module.exports = (() => {
     // Enhance server configuration for better WebSocket handling
     config.server = {
         ...config.server,
-        
-        // Increase timeout for WebSocket connections
-        webSocketTimeout: 30000,
-        
-        // Custom error handler for WebSocket errors
-        onError: (error) => {
-            // Filter out WebSocket errors during reload
-            if (error && error.message && (
-                error.message.includes('WebSocket') ||
-                error.message.includes('RCTWebSocket') ||
-                error.message.includes('ECONNRESET')
-            )) {
-                console.log('[Metro] WebSocket error suppressed:', error.message);
-                return;
-            }
-            console.error('[Metro] Server error:', error);
-        },
     };
     
     // Configure transformer to handle WebSocket module properly

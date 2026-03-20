@@ -1,6 +1,7 @@
 import { supabase } from '../config/supabase';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import * as Crypto from 'expo-crypto';
+import { socketService } from './SocketService';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CALL SERVICE — Supabase Realtime Broadcast signaling
@@ -49,12 +50,13 @@ class CallService {
     private isJoiningRoom: boolean = false;
     private roomSubscribeCallbacks: (() => void)[] = [];
     // FIX #5: Add call timeout tracking
-    private callTimeoutTimer: NodeJS.Timeout | null = null;
+    private callTimeoutTimer: any = null;
     private readonly CALL_TIMEOUT_MS = 45000; // 45 seconds timeout
     private reconnectAttempts: number = 0;
-    private reconnectTimer: NodeJS.Timeout | null = null;
+    private reconnectTimer: any = null;
     private personalChannelSubscribed: boolean = false;
     private processedSignalIds: Set<string> = new Set();
+    private callConnectTime: number | null = null;
 
     addStatusListener(handler: (connected: boolean) => void): void {
         this.statusListeners.add(handler);
@@ -99,7 +101,23 @@ class CallService {
         this.reconnectAttempts = 0;
         this.processedSignalIds.clear();
         this._subscribePersonalChannel(userId);
+
+        // 3. Socket.io signaling listener (Redundant path)
+        socketService.addListener(this.onSocketSignal);
     }
+
+    private onSocketSignal = (event: string, data: any) => {
+        const callEvents = [
+            'call-request', 'call-accept', 'call-reject', 'call-end', 
+            'call-ringing', 'offer', 'answer', 'ice-candidate',
+            'video-toggle', 'audio-toggle'
+        ];
+        
+        if (callEvents.includes(event)) {
+            console.log(`📞 [CallService] Received signal [${event}] via Socket.io`);
+            this.handleIncomingSignal(data as CallSignal);
+        }
+    };
 
     private _subscribePersonalChannel(userId: string): void {
         const channelName = `call_user_${userId}`;
@@ -190,6 +208,10 @@ class CallService {
             const signal = payload as CallSignal;
             console.log(`[CallService] Received room signal [${signal.type}]`);
             this.notifyListeners(signal);
+
+            if (signal.type === 'call-accept') {
+                this.callConnectTime = Date.now();
+            }
 
             if (signal.type === 'call-end' || signal.type === 'call-reject') {
                 this.cleanup();
@@ -298,7 +320,7 @@ class CallService {
 
     // ── PUBLIC: initiateCall() ────────────────────────────────────────────
 
-    async startCall(partnerId: string, callType: 'audio' | 'video'): Promise<string | null> {
+    async startCall(partnerId: string, callType: 'audio' | 'video', existingRoomId?: string): Promise<string | null> {
         if (!this.userId) return null;
 
         // Self-heal: if our personal channel died, re-subscribe before calling
@@ -309,7 +331,7 @@ class CallService {
             await new Promise(resolve => setTimeout(resolve, 2000));
         }
 
-        const roomId = Crypto.randomUUID();
+        const roomId = existingRoomId || Crypto.randomUUID();
         this.currentRoomId = roomId;
         this.currentPartnerId = partnerId;
         this.currentCallType = callType;
@@ -349,8 +371,9 @@ class CallService {
     async acceptCall(signal: CallSignal): Promise<void> {
         if (!this.userId || !signal.roomId) return;
 
-        console.log(`[CallService] Accepting call from ${signal.callerId} (Supabase)`);
+        console.log(`[CallService] ✅ acceptCall(roomId: ${signal.roomId}) from ${signal.callerId}`);
         this.currentRoomId = signal.roomId;
+
         this.currentPartnerId = signal.callerId;
         this.currentCallType = signal.callType;
 
@@ -373,6 +396,9 @@ class CallService {
             timestamp: new Date().toISOString(),
             signalId: Crypto.randomUUID() // FIX: Generate fresh signalId for the response
         });
+
+        // Track connect time for duration
+        this.callConnectTime = Date.now();
     }
 
     // ── PUBLIC: rejectCall() ─────────────────────────────────────────────
@@ -513,10 +539,7 @@ class CallService {
         });
     }
 
-    // ── SEND SIGNAL (Dual-path: DB primary + Broadcast bonus) ─────────────
-    //
-    // DB INSERT is the PRIMARY transport — goes through HTTP proxy, always works.
-    // Broadcast is a BONUS — faster but requires WebSocket (blocked by some ISPs).
+    // ── SEND SIGNAL (Dual-path: Supabase Broadcast + Socket.io Fallback) ───
     async sendSignal(signal: CallSignal) {
         // Generate unique signalId for cross-path deduplication (prevents double-processing)
         if (!signal.signalId) {
@@ -526,13 +549,13 @@ class CallService {
         const signalType = signal.type;
         const recipientId = this.getRecipientId(signal);
 
-        // 2. BONUS: Also try broadcast (faster if WebSocket works)
+        // 1. SUPABASE BROADCAST PATH
         try {
             if (signalType === 'call-request' || signalType === 'call-accept' || 
                 signalType === 'call-reject' || signalType === 'call-ringing') {
                 // Personal channel signals
                 this.sendToPersonalChannel(recipientId, 'call_signal', signal, signalType)
-                    .catch(() => {}); // best-effort, don't await
+                    .catch(() => {});
             } else if (this.roomChannel && this.roomSubscribed) {
                 // Room signals (offer, answer, ice-candidate, etc.)
                 this.roomChannel.send({
@@ -541,9 +564,18 @@ class CallService {
                     payload: signal,
                 }).catch(() => {});
             }
-        } catch (_) {
-            // Broadcast failed — DB already sent or triggered, so we're fine
-        }
+        } catch (_) {}
+
+        // 2. SOCKET.IO PATH (Redundant/High-reliability fallback)
+        try {
+            // Map common aliases if needed by server (server/index.js expects recipientId or calleeId)
+            const socketPayload = {
+                ...signal,
+                recipientId: recipientId,
+                targetId: recipientId
+            };
+            socketService.emit(signalType, socketPayload);
+        } catch (_) {}
     }
 
     private getRecipientId(signal: CallSignal): string {
@@ -646,6 +678,12 @@ class CallService {
         
         // Clear persisted state
         this.clearPersistedCallState();
+        this.callConnectTime = null;
+    }
+
+    public getCallDuration(): number {
+        if (!this.callConnectTime) return 0;
+        return Math.floor((Date.now() - this.callConnectTime) / 1000);
     }
 
     // FIX #12: Persist call state for crash recovery
@@ -658,7 +696,7 @@ class CallService {
                 callType: this.currentCallType,
                 persistedAt: new Date().toISOString(),
             };
-            await AsyncStorage.setItem('soulsync_active_call', JSON.stringify(state));
+            await AsyncStorage.setItem('Soul_active_call', JSON.stringify(state));
         } catch (error) {
             console.warn('[CallService] Failed to persist call state:', error);
         }
@@ -667,7 +705,7 @@ class CallService {
     private async clearPersistedCallState(): Promise<void> {
         try {
             const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-            await AsyncStorage.removeItem('soulsync_active_call');
+            await AsyncStorage.removeItem('Soul_active_call');
         } catch (error) {
             console.warn('[CallService] Failed to clear persisted call state:', error);
         }
@@ -677,7 +715,7 @@ class CallService {
     async checkAndRecoverCall(): Promise<{ roomId: string; partnerId: string; callType: 'audio' | 'video' } | null> {
         try {
             const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-            const stateStr = await AsyncStorage.getItem('soulsync_active_call');
+            const stateStr = await AsyncStorage.getItem('Soul_active_call');
             if (!stateStr) return null;
 
             const state = JSON.parse(stateStr);

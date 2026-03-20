@@ -1,11 +1,18 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, Image, Pressable, StyleSheet, StatusBar, Alert } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, Pressable, StyleSheet, StatusBar, Alert } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import GlassView from '../../components/ui/GlassView';
-import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../../context/AppContext';
 import { SoulAvatar } from '../../components/SoulAvatar';
+import { useFocusEffect } from '@react-navigation/native';
+import Animated, {
+    Easing,
+    useAnimatedStyle,
+    useSharedValue,
+    withTiming,
+} from 'react-native-reanimated';
+import { useScrollMotion } from '../../components/navigation/ScrollMotionProvider';
 
 const CallItem = React.memo(({ item, contact, onCall, activeTheme, isSelected, toggleSelection, selectionMode }: any) => {
     if (!item) return null;
@@ -67,12 +74,39 @@ const CallItem = React.memo(({ item, contact, onCall, activeTheme, isSelected, t
         </Pressable>
     );
 });
+CallItem.displayName = 'CallItem';
 
 export default function CallsScreen() {
     const { calls, contacts, startCall, activeTheme, clearCalls, deleteCall } = useApp();
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const { hidden: isHeaderHidden, onScroll, reset } = useScrollMotion('calls');
+    const headerOffset = useSharedValue(0);
+    const headerOpacity = useSharedValue(1);
 
     const selectionMode = selectedIds.size > 0;
+
+    useFocusEffect(
+        useCallback(() => {
+            reset();
+            return undefined;
+        }, [reset])
+    );
+
+    useEffect(() => {
+        headerOffset.value = withTiming(isHeaderHidden ? -96 : 0, {
+            duration: 220,
+            easing: Easing.out(Easing.cubic),
+        });
+        headerOpacity.value = withTiming(isHeaderHidden ? 0 : 1, {
+            duration: 180,
+            easing: Easing.out(Easing.cubic),
+        });
+    }, [headerOffset, headerOpacity, isHeaderHidden]);
+
+    const headerAnimatedStyle = useAnimatedStyle(() => ({
+        opacity: headerOpacity.value,
+        transform: [{ translateY: headerOffset.value }],
+    }));
 
     const toggleSelection = useCallback((id: string) => {
         setSelectedIds(prev => {
@@ -134,40 +168,41 @@ export default function CallsScreen() {
             <StatusBar barStyle="light-content" />
 
             {/* Header */}
-            <View style={styles.header}>
-                <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
-                {selectionMode ? (
-                    <View style={styles.selectionHeader}>
-                        <Pressable onPress={clearSelection} style={styles.iconButton}>
-                            <MaterialIcons name="close" size={24} color="#fff" />
-                        </Pressable>
-                        <Text style={styles.selectionText}>{selectedIds.size} Selected</Text>
-                        <Pressable onPress={handleDeleteSelected} style={styles.iconButton}>
-                            <MaterialIcons name="delete" size={24} color="#ef4444" />
-                        </Pressable>
-                    </View>
-                ) : (
-                    <View style={styles.normalHeader}>
-                        <Text style={styles.headerTitle}>CALLS</Text>
-                        {calls && calls.length > 0 && (
-                            <Pressable 
-                                onPress={handleClearAll}
-                                style={({ pressed }) => [
-                                    styles.clearBtn, 
-                                    pressed && { opacity: 0.6 }
-                                ]}
-                            >
-                                <MaterialIcons name="delete-sweep" size={22} color="rgba(255,255,255,0.6)" />
+            <Animated.View style={[styles.headerChrome, headerAnimatedStyle]}>
+                <View style={styles.header}>
+                    <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
+                    {selectionMode ? (
+                        <View style={styles.selectionHeader}>
+                            <Pressable onPress={clearSelection} style={styles.iconButton}>
+                                <MaterialIcons name="close" size={24} color="#fff" />
                             </Pressable>
-                        )}
-                    </View>
-                )}
-            </View>
+                            <Text style={styles.selectionText}>{selectedIds.size} Selected</Text>
+                            <Pressable onPress={handleDeleteSelected} style={styles.iconButton}>
+                                <MaterialIcons name="delete" size={24} color="#ef4444" />
+                            </Pressable>
+                        </View>
+                    ) : (
+                        <View style={styles.normalHeader}>
+                            <Text style={styles.headerTitle}>CALLS</Text>
+                            {calls && calls.length > 0 && (
+                                <Pressable 
+                                    onPress={handleClearAll}
+                                    style={({ pressed }) => [
+                                        styles.clearBtn, 
+                                        pressed && { opacity: 0.6 }
+                                    ]}
+                                >
+                                    <MaterialIcons name="delete-sweep" size={22} color="rgba(255,255,255,0.6)" />
+                                </Pressable>
+                            )}
+                        </View>
+                    )}
+                </View>
 
-            {/* Call History */}
-            <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>CALL HISTORY</Text>
-            </View>
+                <View style={styles.sectionHeader}>
+                    <Text style={styles.sectionTitle}>CALL HISTORY</Text>
+                </View>
+            </Animated.View>
 
             {(!calls || calls.length === 0) ? (
                 <View style={styles.emptyState}>
@@ -183,6 +218,8 @@ export default function CallsScreen() {
                     contentContainerStyle={styles.listContent}
                     showsVerticalScrollIndicator={false}
                     extraData={selectedIds} // Re-render items when selection changes
+                    onScroll={onScroll}
+                    scrollEventThrottle={16}
                 />
             )}
         </View>
@@ -193,6 +230,9 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: '#000000',
+    },
+    headerChrome: {
+        zIndex: 2,
     },
     header: {
         paddingTop: 50,

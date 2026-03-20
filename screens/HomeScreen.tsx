@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, LayoutGroup } from 'framer-motion';
 import { useApp } from '../AppContext.tsx';
-import { SoulSyncLogo } from '../Logo.tsx';
+import { SoulLogo } from '../Logo.tsx';
 
 const transitionConfig = {
   layoutId: {
@@ -37,9 +37,9 @@ const HomeScreen: React.FC = () => {
         {/* High-Fidelity Header - Ultra Minimalist with Signature Glow */}
         <header className="sticky top-0 z-[70] px-8 pt-[calc(1.5rem+env(safe-area-inset-top,10px))] pb-6 bg-gradient-to-b from-black via-black/80 to-transparent">
           <div className="flex items-center gap-3">
-            <SoulSyncLogo className="size-6 opacity-90 drop-shadow-[0_0_12px_rgba(244,63,94,0.5)]" />
+            <SoulLogo className="size-6 opacity-90 drop-shadow-[0_0_12px_rgba(244,63,94,0.5)]" />
             <h1 className="text-[18px] font-black tracking-[0.2em] text-white uppercase text-glow drop-shadow-[0_0_15px_rgba(255,255,255,0.6)]">
-              SoulSync
+              Soul
             </h1>
           </div>
         </header>

@@ -1,7 +1,10 @@
 import * as React from 'react';
 import { useState, useEffect, createContext, useContext, useCallback, useRef } from 'react';
+import { AppContext } from './AppContext';
+import * as Crypto from 'expo-crypto';
 import { supabase } from '../config/supabase';
 import { callService, CallSignal } from '../services/CallService';
+import { socketService } from '../services/SocketService';
 // Safe import — WebRTC not available in Expo Go
 let webRTCService: any = null;
 try { webRTCService = require('../services/WebRTCService').webRTCService; } catch (_) {}
@@ -31,6 +34,14 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const activeCallRef = useRef(activeCall);
     // Store the incoming signal for acceptCall to use
     const incomingSignalRef = useRef<CallSignal | null>(null);
+    // Wrapped setActiveCall with logging (Optimized to be stable)
+    const setActiveCallLogged = useCallback((val: ActiveCall | null | ((prev: ActiveCall | null) => ActiveCall | null)) => {
+        setActiveCall(prev => {
+            const next = typeof val === 'function' ? (val as any)(prev) : val;
+            console.log(`[CallContext] 🔄 State Update: ${prev?.callId || 'null'} -> ${next?.callId || 'null'} (isAccepted: ${next?.isAccepted}, type: ${next?.type})`);
+            return next;
+        });
+    }, []); // No dependencies = stable reference
 
     useEffect(() => { activeCallRef.current = activeCall; }, [activeCall]);
 
@@ -87,12 +98,12 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
             },
             onCallEnded: (callId) => {
                 console.log('[CallContext] Native call ended:', callId);
-                setActiveCall(null);
+                setActiveCallLogged(null);
                 incomingSignalRef.current = null;
             },
             onMuteToggled: (muted) => {
                 console.log('[CallContext] Mute toggled from native:', muted);
-                setActiveCall(prev => prev ? { ...prev, isMuted: muted } : null);
+                setActiveCallLogged(prev => prev ? { ...prev, isMuted: muted } : null);
             }
         }).then(() => {
             clearTimeout(initTimeout);
@@ -111,7 +122,14 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 case 'call-request': {
                     console.log(`[CallContext] 🚀 Processing call-request. Caller: ${signal.callerId}, Callee: ${signal.calleeId}, Me: ${currentUser?.id}`);
                     
+                    // Deduplication protection
+                    if (activeCallRef.current?.callId === signal.callId) {
+                        console.log('[CallContext] 🔁 Ignoring duplicate signal [call-request]');
+                        return;
+                    }
+
                     // Protection: Don't answer calls from yourself (pollution/loopback)
+
                     if (signal.callerId === currentUser?.id) {
                         console.log('[CallContext] ⚠️ Ignoring incoming call-request from self (ID match)');
                         return;
@@ -128,7 +146,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     incomingSignalRef.current = signal;
                     
                     // Set activeCall → triggers IncomingCallModal
-                    setActiveCall({
+                    setActiveCallLogged({
                         callId: signal.callId,
                         contactId: signal.callerId,
                         type: signal.callType,
@@ -150,7 +168,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
                 case 'call-accept': {
                     // The callee accepted — update state
-                    setActiveCall(prev => prev ? { ...prev, isAccepted: true, isRinging: false } : null);
+                    setActiveCallLogged(prev => prev ? { ...prev, isAccepted: true, isRinging: false } : null);
                     // Notify WebRTCService to create offer (for caller side)
                     if (webRTCService && !activeCallRef.current?.isIncoming) {
                         try {
@@ -182,31 +200,39 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
                 case 'call-reject': {
                     console.log('[CallContext] Call rejected by remote');
-                    setActiveCall(null);
+                    const currentCall = activeCallRef.current;
+                    if (currentCall && !currentCall.isIncoming) {
+                        addCallLog(currentCall, 'rejected');
+                    }
+                    setActiveCallLogged(null);
                     incomingSignalRef.current = null;
                     callService.cleanup('remote-reject');
                     break;
                 }
                 case 'call-end': {
                     console.log('[CallContext] Call ended by remote');
+                    const currentCall = activeCallRef.current;
+                    if (currentCall && !currentCall.isIncoming) {
+                        addCallLog(currentCall, 'completed');
+                    }
                     if (webRTCService) {
                         try { webRTCService.cleanup(); } catch (_) {}
                     }
-                    setActiveCall(null);
+                    setActiveCallLogged(null);
                     incomingSignalRef.current = null;
                     callService.cleanup('remote-end');
                     break;
                 }
                 case 'call-ringing': {
-                    setActiveCall(prev => prev ? { ...prev, isRinging: true } : null);
+                    setActiveCallLogged(prev => prev ? { ...prev, isRinging: true } : null);
                     break;
                 }
                 case 'video-toggle': {
-                    setActiveCall(prev => prev ? { ...prev, remoteVideoOff: signal.payload?.videoOff } : null);
+                    setActiveCallLogged(prev => prev ? { ...prev, remoteVideoOff: signal.payload?.videoOff } : null);
                     break;
                 }
                 case 'audio-toggle': {
-                    setActiveCall(prev => prev ? { ...prev, remoteMuted: signal.payload?.muted } : null);
+                    setActiveCallLogged(prev => prev ? { ...prev, remoteMuted: signal.payload?.muted } : null);
                     break;
                 }
                 // WebRTC signaling — forward to WebRTCService for connection establishment
@@ -273,17 +299,12 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const startCall = useCallback(async (contactId: string, type: 'audio' | 'video') => {
         if (!currentUser) return;
         
-        console.log(`[CallContext] 📱 Starting ${type} call to ${contactId}`);
+        const roomId = Crypto.randomUUID();
+        console.log(`[CallContext] 📱 Starting ${type} call to ${contactId} (Room: ${roomId})`);
         
-        // 1. Call the service to send the signal
-        const roomId = await callService.startCall(contactId, type);
-        if (!roomId) {
-            console.warn('[CallContext] Failed to start call — no roomId returned');
-            return;
-        }
-        
-        // 2. Set activeCall → triggers TrafficController in _layout.tsx → navigates to /call
-        setActiveCall({
+        // 1. Set activeCall IMMEDIATELY → triggers TrafficController in _layout.tsx → navigates to /call
+        // This provides better UX and ensures caller sees the calling screen while waiting for signal
+        setActiveCallLogged({
             callId: roomId,
             contactId,
             type,
@@ -293,6 +314,12 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
             isAccepted: false,
             isRinging: false,
             roomId,
+        });
+
+        // 2. Call the service to send the signal (async background)
+        callService.startCall(contactId, type, roomId).catch(err => {
+            console.error('[CallContext] Failed to start call sig:', err);
+            // Optional: reset activeCall if it failed immediately
         });
     }, [currentUser]);
 
@@ -307,7 +334,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.log(`[CallContext] ✅ Accepting call from ${signal.callerId}`);
         
         // 1. IMMEDIATE STATE UPDATE for UI feel
-        setActiveCall(prev => prev ? { 
+        setActiveCallLogged(prev => prev ? { 
             ...prev, 
             isAccepted: true, 
             isRinging: false 
@@ -322,10 +349,38 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         incomingSignalRef.current = null;
     }, []);
 
+    const addCallLog = useCallback(async (call: any, status: 'completed' | 'missed' | 'rejected' | 'busy') => {
+        if (!currentUser || call.isIncoming) return; // Only caller logs to DB to avoid duplicates
+        
+        const duration = callService.getCallDuration();
+        console.log(`[CallContext] 📝 Logging call: ${status}, duration: ${duration}s`);
+
+        const logData = {
+            caller_id: currentUser.id,
+            callee_id: call.contactId,
+            call_type: call.type,
+            status: status,
+            duration: duration,
+            created_at: new Date().toISOString()
+        };
+
+        const { error } = await supabase.from('call_logs').insert(logData);
+        if (error) {
+            console.error('[CallContext] Failed to insert call log:', error);
+        }
+    }, [currentUser]);
+
     // ── endCall: End active call ─────────────────────────────────────────
     const endCall = useCallback(async () => {
         console.log('[CallContext] 📴 Ending call');
         
+        const currentCall = activeCallRef.current;
+        if (currentCall && !currentCall.isIncoming) {
+            // Determine status based on whether it was accepted
+            const status = currentCall.isAccepted ? 'completed' : 'missed';
+            addCallLog(currentCall, status);
+        }
+
         // Clean up WebRTC
         if (webRTCService) {
             try { webRTCService.cleanup(); } catch (_) {}
@@ -334,13 +389,13 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Send end signal + cleanup service state
         await callService.endCall();
         
-        setActiveCall(null);
+        setActiveCallLogged(null);
         incomingSignalRef.current = null;
-    }, []);
+    }, [addCallLog]);
 
     // ── toggleMute ───────────────────────────────────────────────────────
     const toggleMute = useCallback(() => {
-        setActiveCall(prev => {
+        setActiveCallLogged(prev => {
             if (!prev) return null;
             const newMuted = !prev.isMuted;
             
@@ -369,7 +424,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // ── toggleVideo ──────────────────────────────────────────────────────
     const toggleVideo = useCallback(() => {
-        setActiveCall(prev => {
+        setActiveCallLogged(prev => {
             if (!prev) return null;
             const newVideoOff = !prev.isVideoOff;
             
@@ -420,7 +475,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         startCall,
         acceptCall,
         endCall,
-        toggleMinimizeCall: (val: boolean) => setActiveCall(prev => prev ? { ...prev, isMinimized: val } : null),
+        toggleMinimizeCall: (val: boolean) => setActiveCallLogged(prev => prev ? { ...prev, isMinimized: val } : null),
         toggleMute,
         toggleVideo,
         deleteCall,

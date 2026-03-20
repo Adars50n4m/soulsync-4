@@ -2,7 +2,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../AppContext.tsx';
-import { SoulSyncLogo } from '../Logo.tsx';
+import { SoulLogo } from '../Logo.tsx';
 
 const ChatListScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -19,9 +19,9 @@ const ChatListScreen: React.FC = () => {
     <div className="relative h-full flex flex-col overflow-hidden animate-fade-in bg-black">
       <header className="sticky top-0 z-50 px-6 pt-12 pb-4 flex items-center justify-between bg-black border-b border-white/[0.05]">
         <div className="flex items-center gap-3 animate-ios-pop">
-          <SoulSyncLogo className="size-10" />
+          <SoulLogo className="size-10" />
           <div className="flex flex-col">
-            <h1 className="text-2xl font-black tracking-tight text-white leading-none">SoulSync</h1>
+            <h1 className="text-2xl font-black tracking-tight text-white leading-none">Soul</h1>
             <p className="text-[9px] font-black text-primary tracking-[0.2em] uppercase mt-1">NEURAL MATRIX</p>
           </div>
         </div>

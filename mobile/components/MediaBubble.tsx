@@ -18,7 +18,7 @@ import {
   useWindowDimensions,
   Platform,
 } from 'react-native';
-import { Image } from 'expo-image'; // expo-image has built-in disk+memory cache — no flicker
+import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
 import GlassView from './ui/GlassView';
 import { mediaDownloadService, formatBytes } from '../services/MediaDownloadService';
@@ -48,7 +48,7 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
 
   // Initialise from message props so the first render is correct (no flicker)
   const [mediaStatus, setMediaStatus] = useState<MediaStatus>(
-    message.localFileUri ? 'downloaded' : (message.mediaStatus || 'not_downloaded')
+    (message.localFileUri ? 'downloaded' : (message.mediaStatus || 'not_downloaded')) as MediaStatus
   );
   const [localUri, setLocalUri] = useState<string | null>(message.localFileUri || null);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -100,7 +100,7 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
     }
     // If nothing found, stay as not_downloaded
     if (mediaStatus === 'downloaded') {
-      setMediaStatus('not_downloaded');
+      setMediaStatus('not_downloaded' as MediaStatus);
       setLocalUri(null);
     }
   };
@@ -155,7 +155,7 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
               cachePolicy="disk"
               transition={150}
               // Placeholder while image loads from disk (shouldn't be long)
-              placeholder={{ color: '#111' }}
+              placeholder={ { background: '#111' } as any }
             />
           ) : media.type === 'video' ? (
             <View style={[styles.videoContainer, { width: mediaWidth, height: mediaHeight }]}>

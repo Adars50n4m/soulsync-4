@@ -1,7 +1,7 @@
 {
-  "name": "soulsync-upload-worker",
+  "name": "Soul-upload-worker",
   "version": "1.0.0",
-  "description": "Cloudflare Worker for SoulSync media uploads to R2",
+  "description": "Cloudflare Worker for Soul media uploads to R2",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",

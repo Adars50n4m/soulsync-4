@@ -22,7 +22,7 @@
 
 import * as FileSystem from 'expo-file-system';
 
-const BASE_DIR = FileSystem.documentDirectory + 'Soul/';
+const BASE_DIR = (FileSystem as any).documentDirectory + 'Soul/';
 
 const DIRS = {
   images: `${BASE_DIR}media/images/`,

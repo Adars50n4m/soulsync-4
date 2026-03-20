@@ -10,9 +10,17 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../../context/AppContext';
 import Animated, {
-    useSharedValue, useAnimatedStyle, withSpring, withTiming, interpolate, runOnJS, Easing,
-    useAnimatedScrollHandler, Extrapolation, SharedTransition
+    useSharedValue,
+    useAnimatedStyle,
+    withSpring,
+    withTiming,
+    interpolate,
+    runOnJS,
+    Easing,
+    useAnimatedScrollHandler,
+    Extrapolation
 } from 'react-native-reanimated';
+const SharedTransition = (require('react-native-reanimated') as any).SharedTransition;
 import { BlurView } from 'expo-blur';
 import MaskedView from '@react-native-masked-view/masked-view';
 
@@ -269,7 +277,7 @@ export default function ProfileScreen() {
         try {
             await Share.share({
                 url: item.url,
-                message: `Check out this ${item.type} from SoulSync!`,
+                message: `Check out this ${item.type} from Soul!`,
             });
         } catch (error) {
             console.error(error);
@@ -347,8 +355,10 @@ export default function ProfileScreen() {
                         }
                     ]}
                     resizeMode="cover"
-                    sharedTransitionTag="avatar-universal-morph"
-                    sharedTransitionStyle={morphTransition}
+                    {...({
+                        sharedTransitionTag: "avatar-universal-morph",
+                        sharedTransitionStyle: morphTransition
+                    } as any)}
                 />
 
 
@@ -363,7 +373,7 @@ export default function ProfileScreen() {
                         />
                     }
                 >
-                    <BlurView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
+                    <BlurView intensity={60} tint="dark" style={StyleSheet.absoluteFill} experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined} />
                 </MaskedView>
 
                 {/* Deep Bottom Fade - Multi-stop Gradient for Black Melt */}

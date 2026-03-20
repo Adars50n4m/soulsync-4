@@ -13,6 +13,7 @@ import Animated, {
   Easing,
 } from 'react-native-reanimated';
 import { useApp } from '../../context/AppContext';
+import { ScrollMotionProvider, useScrollMotion } from '../../components/navigation/ScrollMotionProvider';
 
 // Tells expo-router how to construct initial tab state during hydration
 // Prevents "Cannot read property 'stale' of undefined" in TabRouter.getRehydratedState
@@ -58,6 +59,9 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
   const isFirstIndicatorSync = React.useRef(true);
   const translateX = useSharedValue(currentIndex * tabWidth);
   const tabBarOpacity = useSharedValue(hasRenderedTabBarOnce ? 0 : 1);
+  const tabBarOffset = useSharedValue(0);
+  const focusedRouteId = state?.routes?.[state?.index ?? 0]?.name ?? 'index';
+  const { hidden: isTabBarHidden } = useScrollMotion(focusedRouteId);
 
   useEffect(() => {
     if (isFirstIndicatorSync.current) {
@@ -88,6 +92,17 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
     );
   }, [tabBarOpacity]);
 
+  useEffect(() => {
+    tabBarOffset.value = withTiming(isTabBarHidden ? 110 : 0, {
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+    });
+    tabBarOpacity.value = withTiming(isTabBarHidden ? 0.82 : 1, {
+      duration: 180,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [isTabBarHidden, tabBarOffset, tabBarOpacity]);
+
   const indicatorStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
     backgroundColor: `${activeTheme.primary}0D`, // 0D is ~5% opacity (even more subtle)
@@ -95,6 +110,7 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
 
   const tabBarFadeStyle = useAnimatedStyle(() => ({
     opacity: tabBarOpacity.value,
+    transform: [{ translateY: tabBarOffset.value }],
   }));
 
   // Guard: state may be undefined during initial navigation hydration
@@ -171,33 +187,35 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
 
 export default function TabLayout() {
   return (
-    <Tabs
-      tabBar={props => <TabBar {...props} />}
-      screenOptions={{
-        headerShown: false,
-      }}
-      initialRouteName="index"
-      backBehavior="initialRoute"
-    >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Chats',
+    <ScrollMotionProvider>
+      <Tabs
+        tabBar={props => <TabBar {...props} />}
+        screenOptions={{
+          headerShown: false,
         }}
-      />
-      <Tabs.Screen
-        name="calls"
-        options={{
-          title: 'Calls',
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: 'Settings',
-        }}
-      />
-    </Tabs>
+        initialRouteName="index"
+        backBehavior="initialRoute"
+      >
+        <Tabs.Screen
+          name="index"
+          options={{
+            title: 'Chats',
+          }}
+        />
+        <Tabs.Screen
+          name="calls"
+          options={{
+            title: 'Calls',
+          }}
+        />
+        <Tabs.Screen
+          name="settings"
+          options={{
+            title: 'Settings',
+          }}
+        />
+      </Tabs>
+    </ScrollMotionProvider>
   );
 }
 

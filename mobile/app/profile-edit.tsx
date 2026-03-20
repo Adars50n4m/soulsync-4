@@ -13,11 +13,13 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useApp } from '../context/AppContext';
 import { SoulAvatar } from '../components/SoulAvatar';
 import { storageService } from '../services/StorageService';
+import GlassView from '../components/ui/GlassView';
 import Animated, {
     Easing,
-    SharedTransition,
     withTiming,
+    useAnimatedScrollHandler, Extrapolation
 } from 'react-native-reanimated';
+const SharedTransition = (require('react-native-reanimated') as any).SharedTransition;
 
 
 const SettingRow = ({ label, value, icon, onPress }: {
@@ -69,7 +71,7 @@ export default function ProfileEditScreen() {
     const enableSharedMorph = Platform.OS === 'ios';
     const { width } = useWindowDimensions();
     const router = useRouter();
-    const { currentUser, updateProfile, changeUsername, activeTheme } = useApp();
+    const { currentUser, updateProfile, changeUsername, activeTheme, broadcastProfileUpdate } = useApp();
 
     const [name, setName] = useState(currentUser?.name || '');
     const [username, setUsername] = useState(currentUser?.username || '');
@@ -148,6 +150,7 @@ export default function ProfileEditScreen() {
                         const uploadedUrl = await storageService.uploadImage(localUri, 'avatars', currentUser?.id);
                         if (uploadedUrl) {
                             updateProfile({ avatar: uploadedUrl });
+                            broadcastProfileUpdate({ avatar: uploadedUrl });
                         }
                     } catch (error: any) {
                         console.warn('Avatar upload error (camera):', error);
@@ -189,6 +192,7 @@ export default function ProfileEditScreen() {
                         const uploadedUrl = await storageService.uploadImage(localUri, 'avatars', currentUser?.id);
                         if (uploadedUrl) {
                             updateProfile({ avatar: uploadedUrl });
+                            broadcastProfileUpdate({ avatar: uploadedUrl });
                         }
                     } catch (error: any) {
                         console.warn('Avatar upload error (gallery):', error);
@@ -215,6 +219,7 @@ export default function ProfileEditScreen() {
                         const defaultAvatar = '';
                         setAvatar(defaultAvatar);
                         updateProfile({ avatar: defaultAvatar });
+                        broadcastProfileUpdate({ avatar: defaultAvatar });
                     }
                 }
             ]
@@ -224,12 +229,14 @@ export default function ProfileEditScreen() {
     const handleSaveName = () => {
         if (name.trim()) {
             updateProfile({ name: name.trim() });
+            broadcastProfileUpdate({ name: name.trim() });
             setIsEditing(null);
         }
     };
 
     const handleSaveBio = () => {
         updateProfile({ bio: bio.trim() });
+        broadcastProfileUpdate({ bio: bio.trim() });
         setIsEditing(null);
     };
 
@@ -557,27 +564,19 @@ export default function ProfileEditScreen() {
                                 transform: [{
                                     translateY: slideAnim.interpolate({
                                         inputRange: [0, 1],
-                                        outputRange: [300, 0],
+                                        outputRange: [500, 0],
                                     })
                                 }]
                             }
                         ]}
                     >
+                        <GlassView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
                         <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScrollContent}>
                         <View style={styles.modalHeader}>
                             <Text style={styles.modalTitle}>Choose Avatar</Text>
                             <Pressable onPress={hideModal} style={styles.modalClose}>
                                 <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.5)" />
                             </Pressable>
-                        </View>
-
-                        {/* Large Avatar Preview - 4:5 Ratio */}
-                        <View style={styles.avatarPreviewContainer}>
-                            <SoulAvatar
-                                uri={avatar}
-                                size={200}
-                                style={styles.avatarPreview}
-                            />
                         </View>
 
                         {/* Photo Options */}
@@ -800,15 +799,21 @@ const styles = StyleSheet.create({
         bottom: 0,
     },
     modalContent: {
-        backgroundColor: '#1c1c1e',
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
+        borderTopLeftRadius: 30,
+        borderTopRightRadius: 30,
         paddingBottom: 40,
         paddingTop: 10,
-        overflow: 'visible',
+        overflow: 'hidden',
+        maxHeight: '80%',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)',
+        backgroundColor: 'transparent',
+    },
+    modalGlass: {
+        ...StyleSheet.absoluteFillObject,
     },
     modalScrollView: {
-        flex: 1,
+        // Removed flex: 1 to allow wrapping content
     },
     modalScrollContent: {
         paddingBottom: 20,
@@ -849,16 +854,6 @@ const styles = StyleSheet.create({
         height: 1,
         backgroundColor: 'rgba(255,255,255,0.1)',
         marginVertical: 8,
-    },
-    avatarPreviewContainer: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 20,
-        minHeight: 250,
-    },
-    avatarPreview: {
-        width: 200,
-        height: 250,
     },
     photoOptionsContainer: {
         paddingVertical: 10,

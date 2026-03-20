@@ -1,5 +1,5 @@
 /**
- * SoulSync Transition Configuration Constants
+ * Soul Transition Configuration Constants
  *
  * Spring and timing presets for animations across the app.
  * Note: SharedTransition / sharedTransitionTag is not available

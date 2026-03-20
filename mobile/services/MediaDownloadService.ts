@@ -9,8 +9,9 @@ import * as FileSystem from 'expo-file-system';
 import * as Crypto from 'expo-crypto';
 import { offlineService, MediaStatus } from './LocalDBService';
 
-// Use documentDirectory from the legacy module
-const MEDIA_DIR = `${FileSystem.documentDirectory}media_cache`;
+// Use any cast to bypass SDK 54 type issues in some environments
+const documentDirectory = (FileSystem as any).documentDirectory || '';
+const MEDIA_DIR = `${documentDirectory}media_cache`;
 
 export interface DownloadProgress {
   messageId: string;

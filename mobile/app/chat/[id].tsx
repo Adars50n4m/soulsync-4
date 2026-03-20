@@ -38,7 +38,6 @@ import Animated, {
     withDelay,
     withRepeat,
     withSequence,
-    SharedTransition,
     interpolate,
     interpolateColor,
     Extrapolation,
@@ -46,10 +45,10 @@ import Animated, {
     FadeInDown,
     FadeOutDown,
 } from 'react-native-reanimated';
+const SharedTransition = (require('react-native-reanimated') as any).SharedTransition;
 import 'react-native-gesture-handler';
 
 import { useApp, USERS } from '../../context/AppContext';
-import { LEGACY_TO_UUID } from '../../config/supabase';
 import { SoulAvatar } from '../../components/SoulAvatar';
 import { chatService } from '../../services/ChatService';
 import { chatTransitionState } from '../../services/chatTransitionState';
@@ -243,9 +242,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
     // Support both direct routing (params) and inline rendering (props)
     const rawId = propsUser?.id || (Array.isArray(paramsId) ? paramsId[0] : paramsId);
-    // Standardize to UUID if legacy ID is used
     const sourceY = propsSourceY ?? (paramsSourceY ? Number(Array.isArray(paramsSourceY) ? paramsSourceY[0] : paramsSourceY) : undefined);
-    const id = (rawId && LEGACY_TO_UUID[rawId as string]) || rawId;
+    const id = rawId;
     const stringId = Array.isArray(paramsId) ? paramsId[0] : paramsId;
     const isMorphEntry = sourceY !== undefined;
     
@@ -296,7 +294,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     }));
 
     const messagesContainerAnimatedStyle = useAnimatedStyle(() => ({
-        paddingBottom: keyboardOffset.value,
+        paddingBottom: withTiming(keyboardOffset.value + (isTyping ? 50 : 0), { duration: 250 }),
     }));
 
     const headerAccessoryAnimatedStyle = useAnimatedStyle(() => ({
@@ -1087,7 +1085,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             let localUri = current.url;
             if (!current.url.startsWith('file://')) {
                 const extension = current.type === 'video' ? '.mp4' : '.jpg';
-                const target = `${FileSystem.cacheDirectory}soulsync_${Date.now()}${extension}`;
+                const target = `${(FileSystem as any).cacheDirectory}Soul_${Date.now()}${extension}`;
                 const downloaded = await FileSystem.downloadAsync(current.url, target);
                 localUri = downloaded.uri;
             }
@@ -1730,7 +1728,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 onSelectAudio={handleSelectAudio}
                 onSelectNote={() => {
                     setShowMediaPicker(false);
-                    Alert.alert("SoulSync Notes", "Leave a note from the Home screen!");
+                    Alert.alert("Soul Notes", "Leave a note from the Home screen!");
                 }}
             />
 
@@ -1970,37 +1968,37 @@ const styles = StyleSheet.create({
     },
     typingIndicatorWrapper: {
         position: 'absolute',
-        bottom: 85,
+        bottom: 82, // Higher up to avoid hitting the composer top edge
         left: 20,
         zIndex: 100,
     },
     typingBubbleMini: {
-        backgroundColor: 'rgba(255,255,255,0.12)',
+        backgroundColor: 'rgba(255,255,255,0.14)',
         borderRadius: 999,
-        minWidth: 74,
-        height: 38,
-        paddingHorizontal: 18,
+        minWidth: 54,
+        height: 30,
+        paddingHorizontal: 12,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.06)',
+        borderColor: 'rgba(255,255,255,0.08)',
         shadowColor: '#000',
-        shadowOpacity: 0.18,
-        shadowRadius: 14,
-        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.15,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
     },
     typingAnimationWrap: {
-        width: 42,
-        height: 18,
+        width: 32,
+        height: 14,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 7,
+        gap: 5,
     },
     typingDot: {
-        width: 8,
-        height: 8,
+        width: 5,
+        height: 5,
         borderRadius: 999,
         backgroundColor: 'rgba(255,255,255,0.9)',
     },

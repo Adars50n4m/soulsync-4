@@ -48,10 +48,10 @@ Browser will open → Click "Allow" to authorize
 ### Step 4: Create R2 Bucket
 
 ```bash
-cd /Volumes/Work/soulsync-4/cloudflare-worker
+cd /Volumes/Work/Soul-4/cloudflare-worker
 
 # Create bucket
-wrangler r2 bucket create soulsync-media
+wrangler r2 bucket create Soul-media
 
 # Verify it was created
 wrangler r2 bucket list
@@ -59,14 +59,14 @@ wrangler r2 bucket list
 
 Expected output:
 ```
-✅ Created bucket 'soulsync-media'
+✅ Created bucket 'Soul-media'
 ```
 
 ### Step 5: Enable Public Access (FREE R2.dev domain)
 
 **Option 1: Using Cloudflare Dashboard (Easier)**
 
-1. Go to R2 → `soulsync-media` bucket
+1. Go to R2 → `Soul-media` bucket
 2. Click **Settings** tab
 3. Under **Public Access**, click **Allow Access**
 4. Click **Connect R2.dev subdomain**
@@ -80,7 +80,7 @@ Wrangler will automatically create a public URL when you upload files.
 ### Step 6: Deploy Worker (FREE)
 
 ```bash
-cd /Volumes/Work/soulsync-4/cloudflare-worker
+cd /Volumes/Work/Soul-4/cloudflare-worker
 
 # Install dependencies
 npm install
@@ -99,7 +99,7 @@ npm run deploy
 Expected output:
 ```
 ✨ Successfully published your script
-🌍 https://soulsync-upload-worker.YOUR-SUBDOMAIN.workers.dev
+🌍 https://Soul-upload-worker.YOUR-SUBDOMAIN.workers.dev
 ```
 
 **SAVE THIS WORKER URL!**
@@ -108,7 +108,7 @@ Expected output:
 
 ```bash
 # Replace with your actual Worker URL
-curl https://soulsync-upload-worker.YOUR-SUBDOMAIN.workers.dev/health
+curl https://Soul-upload-worker.YOUR-SUBDOMAIN.workers.dev/health
 ```
 
 Expected response:
@@ -120,11 +120,11 @@ Expected response:
 
 ### Step 8: Configure Mobile App
 
-Create `/Volumes/Work/soulsync-4/mobile/.env`:
+Create `/Volumes/Work/Soul-4/mobile/.env`:
 
 ```env
 # Replace with YOUR actual URLs from steps above!
-EXPO_PUBLIC_R2_WORKER_URL=https://soulsync-upload-worker.YOUR-SUBDOMAIN.workers.dev
+EXPO_PUBLIC_R2_WORKER_URL=https://Soul-upload-worker.YOUR-SUBDOMAIN.workers.dev
 EXPO_PUBLIC_R2_PUBLIC_URL=https://pub-XXXXXXXXXXXX.r2.dev
 EXPO_PUBLIC_USE_R2=false
 ```
@@ -134,7 +134,7 @@ EXPO_PUBLIC_USE_R2=false
 ### Step 9: Test Uploads
 
 ```bash
-cd /Volumes/Work/soulsync-4/mobile
+cd /Volumes/Work/Soul-4/mobile
 
 # Start app
 npx expo start -c
@@ -167,7 +167,7 @@ npx expo start -c
 
 ### Step 10: Verify in R2 Dashboard
 
-1. Go to Cloudflare Dashboard → R2 → `soulsync-media`
+1. Go to Cloudflare Dashboard → R2 → `Soul-media`
 2. Click **Browse** or **Objects**
 3. You should see your uploaded file:
    ```
@@ -184,13 +184,13 @@ npx expo start -c
 ### Check Usage
 
 **Dashboard:**
-1. Cloudflare Dashboard → R2 → `soulsync-media`
+1. Cloudflare Dashboard → R2 → `Soul-media`
 2. View **Metrics** tab
 3. See storage used, operations
 
 **Workers:**
 1. Cloudflare Dashboard → Workers & Pages
-2. Click `soulsync-upload-worker`
+2. Click `Soul-upload-worker`
 3. View **Metrics** tab
 4. See requests/day
 
@@ -218,7 +218,7 @@ npx expo start -c
 # This keeps storage low automatically!
 ```
 
-1. R2 Dashboard → `soulsync-media` → Settings
+1. R2 Dashboard → `Soul-media` → Settings
 2. Lifecycle Rules → Add Rule
 3. Prefix: `status-media/`
 4. Delete after: 1 day
@@ -278,7 +278,7 @@ https://pub-abc123xyz.r2.dev/avatars/user/photo.jpg
 wrangler r2 bucket list
 
 # Recreate if needed
-wrangler r2 bucket create soulsync-media
+wrangler r2 bucket create Soul-media
 ```
 
 ### "Worker not found"
@@ -397,7 +397,7 @@ EXPO_PUBLIC_USE_R2=true
 
 1. ✅ Create free Cloudflare account
 2. ✅ Enable R2 (free tier)
-3. ✅ Create bucket: `wrangler r2 bucket create soulsync-media`
+3. ✅ Create bucket: `wrangler r2 bucket create Soul-media`
 4. ✅ Deploy Worker: `npm run deploy`
 5. ✅ Get R2.dev public URL from dashboard
 6. ✅ Configure mobile app `.env`

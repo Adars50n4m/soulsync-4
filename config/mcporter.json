@@ -8,7 +8,7 @@
     },
     "openclaw": {
       "command": "node",
-      "args": ["/Volumes/Work/soulsync-4/mcp-servers/openclaw-mcp.js"]
+      "args": ["/Volumes/Work/Soul-4/mcp-servers/openclaw-mcp.js"]
     }
   },
   "imports": []

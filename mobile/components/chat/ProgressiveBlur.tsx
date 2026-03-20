@@ -26,19 +26,52 @@ function ProgressiveBlur({
     const isDark = tint === 'dark' || tint === 'default';
     const base = isDark ? '0,0,0' : '255,255,255';
     const isBottom = position === 'bottom';
+    const IS_ANDROID = Platform.OS === 'android';
 
-    // ── ANDROID: smooth gradient (no blur API) ───────────────────────────────
-    if (Platform.OS === 'android') {
-        const maxA = Math.min(intensity / 100, 0.85);
-        const s = `rgba(${base},${maxA.toFixed(2)})`;
-        const t = `rgba(${base},0)`;
+    // ── ANDROID: Use dimezisBlurView for real blur ───────────────────────────────
+    if (IS_ANDROID) {
+        // Use progressive blur with dimezisBlurView
+        const ZONES = 20;
+        const zoneHeight = height * 0.15;
+
+        const blurZones = Array.from({ length: ZONES }).map((_, i) => {
+            const progress = i / (ZONES - 1);
+            const zoneTop = isBottom
+                ? progress * (height - zoneHeight)
+                : (1 - progress) * (height - zoneHeight);
+            const eased = progress * progress;
+            const zoneIntensity = intensity * eased;
+            const zoneOpacity = Math.max(0.1, eased);
+
+            return { top: zoneTop, intensity: zoneIntensity, opacity: zoneOpacity };
+        });
+
         return (
-            <LinearGradient
-                colors={isBottom ? [t, s, s] : [s, s, t] as any}
-                locations={isBottom ? [0, 0.65, 1] : [0, 0.35, 1] as any}
-                style={[styles.container, { height, [position]: 0 }]}
-                pointerEvents="none"
-            />
+            <View style={[styles.container, { height, [position]: 0 }]} pointerEvents="none">
+                {blurZones.map((zone, i) => (
+                    <BlurView
+                        key={i}
+                        intensity={zone.intensity}
+                        tint={tint}
+                        style={{
+                            position: 'absolute',
+                            left: 0,
+                            right: 0,
+                            top: zone.top,
+                            height: zoneHeight,
+                            opacity: zone.opacity,
+                        }}
+                        experimentalBlurMethod="dimezisBlurView"
+                    />
+                ))}
+                <LinearGradient
+                    colors={isBottom
+                        ? ['rgba(0,0,0,0)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.7)']
+                        : ['rgba(0,0,0,0.7)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0)'] as any}
+                    locations={isBottom ? [0, 0.5, 1] : [1, 0.5, 0] as any}
+                    style={StyleSheet.absoluteFill}
+                />
+            </View>
         );
     }
 

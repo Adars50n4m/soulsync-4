@@ -81,7 +81,7 @@ export default function MyStatusScreen() {
     }
     if (resolvedUri.startsWith('file://')) {
       const ext = asset.fileName?.split('.').pop() || (asset.type === 'video' ? 'mp4' : 'jpg');
-      const cacheDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+      const cacheDir = (FileSystem as any).cacheDirectory || (FileSystem as any).documentDirectory;
       if (!cacheDir) return resolvedUri;
       const target = `${cacheDir}status-${Date.now()}.${ext}`;
       try {

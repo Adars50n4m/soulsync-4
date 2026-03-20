@@ -3,6 +3,7 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, 
 import { useRouter } from 'expo-router';
 import { SERVER_URL, safeFetchJson, proxySupabaseUrl } from '../config/api';
 import { useApp } from '../context/AppContext';
+import { useChat } from '../context/ChatContext';
 import { MaterialIcons } from '@expo/vector-icons';
 import GlassView from '../components/ui/GlassView';
 import { SoulAvatar } from '../components/SoulAvatar';
@@ -11,6 +12,7 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 
 export default function RequestsScreen() {
     const { currentUser } = useApp();
+    const { refreshContactsFromServer, refreshRequests } = useChat();
     const [incoming, setIncoming] = useState<any[]>([]);
     const [outgoing, setOutgoing] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -66,6 +68,14 @@ export default function RequestsScreen() {
                 // Remove from local state
                 setIncoming(prev => prev.filter(r => r.id !== requestId));
                 setOutgoing(prev => prev.filter(r => r.id !== requestId));
+                
+                // If accepted, refresh contacts list
+                if (action === 'accept') {
+                    refreshContactsFromServer();
+                } else {
+                    // Otherwise just refresh the global requests state
+                    refreshRequests();
+                }
             } else if (error) {
                 console.error(`[Requests] Request ${action} failed:`, error);
             }
@@ -138,7 +148,7 @@ export default function RequestsScreen() {
                 data={[
                     { title: 'Incoming', data: incoming },
                     { title: 'Outgoing', data: outgoing }
-                ]}
+                ].filter(section => section.data.length > 0)}
                 renderItem={({ item }) => (
                     <>
                         {item.data.length > 0 && <Text style={styles.sectionTitle}>{item.title}</Text>}

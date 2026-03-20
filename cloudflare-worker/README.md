@@ -1,4 +1,4 @@
-# SoulSync Upload Worker
+# Soul Upload Worker
 
 Cloudflare Worker that handles media uploads (avatars, status images/videos) to Cloudflare R2 storage.
 
@@ -36,7 +36,7 @@ Mobile App → Worker (Auth + Validation) → R2 Bucket → Public URL
 
 ```bash
 # Create the bucket
-wrangler r2 bucket create soulsync-media
+wrangler r2 bucket create Soul-media
 
 # Verify bucket was created
 wrangler r2 bucket list
@@ -45,7 +45,7 @@ wrangler r2 bucket list
 ### 2. Configure Public Access
 
 1. Go to Cloudflare Dashboard → R2
-2. Select `soulsync-media` bucket
+2. Select `Soul-media` bucket
 3. Go to Settings → Public Access
 4. Connect a custom domain (e.g., `r2-media.yourdomain.com`)
 5. Note the public URL for configuration
@@ -83,14 +83,14 @@ npm run deploy
 npm run dev
 ```
 
-After deployment, note the Worker URL (e.g., `https://soulsync-upload.your-subdomain.workers.dev`)
+After deployment, note the Worker URL (e.g., `https://Soul-upload.your-subdomain.workers.dev`)
 
 ### 6. Configure Mobile App
 
-Update `/Volumes/Work/soulsync-4/mobile/.env`:
+Update `/Volumes/Work/Soul-4/mobile/.env`:
 
 ```env
-EXPO_PUBLIC_R2_WORKER_URL=https://soulsync-upload.YOUR-SUBDOMAIN.workers.dev
+EXPO_PUBLIC_R2_WORKER_URL=https://Soul-upload.YOUR-SUBDOMAIN.workers.dev
 EXPO_PUBLIC_R2_PUBLIC_URL=https://r2-media.YOUR-DOMAIN.com
 EXPO_PUBLIC_USE_R2=false
 ```
@@ -102,7 +102,7 @@ EXPO_PUBLIC_USE_R2=false
 ### Test Health Endpoint
 
 ```bash
-curl https://soulsync-upload.your-subdomain.workers.dev/health
+curl https://Soul-upload.your-subdomain.workers.dev/health
 ```
 
 Expected response:
@@ -116,7 +116,7 @@ Expected response:
 # Get a token from your mobile app or Supabase
 TOKEN="your-jwt-token-here"
 
-curl -X POST https://soulsync-upload.your-subdomain.workers.dev/upload/avatar \
+curl -X POST https://Soul-upload.your-subdomain.workers.dev/upload/avatar \
   -H "Authorization: Bearer $TOKEN" \
   -F "file=@test-image.jpg" \
   -F "folder=test-user"
@@ -214,7 +214,7 @@ Upload status media (max 50MB)
 wrangler tail
 
 # View logs in dashboard
-# Cloudflare Dashboard → Workers → soulsync-upload-worker → Logs
+# Cloudflare Dashboard → Workers → Soul-upload-worker → Logs
 ```
 
 ### Metrics to Monitor
@@ -262,7 +262,7 @@ wrangler tail
 
 To auto-delete status media after 24 hours:
 
-1. Go to Cloudflare Dashboard → R2 → soulsync-media
+1. Go to Cloudflare Dashboard → R2 → Soul-media
 2. Settings → Lifecycle Rules
 3. Add rule:
    - Name: "Delete expired statuses"

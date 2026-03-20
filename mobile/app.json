@@ -19,7 +19,8 @@
         "UIBackgroundModes": [
           "audio",
           "fetch",
-          "processing"
+          "processing",
+          "remote-notification"
         ],
         "LSApplicationQueriesSchemes": [
           "mailto"
@@ -62,6 +63,8 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/messaging",
       "expo-router",
       [
         "expo-build-properties",
@@ -104,6 +107,7 @@
           "minimumInterval": 900
         }
       ],
+      "./plugins/withRnFirebaseMessagingCompat",
       "./plugins/withCallKit",
       "./plugins/withAndroidCalling",
       "./plugins/withWebSocketFix",

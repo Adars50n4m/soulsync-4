@@ -100,9 +100,17 @@ export async function safeFetchJson<T>(
         return { success: true, data: data as T };
     } catch (error: any) {
         console.warn(`[API] safeFetchJson failed for ${url}:`, error);
+        
+        let errorMessage = error.message || 'Network request failed';
+        
+        // Add helpful context for local development connection failures
+        if (url.includes('localhost') || url.match(/192\.168\.\d+\.\d+/) || url.includes('10.0.2.2')) {
+            errorMessage = `Could not connect to local server at ${url}. Please ensure your Node.js server is running and reachable from your mobile device.`;
+        }
+        
         return {
             success: false,
-            error: error.message || 'Network request failed'
+            error: errorMessage
         };
     }
 }

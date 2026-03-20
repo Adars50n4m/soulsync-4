@@ -1,5 +1,5 @@
 /**
- * SoulSync — Login Screen
+ * Soul — Login Screen
  * Design: Exact teddy bear couple from reference + dark theme
  * Auth:   Supabase email/password + Google Sign-In
  */
@@ -83,6 +83,9 @@ export default function LoginScreen() {
   // ── Forgot Password State ──────────────────────────────────────
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [isResetSuccess, setIsResetSuccess]     = useState(false);
+  
+  // ── Google Signup Flag ───────────────────────────────────────
+  const [isGoogleSignup, setIsGoogleSignup]     = useState(false);
 
   const toggleMode = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -270,14 +273,18 @@ export default function LoginScreen() {
       else if (signupStep === 'setup') {
         // Step 3: Complete Setup
         if (!username || usernameState !== 'available') { setError('Choose a valid username'); setStatus('fail'); return; }
-        if (password.length < 8) { setError('Password too short (8+)'); setStatus('fail'); return; }
-        if (password !== confirmPassword) { setError('Passwords do not match'); setStatus('fail'); return; }
+        
+        // Only enforce password if this isn't a Google signup
+        if (!isGoogleSignup) {
+          if (password.length < 8) { setError('Password too short (8+)'); setStatus('fail'); return; }
+          if (password !== confirmPassword) { setError('Passwords do not match'); setStatus('fail'); return; }
+        }
 
         setStatus('loading');
         // We use completeProfileSetup because verifyOTP already established a session
         const res = await authService.completeProfileSetup({
           username,
-          password,
+          password: !isGoogleSignup ? password : undefined,
           displayName: username, // Default to username
         });
 
@@ -305,6 +312,7 @@ export default function LoginScreen() {
         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
         setIsLogin(false);
         setSignupStep('setup');
+        setIsGoogleSignup(true);
         setStatus('idle');
       }
       else setTimeout(() => router.replace('/(tabs)'), 1000);
@@ -623,41 +631,45 @@ export default function LoginScreen() {
                     )}
                   </View>
 
-                  {/* Password */}
-                  <View style={[s.inputWrap, isPassFocused && s.inputWrapFocused]}>
-                    <Feather name="lock" size={20} color={isPassFocused ? C.accent : '#666'} style={s.inputIcon} />
-                    <TextInput
-                      style={[s.input, { flex: 1 }]}
-                      placeholder="Create Password"
-                      placeholderTextColor="#666"
-                      value={password}
-                      onChangeText={setPassword}
-                      onFocus={() => setPassFocus(true)}
-                      onBlur={() => setPassFocus(false)}
-                      secureTextEntry={!showPassword}
-                    />
-                    <TouchableOpacity onPress={() => setShowPwd(p => !p)} hitSlop={10}>
-                      <Feather name={showPassword ? 'eye' : 'eye-off'} size={20} color="#666" />
-                    </TouchableOpacity>
-                  </View>
+                  {/* Password (Only if not Google Signup) */}
+                  {!isGoogleSignup && (
+                    <>
+                      <View style={[s.inputWrap, isPassFocused && s.inputWrapFocused]}>
+                        <Feather name="lock" size={20} color={isPassFocused ? C.accent : '#666'} style={s.inputIcon} />
+                        <TextInput
+                          style={[s.input, { flex: 1 }]}
+                          placeholder="Create Password"
+                          placeholderTextColor="#666"
+                          value={password}
+                          onChangeText={setPassword}
+                          onFocus={() => setPassFocus(true)}
+                          onBlur={() => setPassFocus(false)}
+                          secureTextEntry={!showPassword}
+                        />
+                        <TouchableOpacity onPress={() => setShowPwd(p => !p)} hitSlop={10}>
+                          <Feather name={showPassword ? 'eye' : 'eye-off'} size={20} color="#666" />
+                        </TouchableOpacity>
+                      </View>
 
-                  {/* Confirm Password */}
-                  <View style={[s.inputWrap, isConfirmFocused && s.inputWrapFocused, { marginBottom: 28 }]}>
-                    <Feather name="shield" size={20} color={isConfirmFocused ? C.accent : '#666'} style={s.inputIcon} />
-                    <TextInput
-                      style={[s.input, { flex: 1 }]}
-                      placeholder="Confirm Password"
-                      placeholderTextColor="#666"
-                      value={confirmPassword}
-                      onChangeText={setConfirm}
-                      onFocus={() => setConfFocus(true)}
-                      onBlur={() => setConfFocus(false)}
-                      secureTextEntry={!showConfirm}
-                    />
-                    <TouchableOpacity onPress={() => setShowConfirm(p => !p)} hitSlop={10}>
-                      <Feather name={showConfirm ? 'eye' : 'eye-off'} size={20} color="#666" />
-                    </TouchableOpacity>
-                  </View>
+                      {/* Confirm Password */}
+                      <View style={[s.inputWrap, isConfirmFocused && s.inputWrapFocused, { marginBottom: 28 }]}>
+                        <Feather name="shield" size={20} color={isConfirmFocused ? C.accent : '#666'} style={s.inputIcon} />
+                        <TextInput
+                          style={[s.input, { flex: 1 }]}
+                          placeholder="Confirm Password"
+                          placeholderTextColor="#666"
+                          value={confirmPassword}
+                          onChangeText={setConfirm}
+                          onFocus={() => setConfFocus(true)}
+                          onBlur={() => setConfFocus(false)}
+                          secureTextEntry={!showConfirm}
+                        />
+                        <TouchableOpacity onPress={() => setShowConfirm(p => !p)} hitSlop={10}>
+                          <Feather name={showConfirm ? 'eye' : 'eye-off'} size={20} color="#666" />
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  )}
                 </>
               )}
             </>
@@ -759,7 +771,7 @@ const s = StyleSheet.create({
   },
   card: {
     width: '100%',
-    backgroundColor: C.card,
+    backgroundColor: 'transparent',
     borderRadius: 40,
     paddingHorizontal: 28,
     paddingTop: 44,

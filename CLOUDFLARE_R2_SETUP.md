@@ -1,6 +1,6 @@
 # Cloudflare R2 Integration Guide
 
-This guide walks you through integrating Cloudflare R2 for media storage in the SoulSync mobile app.
+This guide walks you through integrating Cloudflare R2 for media storage in the Soul mobile app.
 
 ## Overview
 
@@ -38,14 +38,14 @@ wrangler login
 #### 1.2 Create R2 Bucket
 
 ```bash
-cd /Volumes/Work/soulsync-4/cloudflare-worker
-wrangler r2 bucket create soulsync-media
+cd /Volumes/Work/Soul-4/cloudflare-worker
+wrangler r2 bucket create Soul-media
 ```
 
 #### 1.3 Configure Public Access
 
 1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com) → R2
-2. Click on `soulsync-media` bucket
+2. Click on `Soul-media` bucket
 3. Go to **Settings** → **Public Access**
 4. Click **Connect Domain**
 5. Choose a domain/subdomain (e.g., `r2-media.yourdomain.com`)
@@ -54,7 +54,7 @@ wrangler r2 bucket create soulsync-media
 
 #### 1.4 Configure Lifecycle Rules (Auto-delete after 24h)
 
-1. In the `soulsync-media` bucket settings
+1. In the `Soul-media` bucket settings
 2. Go to **Lifecycle Rules**
 3. Click **Add Rule**
 4. Configure:
@@ -68,7 +68,7 @@ wrangler r2 bucket create soulsync-media
 #### 2.1 Install Worker Dependencies
 
 ```bash
-cd /Volumes/Work/soulsync-4/cloudflare-worker
+cd /Volumes/Work/Soul-4/cloudflare-worker
 npm install
 ```
 
@@ -101,7 +101,7 @@ npm run deploy
 Expected output:
 ```
 ✨ Successfully published your script
-https://soulsync-upload.YOUR-SUBDOMAIN.workers.dev
+https://Soul-upload.YOUR-SUBDOMAIN.workers.dev
 ```
 
 **Save this Worker URL** - you'll need it for mobile app configuration!
@@ -109,7 +109,7 @@ https://soulsync-upload.YOUR-SUBDOMAIN.workers.dev
 #### 2.4 Test Worker Deployment
 
 ```bash
-curl https://soulsync-upload.YOUR-SUBDOMAIN.workers.dev/health
+curl https://Soul-upload.YOUR-SUBDOMAIN.workers.dev/health
 ```
 
 Expected response:
@@ -121,11 +121,11 @@ Expected response:
 
 #### 3.1 Create .env File
 
-Create `/Volumes/Work/soulsync-4/mobile/.env`:
+Create `/Volumes/Work/Soul-4/mobile/.env`:
 
 ```env
 # Cloudflare R2 Configuration
-EXPO_PUBLIC_R2_WORKER_URL=https://soulsync-upload.YOUR-SUBDOMAIN.workers.dev
+EXPO_PUBLIC_R2_WORKER_URL=https://Soul-upload.YOUR-SUBDOMAIN.workers.dev
 EXPO_PUBLIC_R2_PUBLIC_URL=https://r2-media.YOUR-DOMAIN.com
 EXPO_PUBLIC_USE_R2=false
 
@@ -141,7 +141,7 @@ EXPO_PUBLIC_USE_R2=false
 Check that the config is loaded:
 
 ```bash
-cd /Volumes/Work/soulsync-4/mobile
+cd /Volumes/Work/Soul-4/mobile
 npx expo start -c
 ```
 
@@ -178,7 +178,7 @@ The app should start without errors.
 
 Watch Worker logs in real-time:
 ```bash
-cd /Volumes/Work/soulsync-4/cloudflare-worker
+cd /Volumes/Work/Soul-4/cloudflare-worker
 wrangler tail
 ```
 
@@ -192,7 +192,7 @@ Look for:
 
 #### 4.3 Verify Files in R2
 
-1. Go to Cloudflare Dashboard → R2 → `soulsync-media`
+1. Go to Cloudflare Dashboard → R2 → `Soul-media`
 2. Browse objects
 3. You should see:
    ```
@@ -262,11 +262,11 @@ If something goes wrong:
 **Investigate:**
 ```bash
 # Check Worker logs
-cd /Volumes/Work/soulsync-4/cloudflare-worker
+cd /Volumes/Work/Soul-4/cloudflare-worker
 wrangler tail
 
 # Check Worker metrics
-# Cloudflare Dashboard → Workers → soulsync-upload-worker → Metrics
+# Cloudflare Dashboard → Workers → Soul-upload-worker → Metrics
 ```
 
 **Common Issues:**
@@ -331,12 +331,12 @@ media_url TEXT  -- Can be either:
 ### View Metrics
 
 **Cloudflare Dashboard:**
-1. Go to Workers → soulsync-upload-worker → Metrics
+1. Go to Workers → Soul-upload-worker → Metrics
 2. View graphs for requests, errors, duration
 3. Set up alerts for high error rates
 
 **R2 Dashboard:**
-1. Go to R2 → soulsync-media → Metrics
+1. Go to R2 → Soul-media → Metrics
 2. View storage usage and operations
 3. Monitor costs
 
@@ -446,11 +446,11 @@ After successful deployment:
 - [Wrangler CLI Docs](https://developers.cloudflare.com/workers/wrangler/)
 
 **Worker Code:**
-- `/Volumes/Work/soulsync-4/cloudflare-worker/`
+- `/Volumes/Work/Soul-4/cloudflare-worker/`
 
 **Mobile Integration:**
-- `/Volumes/Work/soulsync-4/mobile/services/R2StorageService.ts`
-- `/Volumes/Work/soulsync-4/mobile/config/r2.ts`
+- `/Volumes/Work/Soul-4/mobile/services/R2StorageService.ts`
+- `/Volumes/Work/Soul-4/mobile/config/r2.ts`
 
 **Logs:**
 ```bash

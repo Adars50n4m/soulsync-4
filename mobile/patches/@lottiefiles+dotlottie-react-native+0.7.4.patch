@@ -1,0 +1,695 @@
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/.classpath b/node_modules/@lottiefiles/dotlottie-react-native/android/.classpath
+new file mode 100644
+index 0000000..bbe97e5
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/.classpath
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<classpath>
++	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-17/"/>
++	<classpathentry kind="con" path="org.eclipse.buildship.core.gradleclasspathcontainer"/>
++	<classpathentry kind="output" path="bin/default"/>
++</classpath>
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/.project b/node_modules/@lottiefiles/dotlottie-react-native/android/.project
+new file mode 100644
+index 0000000..b5e67ca
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/.project
+@@ -0,0 +1,34 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<projectDescription>
++	<name>lottiefiles_dotlottie-react-native</name>
++	<comment>Project lottiefiles_dotlottie-react-native created by Buildship.</comment>
++	<projects>
++	</projects>
++	<buildSpec>
++		<buildCommand>
++			<name>org.eclipse.jdt.core.javabuilder</name>
++			<arguments>
++			</arguments>
++		</buildCommand>
++		<buildCommand>
++			<name>org.eclipse.buildship.core.gradleprojectbuilder</name>
++			<arguments>
++			</arguments>
++		</buildCommand>
++	</buildSpec>
++	<natures>
++		<nature>org.eclipse.jdt.core.javanature</nature>
++		<nature>org.eclipse.buildship.core.gradleprojectnature</nature>
++	</natures>
++	<filteredResources>
++		<filter>
++			<id>1774114223684</id>
++			<name></name>
++			<type>30</type>
++			<matcher>
++				<id>org.eclipse.core.resources.regexFilterMatcher</id>
++				<arguments>node_modules|\.git|__CREATED_BY_JAVA_LANGUAGE_SERVER__</arguments>
++			</matcher>
++		</filter>
++	</filteredResources>
++</projectDescription>
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/.settings/org.eclipse.buildship.core.prefs b/node_modules/@lottiefiles/dotlottie-react-native/android/.settings/org.eclipse.buildship.core.prefs
+new file mode 100644
+index 0000000..68c9fab
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/.settings/org.eclipse.buildship.core.prefs
+@@ -0,0 +1,2 @@
++connection.project.dir=../../../../android
++eclipse.preferences.version=1
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/buildConfig/debug/com/dotlottiereactnative/BuildConfig.java b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/buildConfig/debug/com/dotlottiereactnative/BuildConfig.java
+new file mode 100644
+index 0000000..b780ff4
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/buildConfig/debug/com/dotlottiereactnative/BuildConfig.java
+@@ -0,0 +1,10 @@
++/**
++ * Automatically generated file. DO NOT MODIFY
++ */
++package com.dotlottiereactnative;
++
++public final class BuildConfig {
++  public static final boolean DEBUG = Boolean.parseBoolean("true");
++  public static final String LIBRARY_PACKAGE_NAME = "com.dotlottiereactnative";
++  public static final String BUILD_TYPE = "debug";
++}
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/CMakeLists.txt b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/CMakeLists.txt
+new file mode 100644
+index 0000000..3053bc5
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/CMakeLists.txt
+@@ -0,0 +1,36 @@
++# Copyright (c) Meta Platforms, Inc. and affiliates.
++#
++# This source code is licensed under the MIT license found in the
++# LICENSE file in the root directory of this source tree.
++
++cmake_minimum_required(VERSION 3.13)
++set(CMAKE_VERBOSE_MAKEFILE on)
++
++file(GLOB react_codegen_SRCS CONFIGURE_DEPENDS *.cpp react/renderer/components/LottiefilesDotlottieReactNativeSpec/*.cpp)
++
++add_library(
++  react_codegen_LottiefilesDotlottieReactNativeSpec
++  OBJECT
++  ${react_codegen_SRCS}
++)
++
++target_include_directories(react_codegen_LottiefilesDotlottieReactNativeSpec PUBLIC . react/renderer/components/LottiefilesDotlottieReactNativeSpec)
++
++target_link_libraries(
++  react_codegen_LottiefilesDotlottieReactNativeSpec
++  fbjni
++  jsi
++  # We need to link different libraries based on whether we are building rncore or not, that's necessary
++  # because we want to break a circular dependency between react_codegen_rncore and reactnative
++  reactnative
++)
++
++target_compile_options(
++  react_codegen_LottiefilesDotlottieReactNativeSpec
++  PRIVATE
++  -DLOG_TAG=\"ReactNative\"
++  -fexceptions
++  -frtti
++  -std=c++20
++  -Wall
++)
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/LottiefilesDotlottieReactNativeSpec-generated.cpp b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/LottiefilesDotlottieReactNativeSpec-generated.cpp
+new file mode 100644
+index 0000000..9d3741c
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/LottiefilesDotlottieReactNativeSpec-generated.cpp
+@@ -0,0 +1,22 @@
++
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GenerateModuleJniCpp.js
++ */
++
++#include "LottiefilesDotlottieReactNativeSpec.h"
++
++namespace facebook::react {
++
++
++
++std::shared_ptr<TurboModule> LottiefilesDotlottieReactNativeSpec_ModuleProvider(const std::string &moduleName, const JavaTurboModule::InitParams &params) {
++
++  return nullptr;
++}
++
++} // namespace facebook::react
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/LottiefilesDotlottieReactNativeSpec.h b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/LottiefilesDotlottieReactNativeSpec.h
+new file mode 100644
+index 0000000..ece37d1
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/LottiefilesDotlottieReactNativeSpec.h
+@@ -0,0 +1,24 @@
++
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GenerateModuleJniH.js
++ */
++
++#pragma once
++
++#include <ReactCommon/JavaTurboModule.h>
++#include <ReactCommon/TurboModule.h>
++#include <jsi/jsi.h>
++
++namespace facebook::react {
++
++
++
++JSI_EXPORT
++std::shared_ptr<TurboModule> LottiefilesDotlottieReactNativeSpec_ModuleProvider(const std::string &moduleName, const JavaTurboModule::InitParams &params);
++
++} // namespace facebook::react
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/ComponentDescriptors.cpp b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/ComponentDescriptors.cpp
+new file mode 100644
+index 0000000..8f3f7a9
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/ComponentDescriptors.cpp
+@@ -0,0 +1,22 @@
++
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GenerateComponentDescriptorCpp.js
++ */
++
++#include <react/renderer/components/LottiefilesDotlottieReactNativeSpec/ComponentDescriptors.h>
++#include <react/renderer/core/ConcreteComponentDescriptor.h>
++#include <react/renderer/componentregistry/ComponentDescriptorProviderRegistry.h>
++
++namespace facebook::react {
++
++void LottiefilesDotlottieReactNativeSpec_registerComponentDescriptorsFromCodegen(
++  std::shared_ptr<const ComponentDescriptorProviderRegistry> registry) {
++
++}
++
++} // namespace facebook::react
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/ComponentDescriptors.h b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/ComponentDescriptors.h
+new file mode 100644
+index 0000000..c83f9e5
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/ComponentDescriptors.h
+@@ -0,0 +1,24 @@
++
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GenerateComponentDescriptorH.js
++ */
++
++#pragma once
++
++#include <react/renderer/components/LottiefilesDotlottieReactNativeSpec/ShadowNodes.h>
++#include <react/renderer/core/ConcreteComponentDescriptor.h>
++#include <react/renderer/componentregistry/ComponentDescriptorProviderRegistry.h>
++
++namespace facebook::react {
++
++
++
++void LottiefilesDotlottieReactNativeSpec_registerComponentDescriptorsFromCodegen(
++  std::shared_ptr<const ComponentDescriptorProviderRegistry> registry);
++
++} // namespace facebook::react
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/EventEmitters.cpp b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/EventEmitters.cpp
+new file mode 100644
+index 0000000..a33a0f5
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/EventEmitters.cpp
+@@ -0,0 +1,16 @@
++
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GenerateEventEmitterCpp.js
++ */
++
++#include <react/renderer/components/LottiefilesDotlottieReactNativeSpec/EventEmitters.h>
++
++
++namespace facebook::react {
++
++} // namespace facebook::react
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/EventEmitters.h b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/EventEmitters.h
+new file mode 100644
+index 0000000..2845a63
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/EventEmitters.h
+@@ -0,0 +1,17 @@
++
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GenerateEventEmitterH.js
++ */
++#pragma once
++
++#include <react/renderer/components/view/ViewEventEmitter.h>
++
++
++namespace facebook::react {
++
++} // namespace facebook::react
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/LottiefilesDotlottieReactNativeSpecJSI-generated.cpp b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/LottiefilesDotlottieReactNativeSpecJSI-generated.cpp
+new file mode 100644
+index 0000000..27247c2
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/LottiefilesDotlottieReactNativeSpecJSI-generated.cpp
+@@ -0,0 +1,17 @@
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GenerateModuleCpp.js
++ */
++
++#include "LottiefilesDotlottieReactNativeSpecJSI.h"
++
++namespace facebook::react {
++
++
++
++
++} // namespace facebook::react
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/LottiefilesDotlottieReactNativeSpecJSI.h b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/LottiefilesDotlottieReactNativeSpecJSI.h
+new file mode 100644
+index 0000000..ec16260
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/LottiefilesDotlottieReactNativeSpecJSI.h
+@@ -0,0 +1,19 @@
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GenerateModuleH.js
++ */
++
++#pragma once
++
++#include <ReactCommon/TurboModule.h>
++#include <react/bridging/Bridging.h>
++
++namespace facebook::react {
++
++
++
++} // namespace facebook::react
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/Props.cpp b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/Props.cpp
+new file mode 100644
+index 0000000..cd35cf8
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/Props.cpp
+@@ -0,0 +1,19 @@
++
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GeneratePropsCpp.js
++ */
++
++#include <react/renderer/components/LottiefilesDotlottieReactNativeSpec/Props.h>
++#include <react/renderer/core/PropsParserContext.h>
++#include <react/renderer/core/propsConversions.h>
++
++namespace facebook::react {
++
++
++
++} // namespace facebook::react
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/Props.h b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/Props.h
+new file mode 100644
+index 0000000..870864b
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/Props.h
+@@ -0,0 +1,18 @@
++
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GeneratePropsH.js
++ */
++#pragma once
++
++
++
++namespace facebook::react {
++
++
++
++} // namespace facebook::react
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/ShadowNodes.cpp b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/ShadowNodes.cpp
+new file mode 100644
+index 0000000..b13a924
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/ShadowNodes.cpp
+@@ -0,0 +1,17 @@
++
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GenerateShadowNodeCpp.js
++ */
++
++#include <react/renderer/components/LottiefilesDotlottieReactNativeSpec/ShadowNodes.h>
++
++namespace facebook::react {
++
++
++
++} // namespace facebook::react
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/ShadowNodes.h b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/ShadowNodes.h
+new file mode 100644
+index 0000000..3ea519b
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/ShadowNodes.h
+@@ -0,0 +1,23 @@
++
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GenerateShadowNodeH.js
++ */
++
++#pragma once
++
++#include <react/renderer/components/LottiefilesDotlottieReactNativeSpec/EventEmitters.h>
++#include <react/renderer/components/LottiefilesDotlottieReactNativeSpec/Props.h>
++#include <react/renderer/components/LottiefilesDotlottieReactNativeSpec/States.h>
++#include <react/renderer/components/view/ConcreteViewShadowNode.h>
++#include <jsi/jsi.h>
++
++namespace facebook::react {
++
++
++
++} // namespace facebook::react
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/States.cpp b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/States.cpp
+new file mode 100644
+index 0000000..85392e0
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/States.cpp
+@@ -0,0 +1,16 @@
++
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GenerateStateCpp.js
++ */
++#include <react/renderer/components/LottiefilesDotlottieReactNativeSpec/States.h>
++
++namespace facebook::react {
++
++
++
++} // namespace facebook::react
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/States.h b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/States.h
+new file mode 100644
+index 0000000..c011ed8
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/jni/react/renderer/components/LottiefilesDotlottieReactNativeSpec/States.h
+@@ -0,0 +1,19 @@
++/**
++ * This code was generated by [react-native-codegen](https://www.npmjs.com/package/react-native-codegen).
++ *
++ * Do not edit this file as changes may cause incorrect behavior and will be lost
++ * once the code is regenerated.
++ *
++ * @generated by codegen project: GenerateStateH.js
++ */
++#pragma once
++
++#ifdef ANDROID
++#include <folly/dynamic.h>
++#endif
++
++namespace facebook::react {
++
++
++
++} // namespace facebook::react
+\ No newline at end of file
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/schema.json b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/schema.json
+new file mode 100644
+index 0000000..297679b
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/source/codegen/schema.json
+@@ -0,0 +1,3 @@
++{
++  "modules": {}
++}
+\ No newline at end of file
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/AndroidManifest.xml b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/AndroidManifest.xml
+new file mode 100644
+index 0000000..cef92a8
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/AndroidManifest.xml
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="utf-8"?>
++<manifest xmlns:android="http://schemas.android.com/apk/res/android"
++    package="com.dotlottiereactnative" >
++
++    <uses-sdk android:minSdkVersion="24" />
++
++</manifest>
+\ No newline at end of file
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/output-metadata.json b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/output-metadata.json
+new file mode 100644
+index 0000000..3f22661
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/aapt_friendly_merged_manifests/debug/processDebugManifest/aapt/output-metadata.json
+@@ -0,0 +1,18 @@
++{
++  "version": 3,
++  "artifactType": {
++    "type": "AAPT_FRIENDLY_MERGED_MANIFESTS",
++    "kind": "Directory"
++  },
++  "applicationId": "com.dotlottiereactnative",
++  "variantName": "debug",
++  "elements": [
++    {
++      "type": "SINGLE",
++      "filters": [],
++      "attributes": [],
++      "outputFile": "AndroidManifest.xml"
++    }
++  ],
++  "elementType": "File"
++}
+\ No newline at end of file
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/aar_metadata/debug/writeDebugAarMetadata/aar-metadata.properties b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/aar_metadata/debug/writeDebugAarMetadata/aar-metadata.properties
+new file mode 100644
+index 0000000..1211b1e
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/aar_metadata/debug/writeDebugAarMetadata/aar-metadata.properties
+@@ -0,0 +1,6 @@
++aarFormatVersion=1.0
++aarMetadataVersion=1.0
++minCompileSdk=1
++minCompileSdkExtension=0
++minAndroidGradlePluginVersion=1.0.0
++coreLibraryDesugaringEnabled=false
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/annotation_processor_list/debug/javaPreCompileDebug/annotationProcessors.json b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/annotation_processor_list/debug/javaPreCompileDebug/annotationProcessors.json
+new file mode 100644
+index 0000000..9e26dfe
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/annotation_processor_list/debug/javaPreCompileDebug/annotationProcessors.json
+@@ -0,0 +1 @@
++{}
+\ No newline at end of file
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/compile_r_class_jar/debug/generateDebugRFile/R.jar b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/compile_r_class_jar/debug/generateDebugRFile/R.jar
+new file mode 100644
+index 0000000..880368b
+Binary files /dev/null and b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/compile_r_class_jar/debug/generateDebugRFile/R.jar differ
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/compile_symbol_list/debug/generateDebugRFile/R.txt b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/compile_symbol_list/debug/generateDebugRFile/R.txt
+new file mode 100644
+index 0000000..e69de29
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/incremental/debug/packageDebugResources/compile-file-map.properties b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/incremental/debug/packageDebugResources/compile-file-map.properties
+new file mode 100644
+index 0000000..a6153c9
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/incremental/debug/packageDebugResources/compile-file-map.properties
+@@ -0,0 +1 @@
++#Sat Mar 21 22:56:26 IST 2026
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/incremental/debug/packageDebugResources/merger.xml b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/incremental/debug/packageDebugResources/merger.xml
+new file mode 100644
+index 0000000..e1bcdd2
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/incremental/debug/packageDebugResources/merger.xml
+@@ -0,0 +1,2 @@
++<?xml version="1.0" encoding="utf-8"?>
++<merger version="3"><dataSet aapt-namespace="http://schemas.android.com/apk/res-auto" config="main$Generated" generated="true" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/res"/></dataSet><dataSet aapt-namespace="http://schemas.android.com/apk/res-auto" config="main" generated-set="main$Generated" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/res"/></dataSet><dataSet aapt-namespace="http://schemas.android.com/apk/res-auto" config="debug$Generated" generated="true" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/debug/res"/></dataSet><dataSet aapt-namespace="http://schemas.android.com/apk/res-auto" config="debug" generated-set="debug$Generated" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/debug/res"/></dataSet><dataSet aapt-namespace="http://schemas.android.com/apk/res-auto" config="generated$Generated" generated="true" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/res/resValues/debug"/></dataSet><dataSet aapt-namespace="http://schemas.android.com/apk/res-auto" config="generated" generated-set="generated$Generated" ignore_pattern="!.svn:!.git:!.ds_store:!*.scc:.*:&lt;dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~"><source path="/Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/build/generated/res/resValues/debug"/></dataSet><mergedItems/></merger>
+\ No newline at end of file
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/local_only_symbol_list/debug/parseDebugLocalResources/R-def.txt b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/local_only_symbol_list/debug/parseDebugLocalResources/R-def.txt
+new file mode 100644
+index 0000000..78ac5b8
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/local_only_symbol_list/debug/parseDebugLocalResources/R-def.txt
+@@ -0,0 +1,2 @@
++R_DEF: Internal format may change without notice
++local
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/manifest_merge_blame_file/debug/processDebugManifest/manifest-merger-blame-debug-report.txt b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/manifest_merge_blame_file/debug/processDebugManifest/manifest-merger-blame-debug-report.txt
+new file mode 100644
+index 0000000..b4f0335
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/manifest_merge_blame_file/debug/processDebugManifest/manifest-merger-blame-debug-report.txt
+@@ -0,0 +1,7 @@
++1<?xml version="1.0" encoding="utf-8"?>
++2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
++3    package="com.dotlottiereactnative" >
++4
++5    <uses-sdk android:minSdkVersion="24" />
++6
++7</manifest>
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml
+new file mode 100644
+index 0000000..cef92a8
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="utf-8"?>
++<manifest xmlns:android="http://schemas.android.com/apk/res/android"
++    package="com.dotlottiereactnative" >
++
++    <uses-sdk android:minSdkVersion="24" />
++
++</manifest>
+\ No newline at end of file
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/navigation_json/debug/extractDeepLinksDebug/navigation.json b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/navigation_json/debug/extractDeepLinksDebug/navigation.json
+new file mode 100644
+index 0000000..0637a08
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/navigation_json/debug/extractDeepLinksDebug/navigation.json
+@@ -0,0 +1 @@
++[]
+\ No newline at end of file
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/nested_resources_validation_report/debug/generateDebugResources/nestedResourcesValidationReport.txt b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/nested_resources_validation_report/debug/generateDebugResources/nestedResourcesValidationReport.txt
+new file mode 100644
+index 0000000..08f4ebe
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/nested_resources_validation_report/debug/generateDebugResources/nestedResourcesValidationReport.txt
+@@ -0,0 +1 @@
++0 Warning/Error
+\ No newline at end of file
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/symbol_list_with_package_name/debug/generateDebugRFile/package-aware-r.txt b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/symbol_list_with_package_name/debug/generateDebugRFile/package-aware-r.txt
+new file mode 100644
+index 0000000..1c69254
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/intermediates/symbol_list_with_package_name/debug/generateDebugRFile/package-aware-r.txt
+@@ -0,0 +1 @@
++com.dotlottiereactnative
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/kotlin/compileDebugKotlin/cacheable/dirty-sources.txt b/node_modules/@lottiefiles/dotlottie-react-native/android/build/kotlin/compileDebugKotlin/cacheable/dirty-sources.txt
+new file mode 100644
+index 0000000..0a36e31
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/kotlin/compileDebugKotlin/cacheable/dirty-sources.txt
+@@ -0,0 +1,5 @@
++/Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/java/com/dotlottiereactnative/DotlottieReactNativeView.kt
++/Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/java/com/dotlottiereactnative/DotlottieReactNativePackage.kt
++/Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/java/com/dotlottiereactnative/DotlottieReactNativeModule.kt
++/Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/java/com/dotlottiereactnative/DotlottieReactNativeViewManager.kt
++/Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/java/com/dotlottiereactnative/Utils.kt
+\ No newline at end of file
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/kotlin/compileDebugKotlin/local-state/build-history.bin b/node_modules/@lottiefiles/dotlottie-react-native/android/build/kotlin/compileDebugKotlin/local-state/build-history.bin
+new file mode 100644
+index 0000000..18eefe1
+Binary files /dev/null and b/node_modules/@lottiefiles/dotlottie-react-native/android/build/kotlin/compileDebugKotlin/local-state/build-history.bin differ
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/build/outputs/logs/manifest-merger-debug-report.txt b/node_modules/@lottiefiles/dotlottie-react-native/android/build/outputs/logs/manifest-merger-debug-report.txt
+new file mode 100644
+index 0000000..4d48645
+--- /dev/null
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/build/outputs/logs/manifest-merger-debug-report.txt
+@@ -0,0 +1,16 @@
++-- Merging decision tree log ---
++manifest
++ADDED from /Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/AndroidManifestNew.xml:1:1-2:12
++INJECTED from /Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/AndroidManifestNew.xml:1:1-2:12
++	package
++		INJECTED from /Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/AndroidManifestNew.xml
++	xmlns:android
++		ADDED from /Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/AndroidManifestNew.xml:1:11-69
++uses-sdk
++INJECTED from /Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/AndroidManifestNew.xml reason: use-sdk injection requested
++INJECTED from /Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/AndroidManifestNew.xml
++INJECTED from /Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/AndroidManifestNew.xml
++	android:targetSdkVersion
++		INJECTED from /Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/AndroidManifestNew.xml
++	android:minSdkVersion
++		INJECTED from /Volumes/Work/Soul/mobile/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/AndroidManifestNew.xml
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/java/com/dotlottiereactnative/DotlottieReactNativePackage.kt b/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/java/com/dotlottiereactnative/DotlottieReactNativePackage.kt
+index 1c5f438..44ec606 100644
+--- a/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/java/com/dotlottiereactnative/DotlottieReactNativePackage.kt
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/java/com/dotlottiereactnative/DotlottieReactNativePackage.kt
+@@ -4,9 +4,7 @@ import com.facebook.react.ReactPackage
+ import com.facebook.react.bridge.NativeModule
+ import com.facebook.react.bridge.ReactApplicationContext
+ import com.facebook.react.uimanager.ViewManager
+-import com.facebook.react.common.annotations.internal.InteropLegacyArchitecture
+ 
+-@InteropLegacyArchitecture
+ class DotlottieReactNativePackage : ReactPackage {
+   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
+     return listOf(DotlottieReactNativeModule(reactContext))
+diff --git a/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/java/com/dotlottiereactnative/DotlottieReactNativeViewManager.kt b/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/java/com/dotlottiereactnative/DotlottieReactNativeViewManager.kt
+index f57cd9b..2ac1b12 100644
+--- a/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/java/com/dotlottiereactnative/DotlottieReactNativeViewManager.kt
++++ b/node_modules/@lottiefiles/dotlottie-react-native/android/src/main/java/com/dotlottiereactnative/DotlottieReactNativeViewManager.kt
+@@ -2,12 +2,10 @@ package com.dotlottiereactnative
+ 
+ import com.dotlottie.dlplayer.Mode
+ import com.facebook.react.bridge.ReadableArray
+-import com.facebook.react.common.annotations.internal.InteropLegacyArchitecture
+ import com.facebook.react.uimanager.SimpleViewManager
+ import com.facebook.react.uimanager.ThemedReactContext
+ import com.facebook.react.uimanager.annotations.ReactProp
+ 
+-@InteropLegacyArchitecture
+ class DotlottieReactNativeViewManager : SimpleViewManager<DotlottieReactNativeView>() {
+ 
+   override fun getName() = "DotlottieReactNativeView"

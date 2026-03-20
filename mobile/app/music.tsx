@@ -539,14 +539,14 @@ export default function MusicScreen() {
             {/* Combined Backdrop: Single layer of glass + subtle tint */}
             <Animated.View style={[StyleSheet.absoluteFill, backdropBlurOpacity, { zIndex: 40 }]}>
                 <GlassView 
-                    intensity={60} 
+                    intensity={40} 
                     tint="dark" 
                     style={StyleSheet.absoluteFill}
                 />
                 <View 
                     style={[
                         StyleSheet.absoluteFill, 
-                        { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.3)' }
+                        { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.08)' : 'rgba(0,0,0,0.2)' }
                     ]} 
                 />
             </Animated.View>

@@ -1,7 +1,7 @@
 # WhatsApp-like Media Sharing - Implementation Complete ✅
 
 ## Overview
-Successfully implemented WhatsApp-style media sharing for the SoulSync chat app with Liquid UI/Glass UI design system.
+Successfully implemented WhatsApp-style media sharing for the Soul chat app with Liquid UI/Glass UI design system.
 
 ## What Was Built
 
