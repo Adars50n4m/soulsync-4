@@ -67,6 +67,8 @@ interface ChatContextType {
   outgoingRequestIds: string[];
   refreshRequests: () => Promise<void>;
   broadcastProfileUpdate: (updates: Partial<any>) => void;
+  archiveContact: (partnerId: string, archive?: boolean) => Promise<void>;
+  unfriendContact: (partnerId: string) => Promise<void>;
 }
 
 export const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -108,6 +110,7 @@ function normalizeContact(row: any): Contact {
     unreadCount: row.unreadCount ?? row.unread_count ?? 0,
     about: row.about ?? row.bio ?? '',
     lastSeen: row.lastSeen ?? row.last_seen ?? undefined,
+    isArchived: !!(row.isArchived ?? row.is_archived),
   };
 }
 
@@ -671,6 +674,31 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
   }, []);
 
+  const archiveContact = useCallback(async (partnerId: string, archive: boolean = true) => {
+    await offlineService.archiveContact(partnerId, archive);
+    setContacts(prev => prev.map(c => c.id === partnerId ? { ...c, isArchived: archive } : c));
+  }, []);
+
+  const unfriendContact = useCallback(async (partnerId: string) => {
+    try {
+      const response = await fetch(`${SERVER_URL}/api/connections/${partnerId}`, {
+        method: 'DELETE',
+        headers: {
+          'x-user-id': currentUser?.id || '',
+        }
+      });
+      const data = await response.json() as any;
+      if (data.success) {
+        // Remove from local contacts
+        setContacts(prev => prev.filter(c => c.id !== partnerId));
+        // Clear chat history
+        await clearChatMessages(partnerId);
+      }
+    } catch (err) {
+      console.error('[ChatContext] unfriendContact error:', err);
+    }
+  }, [currentUser, clearChatMessages]);
+
   const fetchOtherUserProfile = useCallback(async (userId: string) => {
     try {
       if (!supabase) return null;
@@ -725,6 +753,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     outgoingRequestIds,
     refreshRequests,
     broadcastProfileUpdate,
+    archiveContact,
+    unfriendContact,
   }), [
     contacts,
     messages,
@@ -748,6 +778,9 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     updateContactPreview,
     outgoingRequestIds,
     refreshRequests,
+    broadcastProfileUpdate,
+    archiveContact,
+    unfriendContact,
   ]);
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

@@ -63,6 +63,8 @@ interface AppContextType {
     fetchOtherUserProfile: any;
     pendingRequestsCount: number;
     broadcastProfileUpdate: (updates: Partial<any>) => void;
+    archiveContact: (partnerId: string, archive?: boolean) => Promise<void>;
+    unfriendContact: (partnerId: string) => Promise<void>;
     
     // Status
     statuses: any[];
@@ -240,6 +242,8 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         fetchOtherUserProfile: chat.fetchOtherUserProfile,
         pendingRequestsCount: chat.pendingRequestsCount,
         broadcastProfileUpdate: chat.broadcastProfileUpdate,
+        archiveContact: chat.archiveContact,
+        unfriendContact: chat.unfriendContact,
 
         // Status
         statuses: status.stories,

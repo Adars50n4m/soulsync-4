@@ -582,6 +582,39 @@ app.get('/api/connections', authenticateUser, async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch connections' });
     }
 });
+
+// 6. Delete Connection (Unfriend)
+app.delete('/api/connections/:partnerId', authenticateUser, async (req, res) => {
+    const { partnerId } = req.params;
+    const userId = req.user.id;
+
+    try {
+        if (!supabase) throw new Error('Supabase client not initialized');
+
+        // 1. Delete from connections table (user_1_id < user_2_id)
+        const [u1, u2] = [userId, partnerId].sort();
+        const { error: connErr } = await supabase
+            .from('connections')
+            .delete()
+            .match({ user_1_id: u1, user_2_id: u2 });
+
+        if (connErr) throw connErr;
+
+        // 2. Also delete/reject any connection requests between them
+        await supabase
+            .from('connection_requests')
+            .delete()
+            .or(`and(sender_id.eq.${userId},receiver_id.eq.${partnerId}),and(sender_id.eq.${partnerId},receiver_id.eq.${userId})`);
+
+        // 3. Notify the other user via socket
+        io.to(partnerId).emit('connection:removed', { userId });
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error deleting connection:', err);
+        res.status(500).json({ error: 'Failed to delete connection' });
+    }
+});
 // Track active socket ID per user to prevent duplicate room members
 const userSocketMap = new Map(); // userId -> socketId
 

@@ -24,6 +24,7 @@ import * as FileSystem from 'expo-file-system';
 import { storageService } from '../../services/StorageService';
 import { proxySupabaseUrl } from '../../config/api';
 import { chatTransitionState } from '../../services/chatTransitionState';
+import { SwipeableRow } from '../../components/ui/SwipeableRow';
 
 import { useApp } from '../../context/AppContext';
 import { SoulAvatar } from '../../components/SoulAvatar';
@@ -265,6 +266,9 @@ export default function HomeScreen() {
     onlineUsers,
     refreshLocalCache,
     pendingRequestsCount,
+    archiveContact,
+    unfriendContact,
+    clearChatMessages,
   } = useApp();
   const navigation = useNavigation();
   const router = useRouter();
@@ -457,7 +461,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
     [contactStoriesMap, currentUser]
   );
   const visibleContacts = useMemo(() => {
-    return contacts;
+    return (contacts || []).filter(c => !c.isArchived);
   }, [contacts]);
 
   const contactsWithStories = useMemo(() => {
@@ -669,18 +673,42 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
     const itemWithStories = { ...item, stories: storiesForContact };
 
     return (
-      <ChatListItem 
-          item={itemWithStories} 
-          index={index}
-          lastMsg={lastMsg} 
-          onSelect={handleUserSelect} 
-          isTyping={isTyping}
-          onlineUsers={onlineUsers}
-          connectivity={connectivity}
-          homeMorphProgress={homeMorphProgress}
-      />
+      <SwipeableRow
+        onArchive={() => archiveContact(item.id, true)}
+        onDelete={() => {
+            Alert.alert(
+                'Delete Chat',
+                `Are you sure you want to delete all messages with ${item.name}? This cannot be undone.`,
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Delete', style: 'destructive', onPress: () => clearChatMessages(item.id) }
+                ]
+            );
+        }}
+        onUnfriend={() => {
+            Alert.alert(
+                'Unfriend',
+                `Are you sure you want to unfriend ${item.name}?`,
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Unfriend', style: 'destructive', onPress: () => unfriendContact(item.id) }
+                ]
+            );
+        }}
+      >
+        <ChatListItem 
+            item={itemWithStories} 
+            index={index}
+            lastMsg={lastMsg} 
+            onSelect={handleUserSelect} 
+            isTyping={isTyping}
+            onlineUsers={onlineUsers}
+            connectivity={connectivity}
+            homeMorphProgress={homeMorphProgress}
+        />
+      </SwipeableRow>
     );
-  }, [lastMessagesMap, typingUsers, handleUserSelect, contactStoriesMap, onlineUsers, connectivity, homeMorphProgress]);
+  }, [lastMessagesMap, typingUsers, handleUserSelect, contactStoriesMap, onlineUsers, connectivity, homeMorphProgress, archiveContact, unfriendContact, clearChatMessages]);
 
   // Stable keyExtractor for FlashList
   const keyExtractor = useCallback((item: Contact) => item.id, []);

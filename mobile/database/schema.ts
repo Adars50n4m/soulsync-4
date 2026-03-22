@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ⬆️  Bump this number every time you change the schema.
-const DB_TARGET_VERSION = 12;
+const DB_TARGET_VERSION = 13;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper — read the stored schema version (returns 0 if brand-new install)
@@ -393,6 +393,21 @@ async function migration_v12(db: any): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION v13 — Add is_archived column to contacts table
+// ─────────────────────────────────────────────────────────────────────────────
+async function migration_v13(db: any): Promise<void> {
+  const safeAlter = async (sql: string) => {
+    try { await db.execAsync(sql); } catch (e: any) {
+        const msg = e?.message || String(e);
+        if (!msg.includes('duplicate column name') && !msg.includes('already exists')) {
+            console.warn(`[SQLite] Migration helper WARN v13:`, msg);
+        }
+    }
+  };
+  await safeAlter(`ALTER TABLE contacts ADD COLUMN is_archived INTEGER DEFAULT 0;`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN EXPORT — call this once in your app's DB initialisation
 // ─────────────────────────────────────────────────────────────────────────────
 export const MIGRATE_DB = async (db: any): Promise<void> => {
@@ -426,6 +441,7 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
       // Ensure contacts columns exist
       `ALTER TABLE contacts ADD COLUMN about TEXT DEFAULT '';`,
       `ALTER TABLE contacts ADD COLUMN last_seen TEXT;`,
+      `ALTER TABLE contacts ADD COLUMN is_archived INTEGER DEFAULT 0;`,
       
       // Ensure sync queue exists
       `CREATE TABLE IF NOT EXISTS pending_sync_ops (
@@ -513,6 +529,7 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
         case 10: await migration_v10(db); break;
         case 11: await migration_v11(db); break;
         case 12: await migration_v12(db); break;
+        case 13: await migration_v13(db); break;
         default:
           console.error(`[SQLite] No migration logic for v${nextVersion}!`);
       }

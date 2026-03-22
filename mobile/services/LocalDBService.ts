@@ -459,7 +459,8 @@ class OfflineService {
         lastMessage: r.last_message ?? '', 
         unreadCount: r.unread_count ?? 0, 
         about: r.about ?? r.bio ?? '', 
-        lastSeen: r.last_seen ?? undefined 
+        lastSeen: r.last_seen ?? undefined,
+        isArchived: r.is_archived === 1
     }));
   }
 
@@ -467,8 +468,8 @@ class OfflineService {
     const db = await getDb();
     await db.runAsync(
         `INSERT OR REPLACE INTO contacts 
-            (id, name, avatar, avatar_type, teddy_variant, status, last_message, unread_count, about, last_seen, last_synced_at) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`, 
+            (id, name, avatar, avatar_type, teddy_variant, status, last_message, unread_count, about, last_seen, last_synced_at, is_archived) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`, 
         [
             contact.id, 
             contact.name, 
@@ -480,9 +481,15 @@ class OfflineService {
             contact.unreadCount ?? 0, 
             contact.about ?? null, 
             contact.lastSeen ?? null, 
-            new Date().toISOString()
+            new Date().toISOString(),
+            contact.isArchived ? 1 : 0
         ]
     );
+  }
+
+  async archiveContact(userId: string, archive: boolean): Promise<void> {
+    const db = await getDb();
+    await db.runAsync('UPDATE contacts SET is_archived = ? WHERE id = ?;', [archive ? 1 : 0, userId]);
   }
 
   async clearAllContacts(): Promise<void> {
