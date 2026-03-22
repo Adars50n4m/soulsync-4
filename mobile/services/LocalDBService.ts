@@ -69,6 +69,24 @@ export interface PendingSyncOperation {
   retryCount: number;
 }
 
+export interface LocalStatus {
+  id: string;
+  userId: string;
+  userName?: string;
+  userAvatar?: string;
+  mediaUrl?: string;
+  localUri?: string;
+  mediaType: 'image' | 'video';
+  caption?: string;
+  music?: any;
+  createdAt: string;
+  expiresAt: string;
+  isMine: boolean;
+  syncStatus: 'pending' | 'synced' | 'failed' | 'deleted';
+  views?: string[];
+  likes?: string[];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DATABASE SINGLETON
 // ─────────────────────────────────────────────────────────────────────────────
@@ -731,6 +749,112 @@ class OfflineService {
       console.error('[SQLite] Failed to clear database:', e);
       throw e;
     }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // STATUS MANAGEMENT
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  async saveLocalStatus(status: LocalStatus): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `INSERT OR REPLACE INTO local_statuses 
+        (id, user_id, user_name, user_avatar, media_url, local_uri, media_type, caption, music, created_at, expires_at, is_mine, sync_status, views, likes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      [
+        status.id,
+        status.userId,
+        status.userName || null,
+        status.userAvatar || null,
+        status.mediaUrl || null,
+        status.localUri || null,
+        status.mediaType,
+        status.caption || null,
+        status.music ? JSON.stringify(status.music) : null,
+        status.createdAt,
+        status.expiresAt,
+        status.isMine ? 1 : 0,
+        status.syncStatus,
+        JSON.stringify(status.views || []),
+        JSON.stringify(status.likes || [])
+      ]
+    );
+  }
+
+  async getLocalStatuses(userId?: string): Promise<LocalStatus[]> {
+    const db = await getDb();
+    const now = new Date().toISOString();
+    let sql = `SELECT * FROM local_statuses WHERE expires_at > ? AND sync_status != 'deleted'`;
+    const params: any[] = [now];
+
+    if (userId) {
+      sql += ` AND user_id = ?`;
+      params.push(userId);
+    }
+    sql += ` ORDER BY created_at DESC`;
+
+    const rows = await db.getAllAsync(sql, params);
+    return (rows as any[]).map(row => ({
+      id: row.id,
+      userId: row.user_id,
+      userName: row.user_name || undefined,
+      userAvatar: row.user_avatar || undefined,
+      mediaUrl: row.media_url || undefined,
+      localUri: row.local_uri || undefined,
+      mediaType: row.media_type as 'image' | 'video',
+      caption: row.caption || undefined,
+      music: row.music ? JSON.parse(row.music) : undefined,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+      isMine: Boolean(row.is_mine),
+      syncStatus: row.sync_status,
+      views: JSON.parse(row.views || '[]'),
+      likes: JSON.parse(row.likes || '[]')
+    }));
+  }
+
+  async updateLocalStatusSyncStatus(id: string, syncStatus: LocalStatus['syncStatus'], mediaUrl?: string, serverId?: string): Promise<void> {
+    const db = await getDb();
+    if (serverId && serverId !== id) {
+        // We're replacing a temp ID with a server ID
+        await db.runAsync(
+            `UPDATE local_statuses SET id = ?, sync_status = ?, media_url = COALESCE(?, media_url) WHERE id = ?;`,
+            [serverId, syncStatus, mediaUrl || null, id]
+        );
+    } else {
+        await db.runAsync(
+            `UPDATE local_statuses SET sync_status = ?, media_url = COALESCE(?, media_url) WHERE id = ?;`,
+            [syncStatus, mediaUrl || null, id]
+        );
+    }
+  }
+
+  async deleteLocalStatus(id: string): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(`UPDATE local_statuses SET sync_status = 'deleted' WHERE id = ?;`, [id]);
+    // Optionally delete from FS later or immediately if localUri exists
+    const row = await db.getFirstAsync(`SELECT local_uri FROM local_statuses WHERE id = ?;`, [id]) as any;
+    if (row?.local_uri) {
+        // We handle actual file deletion in MediaDownloadService/StatusContext
+    }
+  }
+
+  async markStatusAsSeen(statusId: string, userId: string): Promise<void> {
+    const db = await getDb();
+    const row = await db.getFirstAsync('SELECT views FROM local_statuses WHERE id = ?', [statusId]) as any;
+    if (row) {
+        let views = JSON.parse(row.views || '[]') as string[];
+        if (!views.includes(userId)) {
+            views.push(userId);
+            await db.runAsync('UPDATE local_statuses SET views = ? WHERE id = ?', [JSON.stringify(views), statusId]);
+        }
+    }
+  }
+
+  async purgeExpiredStatuses(): Promise<void> {
+    const db = await getDb();
+    const now = new Date().toISOString();
+    await db.runAsync(`DELETE FROM local_statuses WHERE expires_at <= ?;`, [now]);
   }
 }
 

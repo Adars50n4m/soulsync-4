@@ -249,7 +249,14 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     
     const router = useRouter();
     const isFocused = useIsFocused();
-    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, onlineUsers, initializeChatSession, cleanupChatSession } = useApp() as any;
+    const { 
+        contacts, messages, sendChatMessage, startCall, activeCall, 
+        updateMessage, addReaction, deleteMessage, musicState, 
+        currentUser, activeTheme, sendTyping, typingUsers, 
+        uploadProgressTracker, connectivity, onlineUsers, 
+        initializeChatSession, cleanupChatSession,
+        blockedByMe, blockedByThem
+    } = useApp() as any;
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
     const [isReady, setIsReady] = useState(false);
@@ -524,6 +531,9 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     // Memoize reversed messages to avoid expensive array operations in render
     const reversedMessages = useMemo(() => [...chatMessages].reverse(), [chatMessages]);
     const isTyping = contact ? typingUsers.includes(contact.id) : false;
+    const isMeBlocked = contact ? blockedByThem.has(contact.id) : false;
+    const isThemBlocked = contact ? blockedByMe.has(contact.id) : false;
+    const isBlocked = isMeBlocked || isThemBlocked;
 
     useEffect(() => {
         if (!isFocused || !currentUser?.id || !contact?.id) {
@@ -949,6 +959,15 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
     const handleCall = (type: 'audio' | 'video') => {
         closeCallModal();
+        if (isBlocked) {
+            Alert.alert(
+                isThemBlocked ? 'Unblock to call' : 'Calling disabled',
+                isThemBlocked 
+                    ? `You must unblock ${contact?.name || 'this user'} to make a call.`
+                    : `You cannot call ${contact?.name || 'this user'} at this time.`
+            );
+            return;
+        }
         setTimeout(() => startCall(id!, type), 300);
     };
 
@@ -1406,72 +1425,76 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             <View
                                 style={[styles.inputWrapper, isRecording && styles.inputWrapperHidden]}
                             >
-                                    {/* + Button on left inside */}
-                                    <Pressable style={styles.attachButton} onPress={toggleOptions}>
-                                        <Animated.View style={animatedPlusStyle}>
-                                            <MaterialIcons name="add" size={20} color="rgba(255,255,255,0.7)" />
-                                        </Animated.View>
-                                    </Pressable>
+                                    {!isBlocked ? (
+                                        <>
+                                            <Pressable style={styles.attachButton} onPress={toggleOptions}>
+                                                <Animated.View style={animatedPlusStyle}>
+                                                    <MaterialIcons name="add" size={20} color="rgba(255,255,255,0.7)" />
+                                                </Animated.View>
+                                            </Pressable>
 
-                                    <TextInput
-                                        style={styles.input}
-                                        value={inputText}
-                                        onChangeText={(text) => {
-                                            setInputText(text);
-                                            
-                                            // Typing indicator logic
-                                            sendTyping(true);
-                                            
-                                            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-                                            typingTimeoutRef.current = setTimeout(() => {
-                                                sendTyping(false);
-                                            }, 2000) as unknown as NodeJS.Timeout;
-                                        }}
-                                        onFocus={handleFocus}
-                                        placeholder="Sync fragment..."
-                                        placeholderTextColor="rgba(255,255,255,0.3)"
-                                        multiline
-                                        maxLength={1000}
-                                    />
-
-                                    {/* Emoji button (optional, can remove if not needed) */}
-                                    <Pressable style={styles.emojiInputButton}>
-                                        <MaterialIcons name="sentiment-satisfied" size={20} color="rgba(255,255,255,0.5)" />
-                                    </Pressable>
-
-                                    {/* Mic button on right inside */}
-                                    {inputText.trim() ? (
-                                        <Pressable
-                                            style={styles.sendButton}
-                                            onPress={handleSend}
-                                        >
-                                            <MaterialIcons
-                                                name="arrow-upward"
-                                                size={18}
-                                                color={activeTheme.primary}
+                                            <TextInput
+                                                style={styles.input}
+                                                value={inputText}
+                                                onChangeText={(text) => {
+                                                    setInputText(text);
+                                                    sendTyping(true);
+                                                    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+                                                    typingTimeoutRef.current = setTimeout(() => {
+                                                        sendTyping(false);
+                                                    }, 2000) as unknown as NodeJS.Timeout;
+                                                }}
+                                                onFocus={handleFocus}
+                                                placeholder="Sync fragment..."
+                                                placeholderTextColor="rgba(255,255,255,0.3)"
+                                                multiline
+                                                maxLength={1000}
                                             />
-                                        </Pressable>
+
+                                            <Pressable style={styles.emojiInputButton}>
+                                                <MaterialIcons name="sentiment-satisfied" size={20} color="rgba(255,255,255,0.5)" />
+                                            </Pressable>
+
+                                            {inputText.trim() ? (
+                                                <Pressable
+                                                    style={styles.sendButton}
+                                                    onPress={handleSend}
+                                                >
+                                                    <MaterialIcons
+                                                        name="arrow-upward"
+                                                        size={18}
+                                                        color={activeTheme.primary}
+                                                    />
+                                                </Pressable>
+                                            ) : (
+                                                <View
+                                                    onTouchStart={handleMicTouchStart}
+                                                    onTouchMove={handleMicTouchMove}
+                                                    onTouchEnd={handleMicTouchEnd}
+                                                    onTouchCancel={() => {
+                                                        cancelHapticJSRef.current = false;
+                                                        recordingTranslateX.value = withTiming(-MIC_TRAVEL_FULL, { duration: 180, easing: Easing.in(Easing.quad) });
+                                                        setTimeout(() => {
+                                                            stopRecording(false);
+                                                            recordingTranslateX.value = 0;
+                                                        }, 200);
+                                                    }}
+                                                >
+                                                    <Animated.View style={[styles.sendButton, isRecording && recordingPulseStyle]}>
+                                                        <MaterialIcons
+                                                            name="mic"
+                                                            size={18}
+                                                            color={isRecording ? '#fff' : 'rgba(255,255,255,0.7)'}
+                                                        />
+                                                    </Animated.View>
+                                                </View>
+                                            )}
+                                        </>
                                     ) : (
-                                        <View
-                                            onTouchStart={handleMicTouchStart}
-                                            onTouchMove={handleMicTouchMove}
-                                            onTouchEnd={handleMicTouchEnd}
-                                            onTouchCancel={() => {
-                                                cancelHapticJSRef.current = false;
-                                                recordingTranslateX.value = withTiming(-MIC_TRAVEL_FULL, { duration: 180, easing: Easing.in(Easing.quad) });
-                                                setTimeout(() => {
-                                                    stopRecording(false);
-                                                    recordingTranslateX.value = 0;
-                                                }, 200);
-                                            }}
-                                        >
-                                            <Animated.View style={[styles.sendButton, isRecording && recordingPulseStyle]}>
-                                                <MaterialIcons
-                                                    name="mic"
-                                                    size={18}
-                                                    color={isRecording ? '#fff' : 'rgba(255,255,255,0.7)'}
-                                                />
-                                            </Animated.View>
+                                        <View style={{ flex: 1, paddingVertical: 12, alignItems: 'center', justifyContent: 'center' }}>
+                                            <Text style={{ color: 'rgba(255,255,255,0.4)', fontSize: 13, fontWeight: '500' }}>
+                                                {isThemBlocked ? "You can't message a blocked contact. Unblock to send." : "You can no longer send messages to this contact."}
+                                            </Text>
                                         </View>
                                     )}
                                 </View>

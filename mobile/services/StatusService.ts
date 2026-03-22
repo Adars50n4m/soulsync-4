@@ -1,5 +1,6 @@
 import { supabase } from '../config/supabase';
 import { type StatusUpdate } from '../types';
+import { getPublicStorageUrl, SERVER_URL } from '../config/api';
 
 export interface PostStatusParams {
   userId: string;
@@ -41,12 +42,12 @@ class StatusService {
   async fetchActiveStories(userId: string): Promise<StatusUpdate[]> {
     try {
       const friendIds = await this.getMutualFriendIds(userId);
-      if (friendIds.length === 0) return [];
-
+      const allIds = [userId, ...friendIds];
+      
       const { data, error } = await supabase
         .from('statuses')
         .select('*')
-        .in('user_id', friendIds)
+        .in('user_id', allIds)
         .gt('expires_at', new Date().toISOString())
         .order('created_at', { ascending: false });
 
@@ -57,7 +58,7 @@ class StatusService {
         userId: s.user_id,
         contactName: s.user_name,
         avatar: s.user_avatar,
-        mediaUrl: s.media_url,
+        mediaUrl: getPublicStorageUrl('status-media', s.media_url),
         mediaType: s.media_type,
         caption: s.caption,
         timestamp: s.created_at,
@@ -111,11 +112,11 @@ class StatusService {
    * Post a new media story.
    * Automatically sets expiry to 24 hours from now.
    */
-  async postStory(params: PostStatusParams): Promise<boolean> {
+  async postStory(params: PostStatusParams): Promise<string | null> {
     try {
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('statuses')
         .insert({
           user_id: params.userId,
@@ -126,13 +127,14 @@ class StatusService {
           caption: params.caption,
           music: params.music,
           expires_at: expiresAt
-        });
+        })
+        .select('id');
 
       if (error) throw error;
-      return true;
+      return data?.[0]?.id || null;
     } catch (error) {
       console.error('[StatusService] Error posting story:', error);
-      return false;
+      return null;
     }
   }
 
@@ -159,17 +161,26 @@ class StatusService {
 
   async deleteStory(storyId: string, userId: string): Promise<boolean> {
     try {
-      const { error } = await supabase
+      const response = await fetch(`${SERVER_URL}/api/status/delete`, {
+          method: 'POST',
+          headers: {
+              'Content-Type': 'application/json',
+              'x-user-id': userId
+          },
+          body: JSON.stringify({ statusId: storyId })
+      });
+      
+      const result = await response.json() as { success: boolean };
+      return result.success;
+    } catch (error) {
+      console.error('[StatusService] Error deleting story:', error);
+      // Fallback to direct Supabase if server fails
+      const { error: dbError } = await supabase
         .from('statuses')
         .delete()
         .eq('id', storyId)
         .eq('user_id', userId);
-
-      if (error) throw error;
-      return true;
-    } catch (error) {
-      console.error('[StatusService] Error deleting story:', error);
-      return false;
+      return !dbError;
     }
   }
 
@@ -179,10 +190,9 @@ class StatusService {
       const { data } = await supabase
         .from('statuses')
         .select('likes')
-        .eq('id', storyId)
-        .single();
+        .eq('id', storyId);
 
-      let likes = data?.likes || [];
+      let likes = data?.[0]?.likes || [];
       if (likes.includes(userId)) {
         likes = likes.filter((id: string) => id !== userId);
       } else {
@@ -203,10 +213,9 @@ class StatusService {
       const { data } = await supabase
         .from('statuses')
         .select('views')
-        .eq('id', storyId)
-        .single();
+        .eq('id', storyId);
 
-      let views = data?.views || [];
+      let views = data?.[0]?.views || [];
       if (!views.includes(userId)) {
         views.push(userId);
         await supabase

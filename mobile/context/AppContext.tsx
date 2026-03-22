@@ -42,6 +42,11 @@ interface AppContextType {
     logout: () => Promise<void>;
     updateProfile: any;
     changeUsername: any;
+    blockedByMe: Set<string>;
+    blockedByThem: Set<string>;
+    blockUser: (userId: string) => Promise<void>;
+    unblockUser: (userId: string) => Promise<void>;
+    isBlocked: (userId: string) => boolean;
 
     // Chat
     contacts: any[];
@@ -74,6 +79,7 @@ interface AppContextType {
     addStatusView: (id: string) => Promise<void>;
     notes: any[];
     updateNote: (text: string | null) => Promise<boolean>;
+    activeUploads: any[];
 
     // Call
     activeCall: any;
@@ -221,6 +227,11 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         logout: auth.logout,
         updateProfile: auth.updateProfile,
         changeUsername: auth.changeUsername,
+        blockedByMe: auth.blockedByMe,
+        blockedByThem: auth.blockedByThem,
+        blockUser: auth.blockUser,
+        unblockUser: auth.unblockUser,
+        isBlocked: auth.isBlocked,
 
         // Chat
         contacts: chat.contacts,
@@ -253,6 +264,7 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         addStatusView: status.viewStory,
         notes: status.notes,
         updateNote: status.updateNote,
+        activeUploads: status.activeUploads,
 
         // Call
         activeCall: call.activeCall,

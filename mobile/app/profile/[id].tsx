@@ -78,7 +78,11 @@ export default function ProfileScreen() {
     const id = Array.isArray(params.id) ? params.id[0] : params.id;
     const router = useRouter();
     const navigation = useNavigation();
-    const { currentUser, otherUser, contacts, messages, activeTheme, clearChatMessages, connectivity, fetchOtherUserProfile } = useApp();
+    const { 
+        currentUser, otherUser, contacts, messages, activeTheme, 
+        clearChatMessages, connectivity, fetchOtherUserProfile,
+        blockUser, unblockUser, blockedByMe, blockedByThem
+    } = useApp();
     const isCloudConnected = connectivity?.isRealtimeConnected;
 
     // Determine which user's profile to show
@@ -284,6 +288,32 @@ export default function ProfileScreen() {
         }
     };
 
+    const handleBlockUser = () => {
+        if (!profileUser) return;
+        const isBlocked = blockedByMe.has(profileUser.id);
+        
+        Alert.alert(
+            isBlocked ? 'Unblock User' : 'Block User',
+            isBlocked 
+                ? `Are you sure you want to unblock ${profileUser.name}?`
+                : `Block ${profileUser.name}? Blocked users will not be able to call you or send you messages.`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                { 
+                    text: isBlocked ? 'Unblock' : 'Block', 
+                    style: isBlocked ? 'default' : 'destructive',
+                    onPress: async () => {
+                        if (isBlocked) {
+                            await unblockUser(profileUser.id);
+                        } else {
+                            await blockUser(profileUser.id);
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
     const handleClearChat = () => {
         if (!profileUser) return;
         
@@ -445,8 +475,14 @@ export default function ProfileScreen() {
                     {!isOwnProfile && (
                         <View style={styles.actionRow}>
                              <Pressable 
-                                style={styles.actionPill}
-                                onPress={() => {}}
+                                style={[styles.actionPill, (blockedByMe.has(profileUser.id) || blockedByThem.has(profileUser.id)) && { opacity: 0.5 }]}
+                                onPress={() => {
+                                    if (blockedByMe.has(profileUser.id) || blockedByThem.has(profileUser.id)) {
+                                        Alert.alert('Calling disabled', 'You cannot call this contact at this time.');
+                                        return;
+                                    }
+                                    // startCall(profileUser.id, 'audio'); // if startCall was available here
+                                }}
                             >
                                 <GlassView intensity={40} tint="light" style={styles.actionPillContent}>
                                     <Ionicons name="call" size={24} color="#fff" />
@@ -454,11 +490,34 @@ export default function ProfileScreen() {
                             </Pressable>
 
                             <Pressable 
-                                style={styles.actionPill}
-                                onPress={() => {}}
+                                style={[styles.actionPill, (blockedByMe.has(profileUser.id) || blockedByThem.has(profileUser.id)) && { opacity: 0.5 }]}
+                                onPress={() => {
+                                    if (blockedByMe.has(profileUser.id) || blockedByThem.has(profileUser.id)) {
+                                        Alert.alert('Calling disabled', 'You cannot call this contact at this time.');
+                                        return;
+                                    }
+                                    // startCall(profileUser.id, 'video'); // if startCall was available here
+                                }}
                             >
                                 <GlassView intensity={40} tint="light" style={styles.actionPillContent}>
                                     <Ionicons name="videocam" size={24} color="#fff" />
+                                </GlassView>
+                            </Pressable>
+
+                            <Pressable 
+                                style={[styles.actionPill, blockedByMe.has(profileUser.id) && { borderColor: 'rgba(255,165,0,0.4)' }]}
+                                onPress={handleBlockUser}
+                            >
+                                <GlassView 
+                                    intensity={40} 
+                                    tint={blockedByMe.has(profileUser.id) ? "light" : "dark"} 
+                                    style={[styles.actionPillContent, blockedByMe.has(profileUser.id) && { backgroundColor: 'rgba(255,165,0,0.1)' }]}
+                                >
+                                    <MaterialIcons 
+                                        name={blockedByMe.has(profileUser.id) ? "check-circle" : "block"} 
+                                        size={24} 
+                                        color={blockedByMe.has(profileUser.id) ? "#ffa500" : "#fff"} 
+                                    />
                                 </GlassView>
                             </Pressable>
 

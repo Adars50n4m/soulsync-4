@@ -11,7 +11,7 @@ import { offlineService, MediaStatus } from './LocalDBService';
 
 // Use any cast to bypass SDK 54 type issues in some environments
 const documentDirectory = (FileSystem as any).documentDirectory || '';
-const MEDIA_DIR = `${documentDirectory}media_cache`;
+const MEDIA_DIR = documentDirectory.endsWith('/') ? `${documentDirectory}media_cache` : `${documentDirectory}/media_cache`;
 
 export interface DownloadProgress {
   messageId: string;
@@ -45,7 +45,7 @@ async function generateLocalFilename(messageId: string, originalUrl: string): Pr
   const extension = originalUrl.split('.').pop()?.split('?')[0] || 'bin';
   const hash = await Crypto.digestStringAsync(
     Crypto.CryptoDigestAlgorithm.SHA256,
-    `${messageId}-${Date.now()}`
+    `${messageId}-${originalUrl}`
   );
   return `${hash.substring(0, 16)}.${extension}`;
 }
@@ -215,6 +215,85 @@ export async function saveLocalMediaFromUri(
 }
 
 /**
+ * Save a local status media file (for posting statuses)
+ */
+export async function saveLocalStatusMedia(
+  statusId: string,
+  sourceUri: string
+): Promise<DownloadResult> {
+  try {
+    await ensureMediaDir();
+    
+    const filename = await generateLocalFilename(statusId, sourceUri);
+    const destUri = `${MEDIA_DIR}/status_${filename}`;
+    
+    // Copy file to media cache
+    await FileSystem.copyAsync({
+      from: sourceUri,
+      to: destUri
+    });
+    
+    // Get file size
+    const fileInfo = await FileSystem.getInfoAsync(destUri) as FileSystem.FileInfo;
+    const fileSize = fileInfo.exists ? fileInfo.size : 0;
+    
+    return {
+      success: true,
+      localUri: destUri,
+      fileSize
+    };
+  } catch (error) {
+    console.error('[MediaDownload] Save local status media failed:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Save failed'
+    };
+  }
+}
+
+/**
+ * Download a status media file to local storage if not already present
+ */
+export async function ensureStatusCached(
+  statusId: string,
+  remoteUrl: string
+): Promise<DownloadResult> {
+  try {
+    await ensureMediaDir();
+    
+    const filename = await generateLocalFilename(statusId, remoteUrl);
+    const localUri = `${MEDIA_DIR}/status_${filename}`;
+    
+    // Check if already downloaded
+    if (await localFileExists(localUri)) {
+      return { success: true, localUri };
+    }
+    
+    // Download the file
+    console.log('[MediaDownload] Fetching status media:', remoteUrl);
+    const downloadResult = await FileSystem.downloadAsync(remoteUrl, localUri);
+    
+    const fileInfo = await FileSystem.getInfoAsync(downloadResult.uri) as FileSystem.FileInfo;
+    const fileSize = fileInfo.exists ? fileInfo.size : 0;
+    
+    // Update local database
+    await offlineService.updateLocalStatusSyncStatus(statusId, 'synced', remoteUrl);
+    
+    return {
+      success: true,
+      localUri: downloadResult.uri,
+      fileSize
+    };
+  } catch (error) {
+    console.error('[MediaDownload] Status cache failed:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Cache failed'
+    };
+  }
+}
+
+/**
  * Clear all cached media files
  */
 export async function clearMediaCache(): Promise<{ deletedCount: number; freedBytes: number }> {
@@ -302,5 +381,7 @@ export const mediaDownloadService = {
   clearMediaCache,
   getMediaCacheSize,
   formatBytes,
-  getLocalMediaUri
+  getLocalMediaUri,
+  saveLocalStatusMedia,
+  ensureStatusCached
 };

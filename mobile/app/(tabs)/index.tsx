@@ -1,5 +1,21 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
-import { View, Text, Image, Pressable, StyleSheet, StatusBar, Dimensions, Alert, FlatList, Platform, TouchableOpacity, RefreshControl } from 'react-native';
+import { 
+  View, 
+  Text, 
+  Image, 
+  Pressable, 
+  StyleSheet, 
+  StatusBar, 
+  Dimensions, 
+  Alert, 
+  FlatList, 
+  Platform, 
+  TouchableOpacity, 
+  RefreshControl,
+  ActivityIndicator,
+  useWindowDimensions,
+  KeyboardAvoidingView
+} from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 
 import { useRouter, useNavigation } from 'expo-router';
@@ -269,6 +285,11 @@ export default function HomeScreen() {
     archiveContact,
     unfriendContact,
     clearChatMessages,
+    activeUploads,
+    blockUser,
+    unblockUser,
+    blockedByMe,
+    blockedByThem
   } = useApp();
   const navigation = useNavigation();
   const router = useRouter();
@@ -445,8 +466,12 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
           likes: s.likes || [],
           views: s.views || [],
           music: s.music,
+          syncStatus: s.syncStatus,
         };
-        const primaryUserId = s.userId;
+        // Use trimmed and lowercased ID for more robust matching
+        const primaryUserId = s.userId?.toString().toLowerCase().trim();
+        if (!primaryUserId) return;
+        
         if (!map.has(primaryUserId)) map.set(primaryUserId, []);
         map.get(primaryUserId)!.push(story);
       });
@@ -457,8 +482,12 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
   }, [statuses]);
 
   const myStories = useMemo(
-    () => currentUser ? (contactStoriesMap.get(currentUser.id) || []) : [],
-    [contactStoriesMap, currentUser]
+    () => {
+        if (!currentUser?.id) return [];
+        const myId = currentUser.id.toString().toLowerCase().trim();
+        return contactStoriesMap.get(myId) || [];
+    },
+    [contactStoriesMap, currentUser?.id]
   );
   const visibleContacts = useMemo(() => {
     return (contacts || []).filter(c => !c.isArchived);
@@ -466,7 +495,10 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
 
   const contactsWithStories = useMemo(() => {
      try {
-       return (visibleContacts || []).filter(c => contactStoriesMap.has(c.id)).map(c => ({
+       const filteredContacts = (visibleContacts || []).filter(c => 
+           !blockedByMe.has(c.id) && !blockedByThem.has(c.id)
+       );
+       return filteredContacts.filter(c => contactStoriesMap.has(c.id)).map(c => ({
            ...c,
            stories: contactStoriesMap.get(c.id) || []
        }));
@@ -474,7 +506,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
        console.warn('[HomeScreen] Error building contactsWithStories:', e);
        return [];
      }
-  }, [visibleContacts, contactStoriesMap]);
+  }, [visibleContacts, contactStoriesMap, blockedByMe, blockedByThem]);
 
   const isNoteValid = (timestamp?: string) => {
     if (!timestamp) return false;
@@ -543,38 +575,16 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
     const item = mediaList[0];
     if (!item) return;
 
-    try {
-      setIsUploadingStatus(true);
-      const mediaUrl = await storageService.uploadImage(item.uri, 'status-media', currentUser.id);
-      if (!mediaUrl) throw new Error('Upload failed');
+    // Reset preview immediately to close modal (WhatsApp-like)
+    setStatusMediaPreview(null);
+    setIsMediaPickerVisible(false);
 
-      const expiresAt = new Date();
-      expiresAt.setHours(expiresAt.getHours() + 24);
-      
-      const mediaType = item.type === 'video' ? 'video' : 'image';
-      const timestamp = new Date().toISOString();
-      const expiresAtString = expiresAt.toISOString();
-
-      addStatus({
-        userId: currentUser.id,
-        mediaUrl,
+    // addStatus (status.addStory) handles background upload logic
+    addStatus({
         localUri: item.uri,
-        mediaType,
-        timestamp,
-        expiresAt: expiresAtString,
+        mediaType: item.type === 'video' ? 'video' : 'image',
         caption: caption || '',
-      });
-      
-      setStatusMediaPreview(null);
-      setIsUploadingStatus(false);
-      setIsMediaPickerVisible(false);
-    } catch (error) {
-      console.error('Failed to upload status:', error);
-      Alert.alert('Error', 'Failed to upload status. Please try again.');
-      setStatusMediaPreview(null);
-      setIsUploadingStatus(false);
-      setIsMediaPickerVisible(false);
-    }
+    });
   };
 
   const createStatus = async (result: ImagePicker.ImagePickerResult) => {
@@ -695,6 +705,22 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
                 ]
             );
         }}
+        onBlock={() => {
+            const isBlocked = blockedByMe.has(item.id);
+            Alert.alert(
+                isBlocked ? 'Unblock' : 'Block',
+                isBlocked ? `Unblock ${item.name}?` : `Block ${item.name}?`,
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    { 
+                        text: isBlocked ? 'Unblock' : 'Block', 
+                        style: isBlocked ? 'default' : 'destructive',
+                        onPress: () => isBlocked ? unblockUser(item.id) : blockUser(item.id)
+                    }
+                ]
+            );
+        }}
+        isBlocked={blockedByMe.has(item.id)}
       >
         <ChatListItem 
             item={itemWithStories} 
@@ -739,9 +765,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
            </TouchableOpacity>
         </View>
       </View>
-      {contacts.length > 0 && (
         <Animated.View style={[styles.statusRail, statusRailAnimStyle]}>
-          {/* ... existing FlatList logic inside ... */}
           <FlatList
             horizontal
             data={[{ id: 'my-status' }, ...contactsWithStories]}
@@ -753,11 +777,14 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
               // ... existing renderItem logic ...
               if (item.id === 'my-status') {
                 const myStoryPreviewUrl = myStories[0]?.url;
+                const pendingStatus = myStories.find(s => s.syncStatus === 'pending');
+                
                 return (
                   <Pressable 
                     ref={ref => { statusRefs.current['my-status'] = ref; }}
                     style={styles.statusCard} 
                     onPress={() => {
+                      if (pendingStatus) return; // Prevent press while uploading
                       statusRefs.current['my-status']?.measureInWindow((x: number, y: number, width: number, height: number) => {
                         handleMyStatusPress({ x, y, width, height });
                       });
@@ -765,8 +792,19 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
                     android_ripple={{ color: 'rgba(255,255,255,0.1)' }}
                   >
                     <View style={styles.statusCardSurface}>
-                    <View style={[styles.myStatusBackground, myStories.length > 0 && { justifyContent: 'flex-start', alignItems: 'flex-start' }]}>
-                      {!!myStoryPreviewUrl ? (
+                    <View style={[styles.myStatusBackground, (myStories.length > 0) && { justifyContent: 'flex-start', alignItems: 'flex-start' }]}>
+                      {pendingStatus ? (
+                        <>
+                          <Image source={{ uri: pendingStatus.url }} style={styles.myStatusPreviewBgFull} blurRadius={10} />
+                          <View style={[styles.statusOverlay, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.3)' }]}>
+                            <ActivityIndicator size="small" color="#fff" />
+                            <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold', marginTop: 4 }}>
+                              Syncing...
+                            </Text>
+                          </View>
+                          <Text style={[styles.startStoryText, styles.myStatusTextBottom]}>Uploading...</Text>
+                        </>
+                      ) : !!myStoryPreviewUrl ? (
                         <>
                           <Image source={{ uri: myStoryPreviewUrl }} style={styles.myStatusPreviewBgFull} />
                           <View style={styles.myStatusAvatarBadgeCorner} pointerEvents="none">
@@ -812,6 +850,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
                   </Pressable>
                 );
               }
+
               const contact = item as Contact;
               const hasUnseen = contact.stories?.some(s => !s.seen);
               const storyUrl = contact.stories?.[0]?.url;
@@ -854,7 +893,6 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
             }}
           />
         </Animated.View>
-      )}
     </Animated.View>
   ), [contactsWithStories, myStories, currentUser, handleMyStatusPress, handleStatusPress, statusRailAnimStyle]);
 

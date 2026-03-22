@@ -12,6 +12,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   BackHandler,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import GlassView from './ui/GlassView';
@@ -436,7 +438,21 @@ export const StatusViewerModal = ({
                     </View>
                 </View>
                 <View style={styles.headerActions}>
-                  <Pressable style={styles.iconButton}>
+                  <Pressable 
+                    style={styles.iconButton}
+                    onPress={() => {
+                      if (isOwnStatus && onDeleteStory) {
+                        Alert.alert(
+                          'Delete Status',
+                          'Are you sure you want to delete this status update?',
+                          [
+                            { text: 'Cancel', style: 'cancel' },
+                            { text: 'Delete', style: 'destructive', onPress: () => onDeleteStory(currentStory.id) }
+                          ]
+                        );
+                      }
+                    }}
+                  >
                     <MaterialIcons name="more-horiz" size={24} color="#fff" />
                   </Pressable>
                   <Pressable onPress={handleClose} style={styles.iconButton}>
@@ -478,7 +494,7 @@ export const StatusViewerModal = ({
           )}
 
           <View style={styles.bottomActionsRow}>
-            {isOwnStatus ? (
+            {isOwnStatus && currentStory.syncStatus !== 'pending' ? (
               <Pressable 
                 style={styles.viewsIndicator}
                 onPress={() => toggleViewers(true)}
@@ -486,6 +502,11 @@ export const StatusViewerModal = ({
                 <Ionicons name="chevron-up" size={20} color="#fff" />
                 <Text style={styles.viewsCountText}>{currentStory.views?.length || 0} views</Text>
               </Pressable>
+            ) : isOwnStatus && currentStory.syncStatus === 'pending' ? (
+              <View style={styles.viewsIndicator}>
+                <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+                <Text style={styles.viewsCountText}>Uploading...</Text>
+              </View>
             ) : (
               <>
                 <View style={styles.replyInputWrap}>

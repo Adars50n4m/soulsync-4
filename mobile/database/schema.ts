@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ⬆️  Bump this number every time you change the schema.
-const DB_TARGET_VERSION = 13;
+const DB_TARGET_VERSION = 15;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper — read the stored schema version (returns 0 if brand-new install)
@@ -406,6 +406,46 @@ async function migration_v13(db: any): Promise<void> {
   };
   await safeAlter(`ALTER TABLE contacts ADD COLUMN is_archived INTEGER DEFAULT 0;`);
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION v14 — Add local_statuses table
+// ─────────────────────────────────────────────────────────────────────────────
+async function migration_v14(db: any): Promise<void> {
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS local_statuses (
+      id           TEXT PRIMARY KEY NOT NULL,
+      user_id      TEXT NOT NULL,
+      user_name    TEXT,
+      user_avatar  TEXT,
+      media_url    TEXT,
+      local_uri    TEXT,
+      media_type   TEXT,
+      caption      TEXT,
+      music        TEXT,
+      created_at   TEXT NOT NULL,
+      expires_at   TEXT NOT NULL,
+      is_mine      INTEGER DEFAULT 0,
+      sync_status  TEXT DEFAULT 'synced'
+    );
+  `);
+  await db.execAsync(`CREATE INDEX IF NOT EXISTS idx_local_statuses_user ON local_statuses(user_id);`);
+  await db.execAsync(`CREATE INDEX IF NOT EXISTS idx_local_statuses_expiry ON local_statuses(expires_at);`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION v15 — Add views and likes to local_statuses
+// ─────────────────────────────────────────────────────────────────────────────
+async function migration_v15(db: any): Promise<void> {
+  const safeAlter = async (sql: string) => {
+    try { await db.execAsync(sql); } catch (e: any) {
+        const msg = e?.message || String(e);
+        if (!msg.includes('duplicate column name') && !msg.includes('already exists')) {
+            console.warn(`[SQLite] Migration helper WARN v15:`, msg);
+        }
+    }
+  };
+  await safeAlter(`ALTER TABLE local_statuses ADD COLUMN views TEXT DEFAULT '[]';`);
+  await safeAlter(`ALTER TABLE local_statuses ADD COLUMN likes TEXT DEFAULT '[]';`);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN EXPORT — call this once in your app's DB initialisation
@@ -482,6 +522,24 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
         remote_url   TEXT NOT NULL,
         local_uri    TEXT NOT NULL,
         cached_at    TEXT DEFAULT CURRENT_TIMESTAMP
+      );`,
+      // Ensure local_statuses table exists
+      `CREATE TABLE IF NOT EXISTS local_statuses (
+        id           TEXT PRIMARY KEY NOT NULL,
+        user_id      TEXT NOT NULL,
+        user_name    TEXT,
+        user_avatar  TEXT,
+        media_url    TEXT,
+        local_uri    TEXT,
+        media_type   TEXT,
+        caption      TEXT,
+        music        TEXT,
+        created_at   TEXT NOT NULL,
+        expires_at   TEXT NOT NULL,
+        is_mine      INTEGER DEFAULT 0,
+        sync_status  TEXT DEFAULT 'synced',
+        views        TEXT DEFAULT '[]',
+        likes        TEXT DEFAULT '[]'
       );`
   ];
 
@@ -530,6 +588,8 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
         case 11: await migration_v11(db); break;
         case 12: await migration_v12(db); break;
         case 13: await migration_v13(db); break;
+        case 14: await migration_v14(db); break;
+        case 15: await migration_v15(db); break;
         default:
           console.error(`[SQLite] No migration logic for v${nextVersion}!`);
       }

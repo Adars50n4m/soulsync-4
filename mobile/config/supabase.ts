@@ -7,6 +7,23 @@ import * as Env from './env';
 // Use DIRECT Supabase URL as base — Realtime WebSocket REQUIRES direct connection.
 // Cloudflare Workers CANNOT proxy WebSocket upgrade requests.
 // HTTP REST calls are routed through the proxy via custom fetch to bypass ISP blocks.
+let useProxy = true;
+
+// Pre-check proxy health once on load
+(async () => {
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3000);
+        const res = await fetch(Env.SUPABASE_PROXY_URL, { signal: controller.signal });
+        clearTimeout(timeout);
+        if (!res.ok && res.status >= 500) useProxy = false;
+        console.log(`[Supabase] Proxy health check: ${useProxy ? 'OK' : 'FAILED - Using direct'}`);
+    } catch {
+        useProxy = false;
+        console.log('[Supabase] Proxy unreachable - Falling back to direct connection');
+    }
+})();
+
 export const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
     auth: {
         storage: AsyncStorage,
@@ -15,12 +32,31 @@ export const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
         detectSessionInUrl: false,
     },
     global: {
-        fetch: (url: RequestInfo | URL, options?: RequestInit) => {
-            // Rewrite direct Supabase HTTP calls → proxy URL (bypasses Jio/Airtel blocks)
-            // But ONLY for HTTP — WebSocket URLs are never passed to fetch()
+        fetch: async (url: RequestInfo | URL, options?: RequestInit) => {
             const urlString = typeof url === 'string' ? url : url.toString();
-            const proxied = urlString.replace(Env.SUPABASE_URL, Env.SUPABASE_PROXY_URL);
-            return fetch(proxied, options);
+            
+            // Bypass proxy for and other domains
+            if (!urlString.includes(Env.SUPABASE_URL)) return fetch(url, options);
+
+            if (useProxy) {
+                try {
+                    const proxied = urlString.replace(Env.SUPABASE_URL, Env.SUPABASE_PROXY_URL);
+                    const response = await fetch(proxied, options);
+                    // If we get a fatal non-Supabase error from Cloudflare (like 530), disable proxy for this session
+                    if (response.status === 530 || response.status === 525 || response.status === 521) {
+                        console.warn('[Supabase] Proxy edge error. Disabling for session.');
+                        useProxy = false;
+                        return fetch(url, options);
+                    }
+                    return response;
+                } catch (e) {
+                    console.warn('[Supabase] Proxy fetch error, falling back to direct:', e);
+                    useProxy = false;
+                    return fetch(url, options);
+                }
+            }
+            
+            return fetch(url, options);
         },
     },
     realtime: {

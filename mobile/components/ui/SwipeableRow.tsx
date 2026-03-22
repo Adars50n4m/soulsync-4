@@ -13,22 +13,27 @@ import { MaterialIcons } from '@expo/vector-icons';
 import GlassView from './GlassView';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const ACTION_WIDTH = 70;
-const TOTAL_WIDTH = ACTION_WIDTH * 3;
+const ACTION_WIDTH = 54;
+const SPACING = 8;
+const TOTAL_WIDTH_3 = (ACTION_WIDTH + SPACING) * 3;
+const TOTAL_WIDTH_4 = (ACTION_WIDTH + SPACING) * 4;
 
 interface SwipeableRowProps {
   children: React.ReactNode;
   onArchive: () => void;
   onDelete: () => void;
   onUnfriend: () => void;
+  onBlock?: () => void;
+  isBlocked?: boolean;
 }
 
 /**
  * A premium swipeable row component that reveals Archive, Delete, and Unfriend actions.
  * Features smooth animations, haptic-ready states, and glassmorphic styling.
  */
-export const SwipeableRow = ({ children, onArchive, onDelete, onUnfriend }: SwipeableRowProps) => {
+export const SwipeableRow = ({ children, onArchive, onDelete, onUnfriend, onBlock, isBlocked }: SwipeableRowProps) => {
   const translateX = useSharedValue(0);
+  const totalWidth = onBlock ? TOTAL_WIDTH_4 : TOTAL_WIDTH_3;
 
   const gestureHandler = useAnimatedGestureHandler<PanGestureHandlerGestureEvent, { startX: number }>({
     onStart: (_, ctx) => {
@@ -40,11 +45,11 @@ export const SwipeableRow = ({ children, onArchive, onDelete, onUnfriend }: Swip
       translateX.value = Math.min(0, nextX);
     },
     onEnd: (event) => {
-      // If swiped more than 30% or moving fast enough, snap to open
-      const shouldOpen = translateX.value < -ACTION_WIDTH * 1.2 || event.velocityX < -500;
+      // If swiped more than 20% or moving fast enough, snap to open
+      const shouldOpen = translateX.value < -totalWidth * 0.3 || event.velocityX < -500;
       
       if (shouldOpen) {
-        translateX.value = withSpring(-TOTAL_WIDTH, {
+        translateX.value = withSpring(-totalWidth, {
             damping: 20,
             stiffness: 90,
         });
@@ -59,50 +64,26 @@ export const SwipeableRow = ({ children, onArchive, onDelete, onUnfriend }: Swip
   }));
 
   const archiveStyle = useAnimatedStyle(() => {
-    const scale = interpolate(
-        translateX.value,
-        [-TOTAL_WIDTH, -ACTION_WIDTH * 3, -ACTION_WIDTH * 2, -ACTION_WIDTH, 0],
-        [1, 1, 0.8, 0.5, 0],
-        Extrapolation.CLAMP
-    );
-    const opacity = interpolate(
-        translateX.value,
-        [-ACTION_WIDTH, 0],
-        [1, 0],
-        Extrapolation.CLAMP
-    );
+    const scale = interpolate(translateX.value, [-totalWidth, 0], [1, 0], Extrapolation.CLAMP);
+    const opacity = interpolate(translateX.value, [-ACTION_WIDTH, 0], [1, 0], Extrapolation.CLAMP);
     return { transform: [{ scale }], opacity };
   });
 
   const deleteStyle = useAnimatedStyle(() => {
-    const scale = interpolate(
-        translateX.value,
-        [-TOTAL_WIDTH, -ACTION_WIDTH * 2, -ACTION_WIDTH, 0],
-        [1, 0.9, 0.5, 0],
-        Extrapolation.CLAMP
-    );
-    const opacity = interpolate(
-        translateX.value,
-        [-ACTION_WIDTH * 1.5, -ACTION_WIDTH],
-        [1, 0],
-        Extrapolation.CLAMP
-    );
+    const scale = interpolate(translateX.value, [-totalWidth, 0], [1, 0], Extrapolation.CLAMP);
+    const opacity = interpolate(translateX.value, [-ACTION_WIDTH * 2, 0], [1, 0], Extrapolation.CLAMP);
     return { transform: [{ scale }], opacity };
   });
 
   const unfriendStyle = useAnimatedStyle(() => {
-    const scale = interpolate(
-        translateX.value,
-        [-TOTAL_WIDTH, -ACTION_WIDTH, 0],
-        [1, 0.5, 0],
-        Extrapolation.CLAMP
-    );
-    const opacity = interpolate(
-        translateX.value,
-        [-ACTION_WIDTH * 2.5, -ACTION_WIDTH * 2],
-        [1, 0],
-        Extrapolation.CLAMP
-    );
+    const scale = interpolate(translateX.value, [-totalWidth, 0], [1, 0], Extrapolation.CLAMP);
+    const opacity = interpolate(translateX.value, [-ACTION_WIDTH * 3, 0], [1, 0], Extrapolation.CLAMP);
+    return { transform: [{ scale }], opacity };
+  });
+
+  const blockStyle = useAnimatedStyle(() => {
+    const scale = interpolate(translateX.value, [-totalWidth, 0], [1, 0], Extrapolation.CLAMP);
+    const opacity = interpolate(translateX.value, [-ACTION_WIDTH * 4, 0], [1, 0], Extrapolation.CLAMP);
     return { transform: [{ scale }], opacity };
   });
 
@@ -142,6 +123,17 @@ export const SwipeableRow = ({ children, onArchive, onDelete, onUnfriend }: Swip
                     <MaterialIcons name="person-remove" size={24} color="white" />
                 </Pressable>
             </Animated.View>
+
+            {onBlock && (
+                <Animated.View style={[styles.actionBtn, blockStyle]}>
+                    <Pressable 
+                        onPress={() => closeAndExecute(onBlock)}
+                        style={({ pressed }) => [styles.pressable, pressed && styles.pressed, { backgroundColor: isBlocked ? '#ffa500' : '#374151' }]}
+                    >
+                        <MaterialIcons name={isBlocked ? "check-circle" : "block"} size={24} color="white" />
+                    </Pressable>
+                </Animated.View>
+            )}
         </View>
       </View>
 

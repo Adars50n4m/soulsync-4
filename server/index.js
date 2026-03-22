@@ -224,6 +224,47 @@ app.post('/api/status/view', async (req, res) => {
     }
 });
 
+app.post('/api/status/delete', authenticateUser, async (req, res) => {
+    const { statusId } = req.body;
+    const userId = req.user.id;
+
+    if (!statusId) return res.status(400).json({ error: 'statusId required' });
+
+    try {
+        if (supabase) {
+            // Get mediaUrl before deleting to clean up R2
+            const { data: status } = await supabase
+                .from('statuses')
+                .select('media_url')
+                .eq('id', statusId)
+                .eq('user_id', userId)
+                .single();
+
+            if (status?.media_url) {
+                const key = status.media_url.replace(process.env.R2_PUBLIC_DOMAIN + '/', '');
+                await R2Service.deleteFile(key).catch(e => console.error('R2 delete error (manual):', e));
+            }
+
+            const { error } = await supabase
+                .from('statuses')
+                .delete()
+                .eq('id', statusId)
+                .eq('user_id', userId);
+            
+            if (error) throw error;
+        }
+
+        // Broadcast deletion so other users can remove it from local cache
+        io.emit('status:delete', { statusId, userId });
+        console.log(`🗑️ Status ${statusId} deleted by ${userId}, broadcasted`);
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error deleting status:', err);
+        res.status(500).json({ error: 'Deletion failed' });
+    }
+});
+
 // Middleware to authenticate user via Header (Dev/Prototype style)
 const authenticateUser = (req, res, next) => {
     const userId = req.headers['x-user-id'] || 
@@ -615,8 +656,150 @@ app.delete('/api/connections/:partnerId', authenticateUser, async (req, res) => 
         res.status(500).json({ error: 'Failed to delete connection' });
     }
 });
+
+// 7. Get Blocked Users
+app.get('/api/blocks', authenticateUser, async (req, res) => {
+    const userId = req.user.id;
+    try {
+        if (!supabase) throw new Error('Supabase client not initialized');
+        const { data, error } = await supabase
+            .from('blocked_users')
+            .select(`
+                id,
+                blocked_at,
+                blocked:profiles!blocked_user_id(id, username, display_name, avatar_url)
+            `)
+            .eq('blocker_id', userId);
+        
+        if (error) throw error;
+        res.json({ success: true, blocks: data });
+    } catch (err) {
+        console.error('Error fetching blocks:', err);
+        res.status(500).json({ error: 'Failed' });
+    }
+});
+
+// 8. Block User
+app.post('/api/blocks', authenticateUser, async (req, res) => {
+    const { blockedId } = req.body;
+    const blockerId = req.user.id;
+
+    if (!blockedId) return res.status(400).json({ error: 'blockedId required' });
+    if (blockerId === blockedId) return res.status(400).json({ error: 'Cannot block yourself' });
+
+    try {
+        if (!supabase) throw new Error('Supabase client not initialized');
+
+        // 1. Insert into DB
+        const { data, error } = await supabase
+            .from('blocked_users')
+            .insert({ blocker_id: blockerId, blocked_user_id: blockedId })
+            .select()
+            .single();
+
+        if (error) {
+            if (error.code === '23505') return res.status(400).json({ error: 'Already blocked' });
+            throw error;
+        }
+
+        // 2. Update memory cache
+        if (!blocksMap.has(blockerId)) blocksMap.set(blockerId, new Set());
+        blocksMap.get(blockerId).add(blockedId);
+
+        // 3. Clear existing connections (Optional but mirrors WhatsApp block behavior)
+        const [u1, u2] = [blockerId, blockedId].sort();
+        await supabase.from('connections').delete().match({ user_1_id: u1, user_2_id: u2 });
+        await supabase.from('connection_requests').delete().or(`and(sender_id.eq.${blockerId},receiver_id.eq.${blockedId}),and(sender_id.eq.${blockedId},receiver_id.eq.${blockerId})`);
+
+        // 4. Notify both parties to update UI
+        io.to(blockerId).emit('block:update', { type: 'blocked', userId: blockedId });
+        io.to(blockedId).emit('block:update', { type: 'blocked_by', userId: blockerId });
+        
+        // Also emit connection removal to ensure list updates
+        io.to(blockerId).emit('connection:removed', { userId: blockedId });
+        io.to(blockedId).emit('connection:removed', { userId: blockerId });
+
+        res.json({ success: true, block: data });
+    } catch (err) {
+        console.error('Error blocking user:', err);
+        res.status(500).json({ error: 'Failed to block user' });
+    }
+});
+
+// 9. Unblock User
+app.delete('/api/blocks/:blockedId', authenticateUser, async (req, res) => {
+    const { blockedId } = req.params;
+    const blockerId = req.user.id;
+
+    try {
+        if (!supabase) throw new Error('Supabase client not initialized');
+
+        // 1. Delete from DB
+        const { error } = await supabase
+            .from('blocked_users')
+            .delete()
+            .match({ blocker_id: blockerId, blocked_user_id: blockedId });
+
+        if (error) throw error;
+
+        // 2. Update memory cache
+        if (blocksMap.has(blockerId)) {
+            blocksMap.get(blockerId).delete(blockedId);
+        }
+
+        // 3. Notify parties
+        io.to(blockerId).emit('block:update', { type: 'unblocked', userId: blockedId });
+        io.to(blockedId).emit('block:update', { type: 'unblocked_by', userId: blockerId });
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error unblocking user:', err);
+        res.status(500).json({ error: 'Failed to unblock' });
+    }
+});
 // Track active socket ID per user to prevent duplicate room members
 const userSocketMap = new Map(); // userId -> socketId
+
+// Track user blocks for high-performance filtering
+// Format: blockerId -> Set of blockedUserIds
+const blocksMap = new Map();
+
+// Initialize blocks cache from Supabase
+const initializeBlocksCache = async () => {
+    if (!supabase) return;
+    try {
+        const { data, error } = await supabase.from('blocked_users').select('blocker_id, blocked_user_id');
+        if (error) throw error;
+        
+        data.forEach(block => {
+            if (!blocksMap.has(block.blocker_id)) {
+                blocksMap.set(block.blocker_id, new Set());
+            }
+            blocksMap.get(block.blocker_id).add(block.blocked_user_id);
+        });
+        console.log(`🛡️ Blocks cache initialized with ${data.length} blocks`);
+    } catch (err) {
+        console.error('❌ Failed to initialize blocks cache:', err.message);
+    }
+};
+initializeBlocksCache();
+
+/**
+ * Checks if a user is blocked by another user
+ * @param {string} userAId The person who might be blocked
+ * @param {string} userBId The person who might have blocked them
+ * @returns {boolean}
+ */
+const isBlockedBy = (userAId, userBId) => {
+    return blocksMap.get(userBId)?.has(userAId) || false;
+};
+
+/**
+ * Checks if there is a mutual block status between two users
+ */
+const isAnyBlocked = (userAId, userBId) => {
+    return isBlockedBy(userAId, userBId) || isBlockedBy(userBId, userAId);
+};
 
 io.on('connection', (socket) => {
     console.log(`📡 New Socket Connection: ${socket.id} (Total: ${io.engine.clientsCount})`);
@@ -689,8 +872,14 @@ io.on('connection', (socket) => {
                 sender_id: data.message.sender_id || data.message.sender,
                 receiver_id: data.message.receiver_id || data.recipientId,
             };
-            io.to(data.recipientId).emit('message:receive', outgoingMessage);
-            console.log(`💬 Message from ${data.message.sender_id} to ${data.recipientId} broadcasted`);
+
+            // WHATSAPP-LIKE BLOCK: If recipient has blocked sender, do not deliver the message.
+            if (isBlockedBy(data.message.sender_id, data.recipientId)) {
+                console.log(`🚫 Message from ${data.message.sender_id} to ${data.recipientId} blocked by recipient`);
+            } else {
+                io.to(data.recipientId).emit('message:receive', outgoingMessage);
+                console.log(`💬 Message from ${data.message.sender_id} to ${data.recipientId} broadcasted`);
+            }
             
             // 3. Confirm to sender it was processed
             if (typeof ackCallback === 'function') {
@@ -755,6 +944,11 @@ io.on('connection', (socket) => {
         socket.broadcast.emit('status:new', statusData);
     });
 
+    socket.on('status:delete', (data) => {
+        // data: { statusId, userId }
+        socket.broadcast.emit('status:delete', data);
+    });
+
     // Presence & Typing events
     socket.on('user:online', (data) => {
         // { userId, isOnline }
@@ -764,6 +958,8 @@ io.on('connection', (socket) => {
     socket.on('user:typing', (data) => {
         // { senderId, recipientId, isTyping }
         if (data.recipientId) {
+            // Block check: Don't show typing if recipient has blocked sender
+            if (isBlockedBy(data.senderId, data.recipientId)) return;
             io.to(data.recipientId).emit('user:typing', data);
         }
     });
@@ -784,8 +980,13 @@ io.on('connection', (socket) => {
     // 1. Initial Call Signaling (SDP Offer)
     socket.on('offer', (data) => {
         const target = data.recipientId || data.calleeId;
-        if (target) {
-            console.log(`📞 [Offer] from ${socket.userId || 'unknown'} to ${target}`);
+        const sender = socket.userId || data.callerId;
+        if (target && sender) {
+            if (isBlockedBy(sender, target)) {
+                console.log(`🚫 Call Offer from ${sender} to ${target} blocked`);
+                return;
+            }
+            console.log(`📞 [Offer] from ${sender} to ${target}`);
             io.to(target).emit('offer', data);
         }
     });
@@ -810,7 +1011,12 @@ io.on('connection', (socket) => {
     // 4. Call Life-cycle Events
     socket.on('call-request', (data) => {
         const target = data.recipientId || data.calleeId;
-        if (target) {
+        const sender = socket.userId || data.callerId;
+        if (target && sender) {
+            if (isBlockedBy(sender, target)) {
+                console.log(`🚫 Call Request from ${sender} to ${target} blocked`);
+                return;
+            }
             console.log(`🔔 [Call Request] ${data.callId} to ${target}`);
             io.to(target).emit('call-request', data);
         }

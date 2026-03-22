@@ -6,6 +6,8 @@ export const SUPABASE_URL = Env.SUPABASE_URL;
 export const SUPABASE_ANON_KEY = Env.SUPABASE_ANON_KEY;
 export const SUPABASE_ENDPOINT = Env.SUPABASE_PROXY_URL;
 export const SERVER_URL = Env.SERVER_URL;
+const USE_R2 = Env.USE_R2;
+const R2_PUBLIC_URL = Env.R2_PUBLIC_URL;
 
 console.log('[API Config] SUPABASE_ENDPOINT:', SUPABASE_ENDPOINT);
 console.log('[API Config] SERVER_URL:', SERVER_URL);
@@ -135,4 +137,29 @@ export function proxySupabaseUrl(url: string | null | undefined): string {
         );
     }
     return url;
+}
+
+/**
+ * Constructs a full, proxied public URL for a Supabase Storage object.
+ * Handles relative paths stored in the database.
+ */
+export function getPublicStorageUrl(bucket: string, path: string | null | undefined): string {
+    if (!path) return '';
+    
+    // If it's already a full URL or data URI, just proxy it if needed
+    if (path.startsWith('http') || path.startsWith('data:')) {
+        return proxySupabaseUrl(path);
+    }
+    
+    // Direct R2 check - If key starts with uploads/, it's almost certainly R2 
+    // especially since our storage.objects in Supabase is empty.
+    if (USE_R2 && R2_PUBLIC_URL && !R2_PUBLIC_URL.includes('XXXXXXXXXXXX')) {
+        const fullR2Url = `${R2_PUBLIC_URL}/${path}`;
+        // Note: R2 URLs might also be blocked by some ISPs, but for now we try direct
+        return fullR2Url;
+    }
+    
+    // Fallback to Supabase Storage
+    const fullUrl = `https://xuipxbyvsawhuldopvjn.supabase.co/storage/v1/object/public/${bucket}/${path}`;
+    return proxySupabaseUrl(fullUrl);
 }

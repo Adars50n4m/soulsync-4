@@ -51,12 +51,19 @@ interface AuthContextType {
     updateProfile: (updates: Partial<User>) => Promise<void>;
     changeUsername: (newUsername: string) => Promise<{ success: boolean; error?: string }>;
     refreshProfile: (userId: string) => Promise<void>;
+    blockedByMe: Set<string>;
+    blockedByThem: Set<string>;
+    blockUser: (userId: string) => Promise<void>;
+    unblockUser: (userId: string) => Promise<void>;
+    isBlocked: (userId: string) => boolean;
 }
 
 export const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [currentUser, setCurrentUser] = useState<User | null>(null);
+    const [blockedByMe, setBlockedByMe] = useState<Set<string>>(new Set());
+    const [blockedByThem, setBlockedByThem] = useState<Set<string>>(new Set());
     const [isReady, setIsReady] = useState(false);
     const currentUserRef = useRef<User | null>(null);
 
@@ -67,21 +74,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const synchronizeSession = useCallback(async (userId: string) => {
         try {
             console.log('[AuthContext] synchronizeSession start:', userId);
-            // Add timeout to prevent hanging
+            
+            // 1. Fetch blocks immediately
+            const { blockService } = require('../services/BlockService');
+            blockService.getBlockedUsers().then((blocks: any[]) => {
+                const blockedSet = new Set(blocks.map((b: any) => b.blocked.id));
+                setBlockedByMe(blockedSet);
+            }).catch((err: any) => console.error('[AuthContext] Failed to fetch blocks:', err));
+
+            // 2. Fetch profile
             const profile = await Promise.race([
                 authService.getProfile(userId),
-                new Promise<null>((resolve) => setTimeout(() => {
-                    console.warn('[AuthContext] synchronizeSession: getProfile timed out (5s)');
-                    resolve(null);
-                }, 5000))
+                new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000))
             ]);
 
             if (profile) {
                 console.log('[AuthContext] synchronizeSession: Profile fetched successfully');
-                // Use server avatar URL immediately (fast), cache in background
                 const avatarUrl = profile.avatarUrl || '';
 
-                // Background cache avatar after startup
                 setTimeout(() => {
                     if (avatarUrl) {
                         storageService.getAvatarUrl(profile.id, avatarUrl).catch(() => {});
@@ -120,10 +130,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 .single();
 
             if (data && !error) {
-                // Use server URL immediately, cache in background
                 const avatarUrl = data.avatar_url || '';
-
-                // Background cache avatar
                 if (avatarUrl) {
                     storageService.getAvatarUrl(userId, avatarUrl).catch(() => {});
                 }
@@ -154,6 +161,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
             } else if (event === 'SIGNED_OUT') {
                 setCurrentUser(null);
+                setBlockedByMe(new Set());
+                setBlockedByThem(new Set());
                 await AsyncStorage.removeItem('ss_current_user');
             } else if (event === 'PASSWORD_RECOVERY') {
                 router.push('/forgot-password?mode=reset' as any);
@@ -162,7 +171,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const { data: { subscription } } = authService.onAuthStateChange(handleAuthChange);
 
-        return () => subscription.unsubscribe();
+        const { socketService } = require('../services/SocketService');
+        const handleBlockUpdate = (event: string, data: any) => {
+            if (event === 'block:update') {
+                const { type, userId } = data;
+                if (type === 'blocked') {
+                    setBlockedByMe(prev => new Set(prev).add(userId));
+                } else if (type === 'unblocked') {
+                    setBlockedByMe(prev => {
+                        const next = new Set(prev);
+                        next.delete(userId);
+                        return next;
+                    });
+                } else if (type === 'blocked_by') {
+                    setBlockedByThem(prev => new Set(prev).add(userId));
+                } else if (type === 'unblocked_by') {
+                    setBlockedByThem(prev => {
+                        const next = new Set(prev);
+                        next.delete(userId);
+                        return next;
+                    });
+                }
+            }
+        };
+        socketService.addListener(handleBlockUpdate);
+
+        return () => {
+            subscription.unsubscribe();
+            socketService.removeListener(handleBlockUpdate);
+        };
     }, [synchronizeSession]);
 
     useEffect(() => {
@@ -170,9 +207,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         let timeoutId: ReturnType<typeof setTimeout>;
         let safetyTimeoutId: ReturnType<typeof setTimeout>;
 
-        console.log('[AuthContext] useEffect[auth-init]: Initializing auth state...');
-
-        // Overall safety timeout for the entire readying process (8s)
         safetyTimeoutId = setTimeout(() => {
             if (isMounted && !isReady) {
                 console.warn('[AuthContext] SAFETY TIMEOUT: Forcing app state to READY');
@@ -180,22 +214,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         }, 8000);
 
-        // Set a short timeout for the session check specifically
         const sessionPromise = supabase.auth.getSession();
         const timeoutPromise = new Promise<null>((resolve) => {
-            timeoutId = setTimeout(() => {
-                console.log('[AuthContext] session check: Timed out (3s), continuing anyway');
-                resolve(null);
-            }, 3000); // Reduced to 3 seconds to avoid iOS Watchdog timeout (10s limit)
+            timeoutId = setTimeout(() => resolve(null), 3000);
         });
 
         Promise.race([sessionPromise, timeoutPromise]).then((sessionResult: any) => {
             if (!isMounted) return;
             clearTimeout(timeoutId);
 
-            // If timeout fired (null), skip session check
             if (!sessionResult) {
-                console.log('[AuthContext] session check: Using fallback (timeout)');
                 setIsReady(true);
                 return;
             }
@@ -204,26 +232,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const error = sessionResult?.error;
 
             if (error) {
-                console.error('[AuthContext] session check: Supabase error:', error);
-                setIsReady(true); // Signal ready even on error to unblock UI
+                setIsReady(true);
                 return;
             }
 
             if (session) {
-                console.log('[AuthContext] session check: Session found, syncing profile for:', session.user.id);
                 synchronizeSession(session.user.id).finally(() => {
                     if (isMounted) {
                         if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
-                        console.log('[AuthContext] session check: Profile sync complete, readying app');
                         setIsReady(true);
                     }
                 });
             } else {
-                console.log('[AuthContext] session check: No session found, checking cache...');
                 AsyncStorage.getItem('ss_current_user').then(cachedUserId => {
                     if (isMounted) {
                         if (cachedUserId) {
-                            console.log('[AuthContext] session check: Found cached user, syncing:', cachedUserId);
                             synchronizeSession(cachedUserId).finally(() => {
                                 if (isMounted) {
                                     if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
@@ -231,25 +254,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                 }
                             });
                         } else {
-                            console.log('[AuthContext] session check: No session or cached user found');
                             if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
                             setIsReady(true);
                         }
                     }
-                }).catch((e) => {
-                    console.error('[AuthContext] cache check: Failed:', e);
+                }).catch(() => {
                     if (isMounted) {
                         if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
                         setIsReady(true);
                     }
                 });
             }
-        }).catch((err) => {
+        }).catch(() => {
             if (!isMounted) return;
-            clearTimeout(timeoutId);
             if (safetyTimeoutId) clearTimeout(safetyTimeoutId);
-            console.error('[AuthContext] session check chain: Fatal exception:', err);
-            setIsReady(true); // Unblock UI on error
+            setIsReady(true);
         });
 
         return () => {
@@ -261,18 +280,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const login = useCallback(async (emailOrUsername: string, password: string): Promise<boolean> => {
         const result = await authService.signInWithPassword(emailOrUsername, password);
-        
         return result.success;
-    }, [synchronizeSession]);
+    }, []);
 
     const setSession = useCallback(async (userId: string) => {
         await synchronizeSession(userId);
     }, [synchronizeSession]);
 
     const logout = useCallback(async () => {
-        console.log('[AuthContext] Logging out, clearing local data...');
         try {
-            // First clear the local SQLite database to prevent pollution
             await offlineService.clearDatabase();
         } catch (e) {
             console.error('[AuthContext] Failed to clear local DB during logout:', e);
@@ -280,16 +296,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         await authService.signOut();
         setCurrentUser(null);
+        setBlockedByMe(new Set());
+        setBlockedByThem(new Set());
         await AsyncStorage.removeItem('ss_current_user');
         router.replace('/login');
     }, []);
 
     const updateProfile = useCallback(async (updates: Partial<User>) => {
         if (!currentUser) return;
-        
-        // Optimistic local UI update immediately changes the DP/Name across the app
         setCurrentUser(prev => prev ? { ...prev, ...updates } as User : null);
-
         try {
             const { error } = await supabase
                 .from('profiles')
@@ -322,6 +337,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return result;
     }, [currentUser, refreshProfile]);
 
+    const blockUser = useCallback(async (userId: string) => {
+        const { blockService } = require('../services/BlockService');
+        const success = await blockService.blockUser(userId);
+        if (success) {
+            setBlockedByMe(prev => new Set(prev).add(userId));
+        }
+    }, []);
+
+    const unblockUser = useCallback(async (userId: string) => {
+        const { blockService } = require('../services/BlockService');
+        const success = await blockService.unblockUser(userId);
+        if (success) {
+            setBlockedByMe(prev => {
+                const next = new Set(prev);
+                next.delete(userId);
+                return next;
+            });
+        }
+    }, []);
+
+    const isBlocked = useCallback((userId: string) => {
+        return blockedByMe.has(userId) || blockedByThem.has(userId);
+    }, [blockedByMe, blockedByThem]);
+
     const value = {
         currentUser,
         isLoggedIn: !!currentUser,
@@ -331,7 +370,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         logout,
         updateProfile,
         changeUsername,
-        refreshProfile
+        refreshProfile,
+        blockedByMe,
+        blockedByThem,
+        blockUser,
+        unblockUser,
+        isBlocked
     };
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

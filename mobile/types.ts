@@ -41,6 +41,7 @@ export interface Story {
     artist: string;
     image: string;
   };
+  syncStatus?: 'pending' | 'synced' | 'failed' | 'deleted';
 }
 
 export interface Contact {
@@ -81,6 +82,7 @@ export interface StatusUpdate {
     avatar?: string;
     time?: string;
     previewImage?: string;
+    syncStatus?: 'pending' | 'synced' | 'failed' | 'deleted';
 }
 
 export interface CallLog {
@@ -128,4 +130,14 @@ export interface MusicState {
     currentSong: Song | null;
     isPlaying: boolean;
     favorites: Song[];
+}
+
+export interface UploadStatus {
+    id: string;
+    localUri: string;
+    mediaType: 'image' | 'video';
+    progress: number;
+    status: 'uploading' | 'syncing' | 'completed' | 'failed';
+    error?: string;
+    caption?: string;
 }
