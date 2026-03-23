@@ -1,6 +1,6 @@
 import { supabase } from '../config/supabase';
 import { type StatusUpdate } from '../types';
-import { getPublicStorageUrl, SERVER_URL } from '../config/api';
+import { getPublicStorageUrl, SERVER_URL, safeFetchJson } from '../config/api';
 
 export interface PostStatusParams {
   userId: string;
@@ -161,7 +161,7 @@ class StatusService {
 
   async deleteStory(storyId: string, userId: string): Promise<boolean> {
     try {
-      const response = await fetch(`${SERVER_URL}/api/status/delete`, {
+      const response = await safeFetchJson<{ success: boolean }>(`${SERVER_URL}/api/status/delete`, {
           method: 'POST',
           headers: {
               'Content-Type': 'application/json',
@@ -170,8 +170,10 @@ class StatusService {
           body: JSON.stringify({ statusId: storyId })
       });
       
-      const result = await response.json() as { success: boolean };
-      return result.success;
+      if (!response.success || !response.data?.success) {
+          throw new Error(response.error || 'Server delete failed');
+      }
+      return true;
     } catch (error) {
       console.error('[StatusService] Error deleting story:', error);
       // Fallback to direct Supabase if server fails

@@ -1,5 +1,5 @@
 // mobile/services/BlockService.ts
-import { SERVER_URL } from '../config/api';
+import { SERVER_URL, safeFetchJson } from '../config/api';
 import { supabase } from '../config/supabase';
 
 export interface BlockedUser {
@@ -22,18 +22,23 @@ class BlockService {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return [];
 
-      const response = await fetch(`${SERVER_URL}/api/blocks`, {
-        headers: {
-          'x-user-id': session.user.id,
-          'Authorization': `Bearer ${session.access_token}`,
-        },
-      });
+      const response = await safeFetchJson<{ success: boolean; blocks: BlockedUser[]; error?: string }>(
+        `${SERVER_URL}/api/blocks`,
+        {
+          headers: {
+            'x-user-id': session.user.id,
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+        }
+      );
 
-      const data = await response.json() as { success: boolean; blocks: BlockedUser[]; error?: string };
-      if (!data.success) throw new Error(data.error || 'Failed to fetch blocks');
-      return data.blocks;
+      if (!response.success || !response.data?.success) {
+        console.warn('[BlockService] getBlockedUsers failed:', response.error || response.data?.error);
+        return [];
+      }
+      return response.data.blocks || [];
     } catch (error) {
-      console.error('[BlockService] getBlockedUsers error:', error);
+      console.error('[BlockService] getBlockedUsers exception:', error);
       return [];
     }
   }
@@ -46,21 +51,26 @@ class BlockService {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('Not authenticated');
 
-      const response = await fetch(`${SERVER_URL}/api/blocks`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': session.user.id,
-          'Authorization': `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({ blockedId }),
-      });
+      const response = await safeFetchJson<{ success: boolean; error?: string }>(
+        `${SERVER_URL}/api/blocks`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-id': session.user.id,
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ blockedId }),
+        }
+      );
 
-      const data = await response.json() as { success: boolean; error?: string };
-      if (!data.success) throw new Error(data.error || 'Failed to block user');
+      if (!response.success || !response.data?.success) {
+        console.warn('[BlockService] blockUser failed:', response.error || response.data?.error);
+        return false;
+      }
       return true;
     } catch (error) {
-      console.error('[BlockService] blockUser error:', error);
+      console.error('[BlockService] blockUser exception:', error);
       return false;
     }
   }
@@ -73,19 +83,24 @@ class BlockService {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('Not authenticated');
 
-      const response = await fetch(`${SERVER_URL}/api/blocks/${blockedId}`, {
-        method: 'DELETE',
-        headers: {
-          'x-user-id': session.user.id,
-          'Authorization': `Bearer ${session.access_token}`,
-        },
-      });
+      const response = await safeFetchJson<{ success: boolean; error?: string }>(
+        `${SERVER_URL}/api/blocks/${blockedId}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'x-user-id': session.user.id,
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+        }
+      );
 
-      const data = await response.json() as { success: boolean; error?: string };
-      if (!data.success) throw new Error(data.error || 'Failed to unblock user');
+      if (!response.success || !response.data?.success) {
+        console.warn('[BlockService] unblockUser failed:', response.error || response.data?.error);
+        return false;
+      }
       return true;
     } catch (error) {
-      console.error('[BlockService] unblockUser error:', error);
+      console.error('[BlockService] unblockUser exception:', error);
       return false;
     }
   }

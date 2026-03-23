@@ -14,7 +14,7 @@ let useProxy = true;
     try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 3000);
-        const res = await fetch(Env.SUPABASE_PROXY_URL, { signal: controller.signal });
+        const res = await fetch(`${Env.SUPABASE_PROXY_URL}/__health`, { signal: controller.signal });
         clearTimeout(timeout);
         if (!res.ok && res.status >= 500) useProxy = false;
         console.log(`[Supabase] Proxy health check: ${useProxy ? 'OK' : 'FAILED - Using direct'}`);
@@ -42,12 +42,24 @@ export const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
                 try {
                     const proxied = urlString.replace(Env.SUPABASE_URL, Env.SUPABASE_PROXY_URL);
                     const response = await fetch(proxied, options);
-                    // If we get a fatal non-Supabase error from Cloudflare (like 530), disable proxy for this session
+
+                    // 1. Check for specific proxy/edge errors (530, 525, 521)
                     if (response.status === 530 || response.status === 525 || response.status === 521) {
                         console.warn('[Supabase] Proxy edge error. Disabling for session.');
                         useProxy = false;
                         return fetch(url, options);
                     }
+
+                    // 2. Check for 404 - If the proxy returns 404 HTML, it's likely a misconfiguration or broken route
+                    // Note: Supabase REST can return 401/403/404 for missing records, but those usually have a 'content-type: application/json'.
+                    const contentType = response.headers.get('content-type') || '';
+                    if (response.status === 404 && contentType.includes('text/html')) {
+                        console.warn('[Supabase] Proxy returned 404 HTML. Falling back to direct connection.');
+                        // We don't disable useProxy forever here as it might be a transient routing issue, 
+                        // but we definitely want this request to succeed.
+                        return fetch(url, options);
+                    }
+
                     return response;
                 } catch (e) {
                     console.warn('[Supabase] Proxy fetch error, falling back to direct:', e);

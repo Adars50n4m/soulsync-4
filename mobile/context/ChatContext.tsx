@@ -14,16 +14,16 @@ const SYNC_INTERVAL = 30000; // 30 seconds
 
 const SUPERUSERS: Contact[] = [
   {
-    id: '4d28b137-66ff-4417-b451-b1a421e34b25',
+    id: 'f00f00f0-0000-0000-0000-000000000002',
     name: 'Shri Ram',
-    avatar: 'https://xuipxbyvsawhuldopvjn.supabase.co/storage/v1/object/public/avatars/shri_avatar.png', // Placeholder or real URL if available
+    avatar: 'https://xuipxbyvsawhuldopvjn.supabase.co/storage/v1/object/public/avatars/shri_avatar.png',
     status: 'online',
     about: 'Owner & Superuser',
     unreadCount: 0,
     lastMessage: 'Jai Shri Ram'
   },
   {
-    id: '02e52f08-6c1e-497f-93f6-b29c275b8ca4',
+    id: 'f00f00f0-0000-0000-0000-000000000001',
     name: 'Hari',
     avatar: 'https://xuipxbyvsawhuldopvjn.supabase.co/storage/v1/object/public/avatars/hari_avatar.png',
     status: 'online',
@@ -159,7 +159,12 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ])) as [any[], any[]];
 
       const grouped = (localMessages || []).reduce((acc: Record<string, Message[]>, row: any) => {
-      const normalizedChatId = row.chatId;
+      const rawChatId = row.chatId;
+      // Healing: map legacy string IDs to database UUIDs
+      let normalizedChatId = rawChatId;
+      if (rawChatId === 'shri') normalizedChatId = 'f00f00f0-0000-0000-0000-000000000002';
+      if (rawChatId === 'hari') normalizedChatId = 'f00f00f0-0000-0000-0000-000000000001';
+
       if (!acc[normalizedChatId]) {
         acc[normalizedChatId] = [];
       }
@@ -317,6 +322,16 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let cancelled = false;
 
     (async () => {
+      // 1. One-time migration of legacy string IDs ('shri', 'hari') to UUIDs in local DB
+      try {
+        await offlineService.migrateLegacyIds({
+          'shri': 'f00f00f0-0000-0000-0000-000000000002',
+          'hari': 'f00f00f0-0000-0000-0000-000000000001'
+        });
+      } catch (err) {
+        console.warn('[ChatContext] Legacy ID migration failed:', err);
+      }
+
       await hydrateFromLocalDb();
       if (!cancelled) {
         await refreshContactsFromServer();

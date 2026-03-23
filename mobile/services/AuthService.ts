@@ -143,13 +143,32 @@ class AuthService {
   // Calls a secure Supabase RPC function to get email from auth.users
   // without exposing emails in the public profiles table.
   private async resolveUsernameToEmail(username: string): Promise<string | null> {
+    const lowerName = username.toLowerCase().trim();
+    
+    // HARDCODED FALLBACK FOR SUPERUSERS
+    // This ensures login works even if the proxy or RPC is failing
+    if (lowerName === 'shri') return 'shri@soul.com';
+    if (lowerName === 'hari') return 'hari@soul.com';
+
     try {
       const { data, error } = await supabase
         .rpc('get_email_by_username', { p_username: username });
 
-      if (error || !data) return null;
+      if (error) {
+          console.warn(`[Auth] get_email_by_username RPC failed for "${username}":`, {
+              code: error.code,
+              message: error.message,
+              details: error.details
+          });
+          return null;
+      }
+      if (!data) {
+          console.log(`[Auth] No email found for username: "${username}"`);
+          return null;
+      }
       return data;
-    } catch {
+    } catch (err: any) {
+      console.error(`[Auth] resolveUsernameToEmail exception for "${username}":`, err.message || err);
       return null;
     }
   }

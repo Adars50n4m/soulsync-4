@@ -22,7 +22,7 @@ export const SUPABASE_PROXY_URL = getEnvVar('EXPO_PUBLIC_SUPABASE_PROXY_URL', 'h
 
 // 3. App Server (Node.js/Localtunnel)
 export const IS_DEV = __DEV__;
-const DEFAULT_TUNNEL = 'http://localhost:3000';
+const DEFAULT_TUNNEL = 'http://localhost:3001';
 let resolvedServerUrl = getEnvVar('EXPO_PUBLIC_SERVER_URL', DEFAULT_TUNNEL);
 
 const extractExpoDevHost = (): string | null => {
@@ -47,7 +47,7 @@ if (IS_DEV) {
   const debugHost = extractExpoDevHost();
   
   if (debugHost) {
-    const localUrl = `http://${debugHost}:3000`;
+    const localUrl = `http://${debugHost}:3001`;
 
     // Overwrite localhost/10.0.2.2 with the real host IP so physical devices can reach it.
     if (resolvedServerUrl.includes('localhost') || resolvedServerUrl.includes('10.0.2.2')) {
@@ -61,17 +61,21 @@ if (IS_DEV) {
       // we'll try to use a common pattern or a provided env var.
       const fallbackIp = getEnvVar('EXPO_PUBLIC_HOST_IP', null);
       if (fallbackIp) {
-        resolvedServerUrl = `http://${fallbackIp}:3000`;
+        resolvedServerUrl = `http://${fallbackIp}:3001`;
         console.log(`[Env] Using EXPO_PUBLIC_HOST_IP: ${resolvedServerUrl}`);
       } else {
-        resolvedServerUrl = Platform.OS === 'android' ? 'http://10.0.2.2:3000' : 'http://localhost:3000';
+        resolvedServerUrl = Platform.OS === 'android' ? 'http://10.0.2.2:3001' : 'http://localhost:3001';
         console.warn('[Env] No Expo dev host found. If you are on a physical device, set EXPO_PUBLIC_SERVER_URL to your LAN IP or tunnel URL.');
       }
     }
   }
 }
 export const SERVER_URL = resolvedServerUrl;
+console.log('──────────────────────────────────────────────────');
 console.log(`[Env] FINAL SERVER_URL: ${SERVER_URL}`);
+console.log(`[Env] Platform: ${Platform.OS}`);
+console.log(`[Env] IS_DEV: ${IS_DEV}`);
+console.log('──────────────────────────────────────────────────');
 
 
 // 4. Music API (JioSaavn)

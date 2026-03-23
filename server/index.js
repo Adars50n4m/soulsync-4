@@ -22,6 +22,19 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Middleware to authenticate user via Header (Dev/Prototype style)
+const authenticateUser = (req, res, next) => {
+    const userId = req.headers['x-user-id'] || 
+                   (req.query && req.query.userId) || 
+                   (req.body && req.body.userId);
+                   
+    if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized: No user ID provided' });
+    }
+    req.user = { id: userId };
+    next();
+};
+
 app.get('/', (req, res) => res.send('<html><body style="background: white; display: flex; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif;"><h1>✅ SoulSync sync server running</h1></body></html>'));
 
 const server = http.createServer(app);
@@ -265,18 +278,8 @@ app.post('/api/status/delete', authenticateUser, async (req, res) => {
     }
 });
 
-// Middleware to authenticate user via Header (Dev/Prototype style)
-const authenticateUser = (req, res, next) => {
-    const userId = req.headers['x-user-id'] || 
-                   (req.query && req.query.userId) || 
-                   (req.body && req.body.userId);
-                   
-    if (!userId) {
-        return res.status(401).json({ error: 'Unauthorized: No user ID provided' });
-    }
-    req.user = { id: userId };
-    next();
-};
+
+// ─── ROUTES ───
 
 // --- USER DISCOVERY & CONNECTION ENDPOINTS ---
 
@@ -605,11 +608,16 @@ app.get('/api/connections', authenticateUser, async (req, res) => {
 
         // Flatten: return the "other" user
         const connections = conns.map(c => {
-            const otherUserId = c.user_1_id === userId ? c.user_2_id : c.user_1_id;
-            const otherUser = profiles?.find(p => p.id === otherUserId);
+            const otherUserId = (c.user_1_id === userId ? c.user_2_id : c.user_1_id).toLowerCase();
+            const otherUser = profiles?.find(p => p.id.toLowerCase() === otherUserId);
+            
             return {
+                id: otherUserId,
+                username: otherUser?.username || 'Unknown',
+                display_name: otherUser?.display_name || otherUser?.username || 'Unknown',
+                avatar_url: otherUser?.avatar_url || null,
+                is_online: otherUser?.is_online || false,
                 connection_id: c.id,
-                ...(otherUser || { id: otherUserId, username: 'Unknown' }),
                 is_favorite: c.is_favorite,
                 custom_name: c.custom_name,
                 mute_notifications: c.mute_notifications,
@@ -1130,7 +1138,7 @@ setInterval(async () => {
     }
 }, 60 * 1000); // Check every minute
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 const HOST = '0.0.0.0'; // Listen on all interfaces so physical devices can connect
 server.listen(PORT, HOST, () => {
     console.log(`SoulSync sync server running on ${HOST}:${PORT}`);
