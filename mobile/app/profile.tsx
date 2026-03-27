@@ -1,7 +1,8 @@
 import React from 'react';
 import {
-    View, Text, Image, StyleSheet, StatusBar, Dimensions,    useWindowDimensions, Pressable
+    View, Text, StyleSheet, StatusBar, Dimensions,    useWindowDimensions, Pressable
 } from 'react-native';
+import { Image } from 'expo-image';
 import { useRouter, useNavigation } from 'expo-router';
 import GlassView from '../components/ui/GlassView';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -20,7 +21,23 @@ import Animated, {
     useAnimatedStyle,
     interpolate,
     Extrapolation,
+    SharedTransition,
+    withTiming,
+    Easing,
 } from 'react-native-reanimated';
+
+const AnimatedImage = Animated.createAnimatedComponent(Image);
+
+const profileTransition = SharedTransition.custom((values) => {
+    'worklet';
+    return {
+        height: withTiming(values.targetHeight, { duration: 400 }),
+        width: withTiming(values.targetWidth, { duration: 400 }),
+        originX: withTiming(values.targetOriginX, { duration: 400 }),
+        originY: withTiming(values.targetOriginY, { duration: 400 }),
+        borderRadius: withTiming(values.targetBorderRadius, { duration: 400 }),
+    };
+});
 
 const HEADER_HEIGHT = 300;
 
@@ -137,22 +154,27 @@ export default function ProfileScreen() {
             >
                 {/* Hero Profile Section */}
                 <Animated.View style={[styles.heroSection, avatarAnimatedStyle]}>
-                    <Pressable onPress={handleEditProfile}>
-                        <Animated.View
-                            style={styles.avatarGlowContainer}
-                        >
-                            <SoulAvatar
-                                uri={currentUser.avatar}
-                                size={120}
-                                style={styles.profileAvatar}
-                                iconSize={60}
-                            />
-                            <View style={styles.avatarGlassBorder} />
+                    <View style={styles.avatarContainer}>
+                        <Pressable onPress={handleEditProfile} style={styles.avatarPressable}>
+                            {currentUser.avatar ? (
+                                <AnimatedImage
+                                    sharedTransitionTag="profile-avatar"
+                                    sharedTransitionStyle={profileTransition}
+                                    source={{ uri: currentUser.avatar.startsWith('http') ? currentUser.avatar : `https://xuipxbyvsawhuldopvjn.supabase.co/storage/v1/object/public/avatars/${currentUser.avatar}` }}
+                                    style={StyleSheet.absoluteFill}
+                                    contentFit="cover"
+                                />
+                            ) : (
+                                <View style={[StyleSheet.absoluteFill, { backgroundColor: '#262626', justifyContent: 'center', alignItems: 'center' }]}>
+                                    <MaterialIcons name="person" size={100} color="rgba(255,255,255,0.2)" />
+                                </View>
+                            )}
                             <View style={styles.editOverlay}>
                                 <MaterialIcons name="edit" size={24} color="#ffffff" />
                             </View>
-                        </Animated.View>
-                    </Pressable>
+                        </Pressable>
+                        <View style={styles.avatarGlassBorder} pointerEvents="none" />
+                    </View>
                     <Text style={styles.userName}>{currentUser.name}</Text>
                     <Text style={styles.userHandle}>Soul ID: {currentUser.id || 'soul_user'}</Text>
                     <View style={styles.profileActionContainer}>
@@ -251,36 +273,50 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingVertical: 40,
     },
-    avatarGlowContainer: {
+    avatarContainer: {
+        width: 200,
+        height: 200,
+        alignItems: 'center',
+        justifyContent: 'center',
         position: 'relative',
-        padding: 10,
+    },
+    avatarPressable: {
+        width: 180,
+        height: 180,
+        borderRadius: 90,
+        overflow: 'hidden',
+        position: 'relative',
     },
     profileAvatar: {
-        width: 140,
-        height: 140,
-        borderRadius: 70,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
     },
     avatarGlassBorder: {
-        ...StyleSheet.absoluteFillObject,
-        borderRadius: 80,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.05)',
-        margin: -5,
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        borderRadius: 100,
+        borderWidth: 2,
+        borderColor: 'rgba(255,255,255,0.18)',
     },
     editOverlay: {
         position: 'absolute',
         bottom: 0,
         right: 0,
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: 'rgba(244, 63, 94, 0.9)',
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: '#FF0040',
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 3,
         borderColor: '#09090E',
+        zIndex: 10,
     },
     profileActionContainer: {
         position: 'absolute',

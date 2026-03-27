@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { sileo } from '../components/ui/Sileo';
 
 export const NOTIF_ACTION_REPLY_MESSAGE = 'REPLY_MESSAGE';
 export const NOTIF_ACTION_MARK_READ = 'MARK_READ';
@@ -82,8 +83,26 @@ class NotificationService {
       this.onResponse(actionIdentifier, payload, userText);
     });
 
-    this.receiveSub = Notifications.addNotificationReceivedListener((_event: any) => {
-      // Reserved: can be used for in-app banners/sound routing if needed.
+    this.receiveSub = Notifications.addNotificationReceivedListener((event: any) => {
+      // Show in-app banner if the app is in foreground
+      const { title, body, data } = event.notification.request.content;
+      
+      // Specifically avoid showing duplicate banners if the system already showed one
+      // (though usually foreground = system banner off in expo-notifications config)
+      sileo.info({
+        title: title || 'New Notification',
+        description: body || '',
+        duration: 5000,
+        button: data?.type === 'message' ? {
+          title: 'View',
+          onClick: () => {
+            // Handle navigation or other actions if needed
+            if (this.onResponse && data) {
+              this.onResponse('DEFAULT', data as NotificationPayload);
+            }
+          }
+        } : undefined
+      });
     });
 
     this.initialized = true;
@@ -170,10 +189,31 @@ class NotificationService {
 
   private async requestPermissions() {
     const Notifications = this.getNotificationsModule();
-    if (!Notifications) return;
-    const existing = await Notifications.getPermissionsAsync();
-    if (existing.granted) return;
-    await Notifications.requestPermissionsAsync();
+    if (!Notifications) return false;
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+    if (existingStatus !== 'granted') {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+    return finalStatus === 'granted';
+  }
+
+  async getPushToken(): Promise<string | null> {
+    if (!this.available) return null;
+    const Notifications = this.getNotificationsModule();
+    if (!Notifications) return null;
+
+    try {
+      const hasPermission = await this.requestPermissions();
+      if (!hasPermission) return null;
+
+      const token = (await Notifications.getExpoPushTokenAsync()).data;
+      return token;
+    } catch (e) {
+      console.warn('[NotificationService] Failed to get push token:', e);
+      return null;
+    }
   }
 
   private async configureChannelsAndCategories() {

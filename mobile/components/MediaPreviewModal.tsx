@@ -25,10 +25,10 @@ import { CropImageModal } from './CropImageModal';
 interface MediaPreviewModalProps {
   visible: boolean;
   mediaUri?: string;
-  mediaType?: 'image' | 'video' | 'audio';
-  initialMediaItems?: { uri: string; type: 'image' | 'video' | 'audio' }[];
+  mediaType?: 'image' | 'video' | 'audio' | 'file';
+  initialMediaItems?: { uri: string; type: 'image' | 'video' | 'audio' | 'file'; name?: string }[];
   onClose: () => void;
-  onSend: (mediaList: { uri: string; type: 'image' | 'video' | 'audio' }[], caption?: string) => void;
+  onSend: (mediaList: { uri: string; type: 'image' | 'video' | 'audio' | 'file'; name?: string }[], caption?: string) => void;
   isUploading?: boolean;
   mode?: 'chat' | 'status';
 }
@@ -79,7 +79,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
   const [isTrimming, setIsTrimming] = useState(false);
   
   // Media List state for multi-sending
-  const [mediaItems, setMediaItems] = useState<{ uri: string; type: 'image' | 'video' | 'audio' }[]>([]);
+  const [mediaItems, setMediaItems] = useState<{ uri: string; type: 'image' | 'video' | 'audio' | 'file'; name?: string }[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   
   // Crop modal state
@@ -407,6 +407,14 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
             <View style={styles.audioPreview}>
               <MaterialIcons name="graphic-eq" size={80} color={activeTheme.primary} />
               <MaterialIcons name="play-circle-filled" size={60} color="#fff" />
+            </View>
+          )}
+          {currentType === 'file' && (
+            <View style={styles.audioPreview}>
+              <MaterialIcons name="insert-drive-file" size={80} color="#4ade80" />
+              <Text style={{ color: '#fff', fontSize: 18, marginTop: 10, textAlign: 'center', paddingHorizontal: 20 }}>
+                {mediaItems[currentIndex]?.name || 'Document'}
+              </Text>
             </View>
           )}
 

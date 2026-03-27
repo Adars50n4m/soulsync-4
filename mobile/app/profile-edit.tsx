@@ -1,10 +1,12 @@
 import * as React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import {
-    View, Text, Image, Pressable, StyleSheet, StatusBar,
+    View, Text, Pressable, StyleSheet, StatusBar,
     TextInput, ScrollView, Alert, Modal, Animated as RNAnimated,
-    KeyboardAvoidingView, useWindowDimensions, Platform
+    KeyboardAvoidingView, useWindowDimensions, Platform, ActivityIndicator
 } from 'react-native';
+import { Image } from 'expo-image';
+import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 const DEFAULT_AVATAR = '';
@@ -18,6 +20,19 @@ import Animated, {
     SharedTransition,
     withTiming,
 } from 'react-native-reanimated';
+
+const AnimatedImage = Animated.createAnimatedComponent(Image);
+
+const profileTransition = SharedTransition.custom((values) => {
+    'worklet';
+    return {
+        height: withTiming(values.targetHeight, { duration: 400 }),
+        width: withTiming(values.targetWidth, { duration: 400 }),
+        originX: withTiming(values.targetOriginX, { duration: 400 }),
+        originY: withTiming(values.targetOriginY, { duration: 400 }),
+        borderRadius: withTiming(values.targetBorderRadius, { duration: 400 }),
+    };
+});
 
 
 const SettingRow = ({ label, value, icon, onPress }: {
@@ -82,6 +97,7 @@ export default function ProfileEditScreen() {
     const [showFullImage, setShowFullImage] = useState(false);
     const [isEditing, setIsEditing] = useState<'name' | 'bio' | 'username' | null>(null);
     const [showDatePicker, setShowDatePicker] = useState(false);
+    const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
 
     useEffect(() => {
         if (currentUser) {
@@ -105,10 +121,11 @@ export default function ProfileEditScreen() {
 
     const showModal = () => {
         setShowImageModal(true);
-        RNAnimated.spring(slideAnim, {
+        slideAnim.setValue(0);
+        RNAnimated.timing(slideAnim, {
             toValue: 1,
+            duration: 350,
             useNativeDriver: true,
-            friction: 800,
         }).start();
     };
 
@@ -141,17 +158,20 @@ export default function ProfileEditScreen() {
 
                 if (!result.canceled && result.assets[0]) {
                     const localUri = result.assets[0].uri;
-                    setAvatar(localUri); // Show immediately
+                    setIsUploadingAvatar(true);
                     
                     // Upload to Supabase
                     try {
                         const uploadedUrl = await storageService.uploadImage(localUri, 'avatars', currentUser?.id);
                         if (uploadedUrl) {
-                            updateProfile({ avatar: uploadedUrl });
+                            await updateProfile({ avatar: uploadedUrl });
+                            setAvatar(uploadedUrl); // Only update local state on success
                         }
                     } catch (error: any) {
                         console.warn('Avatar upload error (camera):', error);
                         Alert.alert('Upload Failed', `Could not save profile picture: ${error.message || 'Unknown error'}`);
+                    } finally {
+                        setIsUploadingAvatar(false);
                     }
                 }
             } catch (error) {
@@ -182,17 +202,20 @@ export default function ProfileEditScreen() {
 
                 if (!result.canceled && result.assets[0]) {
                     const localUri = result.assets[0].uri;
-                    setAvatar(localUri); // Show immediately
+                    setIsUploadingAvatar(true);
 
                     // Upload to Supabase
                     try {
                         const uploadedUrl = await storageService.uploadImage(localUri, 'avatars', currentUser?.id);
                         if (uploadedUrl) {
-                            updateProfile({ avatar: uploadedUrl });
+                            await updateProfile({ avatar: uploadedUrl });
+                            setAvatar(uploadedUrl); // Update local state with the resolved URL (or key)
                         }
                     } catch (error: any) {
                         console.warn('Avatar upload error (gallery):', error);
                         Alert.alert('Upload Failed', `Could not save profile picture: ${error.message || 'Unknown error'}`);
+                    } finally {
+                        setIsUploadingAvatar(false);
                     }
                 }
             } catch (error) {
@@ -321,32 +344,34 @@ export default function ProfileEditScreen() {
                 >
                     {/* Profile Photo Section */}
                     <Animated.View style={styles.avatarSection} collapsable={false}>
-                        <Pressable onPress={() => setShowFullImage(true)} collapsable={false}>
-                            <Animated.View
-                                style={styles.avatarMorphShell}
-                                {...(enableSharedMorph
-                                    ? {
-                                        sharedTransitionTag: 'profile-avatar-bounds',
-                                        sharedTransitionStyle: profileBoundsTransition,
-                                    }
-                                    : {})}
+                        <View style={styles.avatarContainer}>
+                            <Pressable 
+                                onPress={showModal} 
+                                style={styles.avatarPressable}
                                 collapsable={false}
                             >
-                                <SoulAvatar
-                                    sharedTransitionTag={enableSharedMorph ? 'profile-avatar' : undefined}
-                                    sharedTransitionStyle={enableSharedMorph ? profileMorphTransition : undefined}
-                                    uri={avatar}
-                                    style={styles.avatarMorphImage}
-                                    size={120}
-                                    iconSize={60}
-                                />
-                            </Animated.View>
-                        </Pressable>
-                        <Animated.View>
-                            <Pressable onPress={showModal}>
-                                <Text style={[styles.editButton, { color: activeTheme.primary }]}>Edit</Text>
+                                {avatar ? (
+                                    <AnimatedImage
+                                        sharedTransitionTag="profile-avatar"
+                                        sharedTransitionStyle={profileTransition}
+                                        source={{ uri: avatar.startsWith('http') ? avatar : `https://xuipxbyvsawhuldopvjn.supabase.co/storage/v1/object/public/avatars/${avatar}` }}
+                                        style={StyleSheet.absoluteFill}
+                                        contentFit="cover"
+                                        transition={200}
+                                    />
+                                ) : (
+                                    <View style={[StyleSheet.absoluteFill, { backgroundColor: '#262626', justifyContent: 'center', alignItems: 'center' }]}>
+                                        <MaterialIcons name="person" size={100} color="rgba(255,255,255,0.2)" />
+                                    </View>
+                                )}
+                                {isUploadingAvatar && (
+                                    <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' }]}>
+                                        <ActivityIndicator color={activeTheme.primary} size="large" />
+                                    </View>
+                                )}
                             </Pressable>
-                        </Animated.View>
+                            <View style={styles.avatarGlassBorder} pointerEvents="none" />
+                        </View>
                     </Animated.View>
 
                     {/* Settings Rows */}
@@ -496,31 +521,42 @@ export default function ProfileEditScreen() {
                     >
                         <View style={styles.modalOverlay}>
                             <Pressable style={styles.modalBackdrop} onPress={() => setShowDatePicker(false)} />
-                            <View style={[styles.modalContent, { paddingBottom: 40 }]}>
-                                <View style={styles.modalHeader}>
-                                    <Text style={styles.modalTitle}>Choose Birthdate</Text>
-                                    <Pressable 
-                                        onPress={confirmBirthdate} 
-                                        style={[styles.saveBtn, { backgroundColor: activeTheme.primary }]}
-                                    >
-                                        <MaterialIcons name="check" size={24} color="#ffffff" />
-                                    </Pressable>
+                            <RNAnimated.View style={[styles.modalContent, { minHeight: 380 }]}>
+                                <View style={styles.modalContentWrapper}>
+                                    <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+                                    <View style={styles.modalHeader}>
+                                        <Text style={styles.modalTitle}>Choose Birthdate</Text>
+                                        <View style={{ flexDirection: 'row', gap: 12 }}>
+                                            <Pressable 
+                                                onPress={() => setShowDatePicker(false)} 
+                                                style={[styles.modalClose, { backgroundColor: 'rgba(255,255,255,0.05)' }]}
+                                            >
+                                                <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
+                                            </Pressable>
+                                            <Pressable 
+                                                onPress={confirmBirthdate} 
+                                                style={[styles.saveBtn, { backgroundColor: activeTheme.primary }]}
+                                            >
+                                                <MaterialIcons name="check" size={24} color="#ffffff" />
+                                            </Pressable>
+                                        </View>
+                                    </View>
+                                    
+                                    <View style={{ padding: 20, minHeight: 250, justifyContent: 'center', alignItems: 'center' }}>
+                                        <DateTimePicker
+                                            value={pickerDate}
+                                            mode="date"
+                                            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                            onChange={handleDateChange}
+                                            maximumDate={new Date()}
+                                            themeVariant="dark"
+                                            textColor="#ffffff"
+                                            accentColor={activeTheme.primary}
+                                            style={{ height: 200, width: '100%' }}
+                                        />
+                                    </View>
                                 </View>
-                                
-                                <View style={{ padding: 20, minHeight: 250, justifyContent: 'center', alignItems: 'center' }}>
-                                    <DateTimePicker
-                                        value={pickerDate}
-                                        mode="date"
-                                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                                        onChange={handleDateChange}
-                                        maximumDate={new Date()}
-                                        themeVariant="dark"
-                                        textColor="#ffffff"
-                                        accentColor={activeTheme.primary}
-                                        style={{ height: 200, width: '100%' }}
-                                    />
-                                </View>
-                            </View>
+                            </RNAnimated.View>
                         </View>
                     </Modal>
                 </ScrollView>
@@ -557,55 +593,49 @@ export default function ProfileEditScreen() {
                                 transform: [{
                                     translateY: slideAnim.interpolate({
                                         inputRange: [0, 1],
-                                        outputRange: [300, 0],
+                                        outputRange: [600, 0],
                                     })
                                 }]
                             }
                         ]}
                     >
-                        <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScrollContent}>
-                        <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>Choose Avatar</Text>
-                            <Pressable onPress={hideModal} style={styles.modalClose}>
-                                <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.5)" />
-                            </Pressable>
-                        </View>
+                        <View style={styles.modalContentWrapper}>
+                            <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+                            <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScrollContent}>
+                                <View style={styles.modalHeader}>
+                                    <Text style={styles.modalTitle}>Choose Avatar</Text>
+                                    <Pressable onPress={hideModal} style={styles.modalClose}>
+                                        <MaterialIcons name="close" size={24} color="rgba(255,255,255,0.5)" />
+                                    </Pressable>
+                                </View>
 
-                        {/* Large Avatar Preview - 4:5 Ratio */}
-                        <View style={styles.avatarPreviewContainer}>
-                            <SoulAvatar
-                                uri={avatar}
-                                size={200}
-                                style={styles.avatarPreview}
-                            />
-                        </View>
+                                {/* Photo Options */}
+                                <View style={styles.photoOptionsContainer}>
+                                    <Pressable style={styles.modalOption} onPress={() => { hideModal(); setTimeout(handleTakePhoto, 300); }}>
+                                        <MaterialIcons name="camera-alt" size={24} color="#ffffff" />
+                                        <Text style={styles.modalOptionText}>Take photo</Text>
+                                    </Pressable>
 
-                        {/* Photo Options */}
-                        <View style={styles.photoOptionsContainer}>
-                            <Pressable style={styles.modalOption} onPress={() => { hideModal(); setTimeout(handleTakePhoto, 300); }}>
-                                <MaterialIcons name="camera-alt" size={24} color="#ffffff" />
-                                <Text style={styles.modalOptionText}>Take photo</Text>
-                            </Pressable>
+                                    <Pressable style={styles.modalOption} onPress={() => { hideModal(); setTimeout(handleChoosePhoto, 300); }}>
+                                        <MaterialIcons name="photo-library" size={24} color="#ffffff" />
+                                        <Text style={styles.modalOptionText}>Choose from gallery</Text>
+                                    </Pressable>
 
-                            <Pressable style={styles.modalOption} onPress={() => { hideModal(); setTimeout(handleChoosePhoto, 300); }}>
-                                <MaterialIcons name="photo-library" size={24} color="#ffffff" />
-                                <Text style={styles.modalOptionText}>Choose from gallery</Text>
-                            </Pressable>
+                                    {avatar && (
+                                        <Pressable style={styles.modalOption} onPress={handleDeletePhoto}>
+                                            <MaterialIcons name="delete" size={24} color="#ef4444" />
+                                            <Text style={[styles.modalOptionText, { color: '#ef4444' }]}>Remove photo</Text>
+                                        </Pressable>
+                                    )}
+                                </View>
 
-                            {avatar && (
-                                <Pressable style={styles.modalOption} onPress={handleDeletePhoto}>
-                                    <MaterialIcons name="delete" size={24} color="#ef4444" />
-                                    <Text style={[styles.modalOptionText, { color: '#ef4444' }]}>Remove photo</Text>
+                                <View style={styles.separator} />
+
+                                <Pressable style={styles.modalOption} onPress={hideModal}>
+                                    <Text style={[styles.modalOptionText, { textAlign: 'center', width: '100%', opacity: 0.7 }]}>Cancel</Text>
                                 </Pressable>
-                            )}
+                            </ScrollView>
                         </View>
-
-                        <View style={styles.separator} />
-
-                        <Pressable style={styles.modalOption} onPress={hideModal}>
-                            <Text style={[styles.modalOptionText, { textAlign: 'center' }]}>Cancel</Text>
-                        </Pressable>
-                        </ScrollView>
                     </RNAnimated.View>
                 </View>
             </Modal>
@@ -650,17 +680,30 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingVertical: 32,
     },
-    avatarMorphShell: {
-        width: 140,
-        height: 140,
-        borderRadius: 70,
-        overflow: 'hidden',
-        backgroundColor: 'rgba(255,255,255,0.1)',
+    avatarContainer: {
+        position: 'relative',
+        width: 180,
+        height: 180,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
-    avatarMorphImage: {
-        width: '100%',
-        height: '100%',
-        borderRadius: 70,
+    avatarPressable: {
+        width: 180,
+        height: 180,
+        borderRadius: 90,
+        overflow: 'hidden',
+        position: 'relative',
+    },
+    avatarGlassBorder: {
+        position: 'absolute',
+        top: -10,
+        left: -10,
+        right: -10,
+        bottom: -10,
+        borderRadius: 100,
+        borderWidth: 1.5,
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        backgroundColor: 'rgba(255, 255, 255, 0.03)',
     },
     editButton: {
         marginTop: 12,
@@ -800,15 +843,22 @@ const styles = StyleSheet.create({
         bottom: 0,
     },
     modalContent: {
-        backgroundColor: '#1c1c1e',
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
+        width: '100%',
+        backgroundColor: 'transparent',
+        borderTopLeftRadius: 32,
+        borderTopRightRadius: 32,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.1)',
+        minHeight: 280,
+    },
+    modalContentWrapper: {
+        flex: 1,
         paddingBottom: 40,
         paddingTop: 10,
-        overflow: 'visible',
     },
     modalScrollView: {
-        flex: 1,
+        width: '100%',
     },
     modalScrollContent: {
         paddingBottom: 20,

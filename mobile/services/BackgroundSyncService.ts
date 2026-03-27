@@ -44,14 +44,16 @@ try {
               return BackgroundFetch.BackgroundFetchResult.NoData;
             }
             
-            // Fetch unread messages from Supabase
+            // 1. Fetch unread messages from Supabase (Downlink)
             const syncedCount = await syncMessagesFromServer(user.id);
             
-            console.log(`[BackgroundSync] Synced ${syncedCount} messages`);
+            // 2. Flush outgoing queue (Uplink)
+            const flushedCount = await flushOutgoingQueue(user.id);
             
-            if (syncedCount > 0) {
-              // Show local notification for new messages
-              await showSyncNotification(syncedCount);
+            console.log(`[BackgroundSync] Synced ${syncedCount} down, ${flushedCount} up`);
+            
+            if (syncedCount > 0 || flushedCount > 0) {
+              if (syncedCount > 0) await showSyncNotification(syncedCount);
               return BackgroundFetch.BackgroundFetchResult.NewData;
             }
             
@@ -133,6 +135,63 @@ async function syncMessagesFromServer(userId: string): Promise<number> {
     return messages.length;
   } catch (error) {
     console.error('[BackgroundSync] Sync error:', error);
+    return 0;
+  }
+}
+
+/**
+ * Flush outgoing message queue to Supabase
+ */
+async function flushOutgoingQueue(userId: string): Promise<number> {
+  try {
+    const pendingMessages = await offlineService.getPendingMessages();
+    if (pendingMessages.length === 0) return 0;
+
+    console.log(`[BackgroundSync] Attempting to flush ${pendingMessages.length} pending messages`);
+    let successCount = 0;
+
+    for (const msg of pendingMessages) {
+      try {
+        // Simple deduplication check: if it already has a non-temp ID skip (though getPendingMessages usually filters)
+        if (!msg.id.startsWith('temp-')) {
+           // If it's already sent but status is stuck, update it
+           await offlineService.updateMessageStatus(msg.id, 'sent');
+           successCount++;
+           continue;
+        }
+
+        const { data, error } = await supabase
+          .from('messages')
+          .insert({
+            sender: userId,
+            receiver: msg.chatId,
+            text: msg.text,
+            media_url: msg.media?.url,
+            media_type: msg.media?.type,
+            media_caption: msg.media?.caption,
+            reply_to_id: msg.replyTo,
+            status: 'sent'
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        if (data) {
+          await offlineService.updateMessageId(msg.id, data.id);
+          await offlineService.updateMessageStatus(data.id, 'sent');
+          successCount++;
+        }
+      } catch (err) {
+        console.warn(`[BackgroundSync] Failed to send message ${msg.id}:`, err);
+        // Increment retry count in local DB
+        await offlineService.updateMessageRetry(msg.id, (msg.retryCount || 0) + 1, String(err));
+      }
+    }
+
+    return successCount;
+  } catch (error) {
+    console.error('[BackgroundSync] Flush error:', error);
     return 0;
   }
 }

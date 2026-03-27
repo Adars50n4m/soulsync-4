@@ -8,8 +8,8 @@ import { useAuth } from './AuthContext';
 import { type Contact, type Message } from '../types';
 
 export const LEGACY_TO_UUID: Record<string, string> = {
-  'shri': '4d28b137-66ff-4417-b451-b1a421e34b25',
-  'hari': '02e52f08-6c1e-497f-93f6-b29c275b8ca4',
+  'shri': 'f00f00f0-0000-0000-0000-000000000002',
+  'hari': 'f00f00f0-0000-0000-0000-000000000001',
 };
 
 interface ChatContextType {
@@ -37,6 +37,8 @@ interface ChatContextType {
   cleanupChatSession: (partnerId?: string) => void;
   refreshLocalCache: () => Promise<void>;
   uploadProgressTracker: Record<string, number>;
+  archiveContact: (partnerId: string, archive?: boolean) => Promise<void>;
+  unfriendContact: (partnerId: string) => Promise<void>;
 }
 
 export const ChatContext = createContext<ChatContextType | undefined>(undefined);
@@ -51,6 +53,13 @@ function mapQueuedMessage(row: QueuedMessage): Message {
     media: row.media,
     replyTo: row.replyTo,
     localFileUri: row.localFileUri,
+  };
+}
+
+function mapLocalContact(row: any): Contact {
+  return {
+    ...normalizeContact(row),
+    isArchived: row.is_archived === 1
   };
 }
 
@@ -69,10 +78,11 @@ function mapChatMessage(message: ChatMessage, currentUserId: string): Message {
 }
 
 function normalizeContact(row: any): Contact {
+  const name = row.display_name || row.full_name || row.name || row.username || (row.id ? `@${row.id.substring(0, 5)}` : 'User');
   return {
     id: row.id,
-    name: row.name ?? 'Unknown',
-    avatar: row.avatar ?? '',
+    name: name,
+    avatar: row.avatar_url || row.avatar || '',
     status: row.status ?? 'offline',
     lastMessage: row.lastMessage ?? row.last_message ?? '',
     unreadCount: row.unreadCount ?? row.unread_count ?? 0,
@@ -122,7 +132,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ]) as any[];
 
       if (localContacts && localContacts.length > 0) {
-        const normalized = localContacts.map(normalizeContact);
+        const normalized = localContacts.map(mapLocalContact);
         contactsRef.current = normalized;
         setContacts(normalized);
         console.log(`[ChatContext] Instant hydration: ${normalized.length} contacts`);
@@ -512,6 +522,37 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
   }, []);
 
+  const archiveContact = useCallback(async (partnerId: string, archive: boolean = true) => {
+    await offlineService.setContactArchived(partnerId, archive);
+    setContacts((prev) =>
+      prev.map((contact) =>
+        contact.id === partnerId
+          ? { ...contact, isArchived: archive }
+          : contact
+      )
+    );
+  }, []);
+
+  const unfriendContact = useCallback(async (partnerId: string) => {
+    try {
+      const response = await fetch(`${SERVER_URL}/api/connections/${partnerId}`, {
+        method: 'DELETE',
+        headers: {
+          'x-user-id': currentUser?.id || '',
+        }
+      });
+      const data = await response.json() as any;
+      if (data.success) {
+        // Remove from local contacts
+        setContacts(prev => prev.filter(c => c.id !== partnerId));
+        // Clear chat history
+        await clearChatMessages(partnerId);
+      }
+    } catch (err) {
+      console.error('[ChatContext] unfriendContact error:', err);
+    }
+  }, [currentUser, clearChatMessages]);
+
   const fetchOtherUserProfile = useCallback(async (userId: string) => {
     // FIX: Standardize userId first to handle legacy/UUID consistently
     const sid = (userId && LEGACY_TO_UUID[userId]) || userId;
@@ -521,6 +562,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setOtherUser({
         id: sid,
         name: 'Shri Ram',
+        username: 'shri',
         avatar: 'https://avatar.iran.liara.run/public/boy?username=shri',
         bio: 'SoulSync Founder | Jai Shree Ram',
       });
@@ -530,6 +572,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setOtherUser({
         id: sid,
         name: 'Hari Om',
+        username: 'hari',
         avatar: 'https://avatar.iran.liara.run/public/boy?username=hari',
         bio: 'SoulSync Dev | Om Namah Shivay',
       });
@@ -543,7 +586,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (data) {
         setOtherUser({
           id: data.id,
-          name: data.display_name || data.name || 'User',
+          name: data.display_name || data.name || data.username || 'User',
+          username: data.username,
           avatar: proxySupabaseUrl(data.avatar_url),
           bio: data.bio || 'Forever in sync',
         });
@@ -574,6 +618,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     initializeChatSession,
     cleanupChatSession,
     refreshLocalCache: refreshContactsFromServer,
+    archiveContact,
+    unfriendContact,
   }), [
     contacts,
     messages,
@@ -593,6 +639,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     initializeChatSession,
     cleanupChatSession,
     refreshContactsFromServer,
+    archiveContact,
+    unfriendContact,
   ]);
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

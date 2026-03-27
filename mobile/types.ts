@@ -58,6 +58,7 @@ export interface Contact {
     birthdate?: string;
     note?: string; // New field for Soul Notes (status bubble)
     noteTimestamp?: string; // ISO date string
+    isArchived?: boolean;
 }
 
 export interface StatusUpdate {

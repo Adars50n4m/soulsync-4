@@ -10,7 +10,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
 export default function RequestsScreen() {
-    const { currentUser } = useApp();
+    const { currentUser, activeTheme } = useApp();
     const [incoming, setIncoming] = useState<any[]>([]);
     const [outgoing, setOutgoing] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -97,7 +97,7 @@ export default function RequestsScreen() {
                         {isIncoming ? (
                             <View style={styles.actionButtons}>
                                 <TouchableOpacity 
-                                    style={[styles.smallButton, { backgroundColor: '#3b82f6' }]} 
+                                    style={[styles.smallButton, { backgroundColor: activeTheme.primary }]} 
                                     onPress={() => handleAction(item.id, 'accept')}
                                     disabled={actionId === item.id}
                                 >
@@ -137,15 +137,15 @@ export default function RequestsScreen() {
     return (
         <View style={styles.container}>
             <LinearGradient colors={['#000000', '#080808']} style={StyleSheet.absoluteFill} />
-            <div style={styles.header}>
+            <View style={styles.header}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
                     <MaterialIcons name="arrow-back-ios" size={20} color="#fff" />
                 </TouchableOpacity>
                 <Text style={styles.title}>Requests</Text>
-            </div>
+            </View>
 
             <FlatList
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#3b82f6" />}
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={activeTheme.primary} />}
                 data={[
                     { title: 'Incoming', data: incoming },
                     { title: 'Outgoing', data: outgoing }
@@ -177,7 +177,7 @@ export default function RequestsScreen() {
             />
             {loading && !refreshing && (
                 <View style={styles.loader}>
-                    <ActivityIndicator size="large" color="#3b82f6" />
+                    <ActivityIndicator size="large" color={activeTheme.primary} />
                 </View>
             )}
         </View>

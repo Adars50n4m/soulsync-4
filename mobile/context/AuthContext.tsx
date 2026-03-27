@@ -1,8 +1,10 @@
 import * as React from 'react';
 import { useState, useEffect, createContext, useContext, useCallback, useRef } from 'react';
+import { Platform } from 'react-native';
 import { supabase, LEGACY_TO_UUID } from '../config/supabase';
 import { authService, AvatarType } from '../services/AuthService';
 import { offlineService } from '../services/LocalDBService';
+import { notificationService } from '../services/NotificationService';
 import { proxySupabaseUrl } from '../config/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
@@ -112,6 +114,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     });
                     await AsyncStorage.setItem('ss_current_user', userId);
                 }
+            }
+
+            // Sync Push Token for reliable remote notifications
+            if (userId) {
+                notificationService.getPushToken().then(async (token) => {
+                    if (token) {
+                        console.log('[AuthContext] Syncing push token:', token);
+                        // Update profile fallback columns
+                        await supabase
+                            .from('profiles')
+                            .update({ 
+                                push_token: token,
+                                push_platform: Platform.OS
+                            })
+                            .eq('id', userId);
+                        
+                        // Update dedicated push_tokens table
+                        await supabase
+                            .from('push_tokens')
+                            .upsert({
+                                user_id: userId,
+                                token: token,
+                                platform: Platform.OS,
+                                token_type: 'fcm', // Use FCM for standard expo tokens
+                                updated_at: new Date().toISOString()
+                            }, { onConflict: 'user_id, platform' });
+                    }
+                }).catch(err => console.warn('[AuthContext] Push token sync failed:', err));
             }
         } catch (e) {
             console.error('[AuthContext] Session synchronization failed:', e);
@@ -282,6 +312,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     avatar_url: updates.avatar,
                     avatar_type: updates.avatarType,
                     teddy_variant: updates.teddyVariant,
+                    birthdate: updates.birthdate,
                     note: updates.note,
                     note_timestamp: updates.noteTimestamp
                 })

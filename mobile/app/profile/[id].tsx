@@ -9,6 +9,8 @@ import GlassView from '../../components/ui/GlassView';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { useApp } from '../../context/AppContext';
+import { useCall } from '../../context/CallContext';
+import { SHRI_ID, HARI_ID } from '../../config/supabase';
 import Animated, {
     useSharedValue, useAnimatedStyle, withSpring, withTiming, interpolate, runOnJS, Easing,
     useAnimatedScrollHandler, Extrapolation, SharedTransition
@@ -71,6 +73,7 @@ export default function ProfileScreen() {
     const router = useRouter();
     const navigation = useNavigation();
     const { currentUser, otherUser, contacts, messages, activeTheme, clearChatMessages, connectivity, fetchOtherUserProfile } = useApp();
+    const { startCall } = useCall();
     const isCloudConnected = connectivity?.isRealtimeConnected;
 
     // Determine which user's profile to show
@@ -427,7 +430,13 @@ export default function ProfileScreen() {
                             <Text style={styles.userName}>{profileUser.name}</Text>
                             <MaterialIcons name="verified" size={26} color="#ffffff" style={{ marginTop: 8 }} />
                         </View>
-                        <Text style={styles.userHandle}>@{profileUser.username || 'soul_user'}</Text>
+                        <Text style={styles.userHandle}>
+                            @{profileUser.username || 
+                              (profileUser.id === SHRI_ID ? 'shri' : 
+                               profileUser.id === HARI_ID ? 'hari' : 
+                               profileUser.id?.split('-')[0]) || 
+                              'soul_user'}
+                        </Text>
                     </View>
 
 
@@ -436,7 +445,7 @@ export default function ProfileScreen() {
                         <View style={styles.actionRow}>
                              <Pressable 
                                 style={styles.actionPill}
-                                onPress={() => {}}
+                                onPress={() => startCall(profileUser.id, 'audio')}
                             >
                                 <GlassView intensity={40} tint="light" style={styles.actionPillContent}>
                                     <Ionicons name="call" size={24} color="#fff" />
@@ -445,7 +454,7 @@ export default function ProfileScreen() {
 
                             <Pressable 
                                 style={styles.actionPill}
-                                onPress={() => {}}
+                                onPress={() => startCall(profileUser.id, 'video')}
                             >
                                 <GlassView intensity={40} tint="light" style={styles.actionPillContent}>
                                     <Ionicons name="videocam" size={24} color="#fff" />

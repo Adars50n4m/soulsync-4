@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { useApp } from '../context/AppContext';
 
 interface NoteBubbleProps {
     text: string;
@@ -7,16 +8,17 @@ interface NoteBubbleProps {
 }
 
 export function NoteBubble({ text, isMe }: NoteBubbleProps) {
+    const { activeTheme } = useApp();
     if (!text) return null;
 
     return (
         <View style={styles.container}>
-            <View style={styles.bubble}>
+            <View style={[styles.bubble, { backgroundColor: activeTheme.surface }]}>
                 <Text numberOfLines={4} style={styles.text}>{text}</Text>
             </View>
             <View style={styles.tailAnchor}>
-                <View style={styles.tailMain} />
-                <View style={styles.tailDot} />
+                <View style={[styles.tailMain, { backgroundColor: activeTheme.surface }]} />
+                <View style={[styles.tailDot, { backgroundColor: activeTheme.surface }]} />
             </View>
         </View>
     );

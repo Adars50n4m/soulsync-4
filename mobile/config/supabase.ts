@@ -3,8 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Env from './env';
 
 // Legacy ID mapping for transitioning to Supabase UUIDs
-export const SHRI_ID = '4d28b137-66ff-4417-b451-b1a421e34b25';
-export const HARI_ID = '02e52f08-6c1e-497f-93f6-b29c275b8ca4';
+export const SHRI_ID = 'f00f00f0-0000-0000-0000-000000000002';
+export const HARI_ID = 'f00f00f0-0000-0000-0000-000000000001';
 
 export const LEGACY_TO_UUID: Record<string, string> = {
     'shri': SHRI_ID,

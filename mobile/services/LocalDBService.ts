@@ -454,9 +454,15 @@ class OfflineService {
             contact.unreadCount ?? 0, 
             contact.about ?? null, 
             contact.lastSeen ?? null, 
-            new Date().toISOString()
+            new Date().toISOString(),
+            contact.isArchived ? 1 : 0
         ]
     );
+  }
+
+  async setContactArchived(userId: string, archived: boolean): Promise<void> {
+    const db = await getDb();
+    await db.runAsync('UPDATE contacts SET is_archived = ? WHERE id = ?;', [archived ? 1 : 0, userId]);
   }
 
   async getStatuses(): Promise<any[]> {
@@ -512,7 +518,7 @@ class OfflineService {
     await db.execAsync('BEGIN TRANSACTION;');
     try {
       await db.runAsync(`DELETE FROM messages WHERE chat_id = ?;`, [partnerId]);
-      await db.runAsync(`UPDATE contacts SET last_message = '', unread_count = 0 WHERE id = ?;`, [partnerId]);
+      await db.runAsync(`UPDATE contacts SET last_message = '', unread_count = 0, is_archived = 0 WHERE id = ?;`, [partnerId]);
       await db.runAsync(`DELETE FROM chats WHERE id = ?;`, [partnerId]);
       await db.execAsync('COMMIT;');
     } catch (e) {

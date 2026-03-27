@@ -50,6 +50,8 @@ interface AppContextType {
     uploadProgressTracker: Record<string, number>;
     otherUser: any | null;
     fetchOtherUserProfile: any;
+    archiveContact: (partnerId: string, archive?: boolean) => Promise<void>;
+    unfriendContact: (partnerId: string) => Promise<void>;
     
     // Status
     statuses: any[];
@@ -76,6 +78,9 @@ interface AppContextType {
     musicState: any;
     playSong: any;
     togglePlayMusic: any;
+    toggleFavoriteSong: (song: any) => Promise<void>;
+    seekTo: (position: number) => Promise<void>;
+    getPlaybackPosition: () => Promise<number>;
 
     // Core Settings
     theme: ThemeName;
@@ -152,6 +157,8 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         uploadProgressTracker: chat.uploadProgressTracker,
         otherUser: chat.otherUser,
         fetchOtherUserProfile: chat.fetchOtherUserProfile,
+        archiveContact: chat.archiveContact,
+        unfriendContact: chat.unfriendContact,
 
         // Status
         statuses: status.stories,
@@ -178,6 +185,9 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         musicState: music.musicState,
         playSong: music.playSong,
         togglePlayMusic: music.togglePlayMusic,
+        toggleFavoriteSong: music.toggleFavoriteSong,
+        seekTo: music.seekTo,
+        getPlaybackPosition: music.getPlaybackPosition,
 
         // Settings
         theme,

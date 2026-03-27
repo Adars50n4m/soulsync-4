@@ -8,11 +8,13 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
 import { AppContext, AppProvider } from '../context/AppContext';
+import { PresenceProvider } from '../context/PresenceContext';
+import { backgroundSyncService } from '../services/BackgroundSyncService';
+import { notificationService } from '../services/NotificationService';
 import PipOverlay from '../components/PipOverlay';
 import { IncomingCallModal } from '../components/IncomingCallModal';
 import { SecurityLockOverlay } from '../components/SecurityLockOverlay';
 import { Toaster } from '../components/ui/Toaster';
-import { backgroundSyncService } from '../services/BackgroundSyncService';
 
 // Error Boundary to catch rendering errors
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error?: Error }> {
@@ -69,16 +71,26 @@ function RootContent() {
 
   // Handle Splash Screen hiding
   useEffect(() => {
+    // Register background sync tasks
+    backgroundSyncService.register();
+    const cleanupListener = backgroundSyncService.setupListener();
+    
+    return () => {
+        cleanupListener();
+    };
+  }, []); // This useEffect runs once on mount for background sync setup
+
+  useEffect(() => {
     if (isReady) {
       SplashScreen.hideAsync().catch(() => {});
     }
-  }, [isReady]);
+  }, [isReady]); // This useEffect handles splash screen hiding based on isReady
 
     useEffect(() => {
         if (!currentUser?.id) return;
-        backgroundSyncService.register().catch((error) => {
-            console.warn('[RootLayout] Background sync registration failed:', error);
-        });
+        // backgroundSync already registered in the first useEffect on mount,
+        // but we can re-verify if needed when user changes.
+        console.log('[RootLayout] User synced:', currentUser.id);
     }, [currentUser?.id]);
 
     // --- AUTH GUARD ---
@@ -204,11 +216,13 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ErrorBoundary>
           <AppProvider>
-            <ThemeProvider value={DarkTheme}>
-              <RootContent />
-              <Toaster />
-              <StatusBar style="light" />
-            </ThemeProvider>
+            <PresenceProvider>
+              <ThemeProvider value={DarkTheme}>
+                <RootContent />
+                <Toaster />
+                <StatusBar style="light" />
+              </ThemeProvider>
+            </PresenceProvider>
           </AppProvider>
         </ErrorBoundary>
       </SafeAreaProvider>

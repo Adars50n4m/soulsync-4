@@ -37,8 +37,8 @@
 
 import { supabase } from '../config/supabase';
 
-const SHRI_ID = '4d28b137-66ff-4417-b451-b1a421e34b25';
-const HARI_ID = '02e52f08-6c1e-497f-93f6-b29c275b8ca4';
+const SHRI_ID = 'f00f00f0-0000-0000-0000-000000000002';
+const HARI_ID = 'f00f00f0-0000-0000-0000-000000000001';
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { makeRedirectUri } from 'expo-auth-session';
@@ -67,7 +67,7 @@ export interface UserProfile {
   note?: string;
   note_timestamp?: string;
   avatarType?: AvatarType;
-  avatarVariant?: string;
+  teddyVariant?: 'boy' | 'girl';
 }
 
 export interface AuthResult {
@@ -765,6 +765,8 @@ class AuthService {
         lastUsernameChange: data.last_username_change,
         note:        data.note,
         note_timestamp: data.note_timestamp,
+        avatarType:  data.avatar_type,
+        teddyVariant: data.teddy_variant,
       };
     } catch {
       return null;

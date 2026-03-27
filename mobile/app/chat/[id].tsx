@@ -19,6 +19,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
+import * as DocumentPicker from 'expo-document-picker';
 import { offlineService } from '../../services/LocalDBService';
 import VoiceNotePlayer from '../../components/chat/VoiceNotePlayer';
 import ProgressiveBlur from '../../components/chat/ProgressiveBlur';
@@ -49,6 +50,7 @@ import Animated, {
 import 'react-native-gesture-handler';
 
 import { useApp, USERS } from '../../context/AppContext';
+import { usePresence } from '../../context/PresenceContext';
 import { LEGACY_TO_UUID } from '../../config/supabase';
 import { SoulAvatar } from '../../components/SoulAvatar';
 import { chatService } from '../../services/ChatService';
@@ -85,8 +87,9 @@ const morphTransition = SharedTransition.custom((values) => {
 
 type ChatMediaItem = {
     url: string;
-    type: 'image' | 'video' | 'audio';
+    type: 'image' | 'video' | 'audio' | 'file';
     caption?: string;
+    name?: string;
 };
 
 interface SingleChatScreenProps {
@@ -251,7 +254,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     
     const router = useRouter();
     const isFocused = useIsFocused();
-    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, onlineUsers, initializeChatSession, cleanupChatSession } = useApp() as any;
+    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, initializeChatSession, cleanupChatSession, fetchOtherUserProfile } = useApp() as any;
+    const { getPresence } = usePresence();
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
     const [isReady, setIsReady] = useState(false);
@@ -528,16 +532,17 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const isTyping = contact ? typingUsers.includes(contact.id) : false;
 
     useEffect(() => {
-        if (!isFocused || !currentUser?.id || !contact?.id) {
+        if (!isFocused || !currentUser?.id || !id) {
             return;
         }
 
-        initializeChatSession?.(contact.id);
+        initializeChatSession?.(id);
+        fetchOtherUserProfile?.(id);
 
         return () => {
-            cleanupChatSession?.(contact.id);
+            cleanupChatSession?.(id);
         };
-    }, [cleanupChatSession, contact?.id, currentUser?.id, initializeChatSession, isFocused]);
+    }, [cleanupChatSession, id, currentUser?.id, initializeChatSession, fetchOtherUserProfile, isFocused]);
 
     // Mark incoming messages as read when chat is open
     useEffect(() => {
@@ -588,7 +593,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
     // Media picker state
     const [showMediaPicker, setShowMediaPicker] = useState(false);
-    const [mediaPreview, setMediaPreview] = useState<{ uri: string; type: 'image' | 'video' | 'audio' }[] | null>(null);
+    const [mediaPreview, setMediaPreview] = useState<{ uri: string; type: 'image' | 'video' | 'audio' | 'file'; name?: string }[] | null>(null);
     const [mediaCollection, setMediaCollection] = useState<{ messageId: string; items: ChatMediaItem[]; startIndex: number } | null>(null);
     const [mediaViewer, setMediaViewer] = useState<{ messageId: string; items: ChatMediaItem[]; index: number } | null>(null);
     const [selectedMediaLayout, setSelectedMediaLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
@@ -1221,10 +1226,28 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         }
     };
 
-    const handleSelectAudio = async () => {
+    const handleSelectDocument = async () => {
         if (isExpanded) toggleOptions();
         setShowMediaPicker(false);
-        Alert.alert('Coming Soon', 'Audio file selection will be available soon.');
+        try {
+            const result = await DocumentPicker.getDocumentAsync({
+                type: '*/*',
+                copyToCacheDirectory: true,
+                multiple: true
+            });
+
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+                const items: { uri: string; type: 'image' | 'video' | 'audio' | 'file'; name?: string }[] = result.assets.map(asset => ({
+                    uri: asset.uri,
+                    type: 'file',
+                    name: asset.name
+                }));
+                setMediaPreview(items);
+            }
+        } catch (error) {
+            console.error('[ChatScreen] Document picking failed:', error);
+            Alert.alert('Error', 'Failed to pick document');
+        }
     };
 
     const handleSelectLocation = () => {
@@ -1240,7 +1263,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     };
 
 
-    const handleSendMedia = async (mediaList: { uri: string; type: 'image'|'video'|'audio' }[], caption?: string) => {
+    const handleSendMedia = async (mediaList: { uri: string; type: 'image'|'video'|'audio'|'file'; name?: string }[], caption?: string) => {
         if (!mediaList || mediaList.length === 0 || !id) return;
         try {
             for (let i = 0; i < mediaList.length; i++) {
@@ -1263,10 +1286,11 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 }
 
                 const media: Message['media'] = {
-                    type: item.type,
+                    type: item.type === 'file' ? 'file' : item.type as any,
                     url: '', // will be set by ChatService after background upload
                     caption: i === 0 ? caption || undefined : undefined,
                     thumbnail,
+                    name: item.name
                 } as any;
                 const msgText = i === 0 ? (caption || '') : '';
 
@@ -1391,11 +1415,11 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                     </View>
                                     <Text style={styles.optionText}>Gallery</Text>
                                 </Pressable>
-                                <Pressable style={styles.optionItem} onPress={handleSelectAudio}>
+                                <Pressable style={styles.optionItem} onPress={handleSelectDocument}>
                                     <View style={[styles.optionIcon, { backgroundColor: 'rgba(34,197,94,0.16)' }]}>
-                                        <MaterialIcons name="audiotrack" size={20} color="#4ade80" />
+                                        <MaterialIcons name="insert-drive-file" size={20} color="#4ade80" />
                                     </View>
-                                    <Text style={styles.optionText}>Audio</Text>
+                                    <Text style={styles.optionText}>Document</Text>
                                 </Pressable>
                                 <Pressable style={styles.optionItem} onPress={handleSelectContact}>
                                     <View style={[styles.optionIcon, { backgroundColor: 'rgba(255,255,255,0.12)' }]}>
@@ -1574,6 +1598,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                         size={40}
                                         avatarType={contact?.avatarType}
                                         teddyVariant={contact?.teddyVariant}
+                                        isOnline={contact?.id ? getPresence(contact.id).isOnline : false}
                                         sharedTransitionTag="avatar-universal-morph"
                                         sharedTransitionStyle={morphTransition}
                                         style={[
@@ -1584,7 +1609,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                             }
                                         ]}
                                     />
-                                    {contact?.status === 'online' && <View style={styles.onlineIndicator} />}
                                 </Pressable>
                             </Animated.View>
 
@@ -1601,26 +1625,19 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                             </Text>
                                         </View>
                                     ) : (() => {
+                                        const presence = contact?.id ? getPresence(contact.id) : { isOnline: false, lastSeen: null };
                                         let statusText = 'offline';
                                         let statusColor = 'rgba(255,255,255,0.35)';
                                         
                                         if (!connectivity.isDeviceOnline) {
                                             statusText = 'No network';
                                         } else if (!connectivity.isServerReachable) {
-                                            // Only show 'Connecting...' if we cannot even reach the server.
-                                            // If we can reach the server but Realtime is pending, we have 
-                                            // polling anyway, so we are effectively 'Online'.
                                             statusText = 'Connecting...';
-                                        } else if (contact?.status === 'online' || (contact?.id && onlineUsers.includes(contact.id))) {
-                                            statusText = 'online';
-                                            statusColor = '#22c55e';
-                                        } else if (contact?.lastSeen) {
-                                            statusText = `last seen ${formatLastSeen(contact.lastSeen)}`;
-                                        }
-
-                                        // Only log when focused and status is relevant
-                                        if (isFocused && contact?.id) {
-                                            // Optional: console.log(`[ChatHeader] status for ${contact.id}: ${statusText.toUpperCase()}`);
+                                        } else if (presence.isOnline) {
+                                            statusText = 'ONLINE';
+                                            statusColor = activeTheme.primary;
+                                        } else if (presence.lastSeen) {
+                                            statusText = `last seen ${formatLastSeen(presence.lastSeen)}`;
                                         }
 
                                         return (
@@ -1706,14 +1723,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 </View>
             )}
 
-            {/* Music Player Overlay */}
-            <MusicPlayerOverlay
-                isOpen={showMusicPlayer}
-                onClose={() => setShowMusicPlayer(false)}
-                contactName={contact?.name || 'Someone'}
-            />
 
-            {/* Media Picker Sheet */}
             <MediaPickerSheet
                 visible={showMediaPicker}
                 onClose={() => setShowMediaPicker(false)}
@@ -1727,7 +1737,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                     }));
                     setMediaPreview(formattedAssets as any);
                 }}
-                onSelectAudio={handleSelectAudio}
+                onSelectAudio={handleSelectDocument}
                 onSelectNote={() => {
                     setShowMediaPicker(false);
                     Alert.alert("SoulSync Notes", "Leave a note from the Home screen!");
@@ -1845,6 +1855,12 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 onShare={() => Alert.alert('Share', 'External sharing will be available soon.')}
             />
 
+            {/* Music Player Overlay - Moved to root for z-index and blur reliability */}
+            <MusicPlayerOverlay
+                isOpen={showMusicPlayer}
+                onClose={() => setShowMusicPlayer(false)}
+                contactName={contact?.name || 'Someone'}
+            />
         </View>
     );
 }

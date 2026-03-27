@@ -32,6 +32,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Story } from '../types';
 import { useApp } from '../context/AppContext';
+import { proxySupabaseUrl } from '../config/api';
 
 
 interface StatusViewerModalProps {
@@ -364,7 +365,7 @@ export const StatusViewerModal = ({
         >
           {currentStory.type === 'image' && !mediaLoadFailed && !!currentStory.url && (
             <Image
-              source={{ uri: currentStory.url }}
+              source={{ uri: proxySupabaseUrl(currentStory.url) }}
               style={styles.mediaBackdrop}
               resizeMode="cover"
               blurRadius={28}
@@ -389,7 +390,7 @@ export const StatusViewerModal = ({
              </View>
           ) : currentStory.type === 'image' && !mediaLoadFailed && !!currentStory.url ? (
             <Image
-              source={{ uri: currentStory.url }}
+              source={{ uri: proxySupabaseUrl(currentStory.url) }}
               style={[styles.media, { width: width }]}
               resizeMode="contain"
               onError={handleMediaError}

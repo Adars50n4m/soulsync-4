@@ -23,8 +23,10 @@ import * as FileSystem from 'expo-file-system';
 import { storageService } from '../../services/StorageService';
 import { proxySupabaseUrl } from '../../config/api';
 import { chatTransitionState } from '../../services/chatTransitionState';
+import SwipeableRow from '../../components/ui/SwipeableRow';
 
 import { useApp } from '../../context/AppContext';
+import { usePresence } from '../../context/PresenceContext';
 import { LEGACY_TO_UUID } from '../../config/supabase';
 import { SoulAvatar } from '../../components/SoulAvatar';
 import { StatusViewerModal } from '../../components/StatusViewerModal';
@@ -108,12 +110,12 @@ interface ChatListItemProps {
   lastMsg: { text?: string; timestamp?: string };
   onSelect: (contact: Contact, y: number) => void;
   isTyping: boolean;
-  onlineUsers: string[];
+  getPresence: (userId: string) => { isOnline: boolean; lastSeen: string | null };
   connectivity: { isDeviceOnline: boolean; isServerReachable: boolean; isRealtimeConnected: boolean };
   homeMorphProgress: Animated.SharedValue<number>;
 }
 
-const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, isTyping, onlineUsers, connectivity, homeMorphProgress }: ChatListItemProps) => {
+const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, isTyping, getPresence, connectivity, homeMorphProgress }: ChatListItemProps) => {
   const scaleAnim = useSharedValue(1);
   const opacityAnim = useSharedValue(1);
   const itemRef = useRef<View>(null);
@@ -188,6 +190,7 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, isTyping, onl
               size={40}
               avatarType={item.avatarType}
               teddyVariant={item.teddyVariant}
+              isOnline={getPresence(item.id).isOnline}
               style={[
                 item.stories && item.stories.length > 0 && {
                   borderWidth: 2,
@@ -197,7 +200,6 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, isTyping, onl
                 }
               ]}
             />
-            {(item.status === 'online' || onlineUsers.includes(item.id)) && connectivity.isRealtimeConnected && <View style={styles.onlineIndicator} />}
           </Animated.View>
 
           <View style={styles.chatContent}>
@@ -239,7 +241,8 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, isTyping, onl
     prevProps.lastMsg.text === nextProps.lastMsg.text &&
     prevProps.lastMsg.timestamp === nextProps.lastMsg.timestamp &&
     prevProps.isTyping === nextProps.isTyping &&
-    prevProps.onSelect === nextProps.onSelect
+    prevProps.onSelect === nextProps.onSelect &&
+    prevProps.getPresence(prevProps.item.id).isOnline === nextProps.getPresence(nextProps.item.id).isOnline
   );
 });
 
@@ -256,12 +259,15 @@ export default function HomeScreen() {
     addStatus,
     deleteStatus,
     toggleStatusLike,
-    sendChatMessage,
-    addStatusView,
     connectivity,
-    onlineUsers,
     refreshLocalCache,
+    archiveContact,
+    unfriendContact,
+    clearChatMessages,
+    addStatusView,
+    sendChatMessage,
   } = useApp();
+  const { getPresence } = usePresence();
   const navigation = useNavigation();
   const router = useRouter();
   const isFocused = useIsFocused();
@@ -291,7 +297,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
   ] as any,
   opacity: Platform.OS === 'android' 
     ? 1 
-    : interpolate(homeMorphProgress.value, [0, 0.6], [1, 0], Extrapolation.CLAMP),
+    : interpolate(homeMorphProgress.value, [0, 0.6], [1, isViewerVisible ? 0 : 1], Extrapolation.CLAMP),
 }));
 
   const homeBackdropAnimatedStyle = useAnimatedStyle(() => ({
@@ -484,7 +490,9 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
 
       // Final criteria:
       // Show if they are superusers seeing each other OR if there's connection activity
-      return isSelfSuperUserInteraction || hasMessages || hasMeaningfulLastMessage;
+      // AND they are not archived
+      const isArchived = contact.isArchived === true;
+      return (isSelfSuperUserInteraction || hasMessages || hasMeaningfulLastMessage) && !isArchived;
     });
   }, [contacts, messages, statuses, currentUser]);
 
@@ -690,25 +698,48 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
 
   const renderItem = useCallback(({ item, index }: { item: Contact; index: number }) => {
     const lastMsg = lastMessagesMap[item.id] || { text: item.lastMessage, timestamp: '' };
-    const isTyping = typingUsers.includes(item.id);
-    
     // Inject stories if any
     const storiesForContact = contactStoriesMap.get(item.id) || [];
     const itemWithStories = { ...item, stories: storiesForContact };
+    const isTyping = typingUsers.includes(item.id);
 
     return (
-      <ChatListItem 
-          item={itemWithStories} 
-          index={index}
-          lastMsg={lastMsg} 
-          onSelect={handleUserSelect} 
-          isTyping={isTyping}
-          onlineUsers={onlineUsers}
-          connectivity={connectivity}
-          homeMorphProgress={homeMorphProgress}
-      />
+      <SwipeableRow
+        onArchive={() => archiveContact(item.id, true)}
+        onDelete={() => {
+          Alert.alert(
+            'Delete Chat',
+            `Are you sure you want to delete your chat with ${item.name}? This cannot be undone.`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Delete', style: 'destructive', onPress: () => clearChatMessages(item.id) }
+            ]
+          );
+        }}
+        onUnfriend={() => {
+          Alert.alert(
+            'Unfriend',
+            `Are you sure you want to unfriend ${item.name}?`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Unfriend', style: 'destructive', onPress: () => unfriendContact(item.id) }
+            ]
+          );
+        }}
+      >
+        <ChatListItem 
+            item={item} 
+            index={index}
+            lastMsg={lastMsg} 
+            isTyping={isTyping}
+            getPresence={getPresence}
+            connectivity={connectivity}
+            onSelect={handleUserSelect}
+            homeMorphProgress={homeMorphProgress}
+        />
+      </SwipeableRow>
     );
-  }, [lastMessagesMap, typingUsers, handleUserSelect, contactStoriesMap, onlineUsers, connectivity, homeMorphProgress]);
+  }, [lastMessagesMap, typingUsers, getPresence, connectivity, handleUserSelect, homeMorphProgress, archiveContact, clearChatMessages, unfriendContact]);
 
   // Stable keyExtractor for FlashList
   const keyExtractor = useCallback((item: Contact) => item.id, []);
@@ -764,12 +795,12 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
                       <View style={styles.myStatusAvatarBadgeCorner} pointerEvents="none">
                         <SoulAvatar 
                            uri={proxySupabaseUrl(currentUser?.avatar)} 
-                           size={28} 
+                           size={32} 
                            avatarType={currentUser?.avatarType as any}
-                           style={styles.myStatusAvatarSmall} 
+                           isOnline={false}
                         />
                         <View style={styles.myStatusAddBadgeBlue}>
-                          <MaterialIcons name="add" size={14} color="#fff" />
+                          <MaterialIcons name="add" size={12} color="#fff" />
                         </View>
                       </View>
                       <Text style={[styles.startStoryText, styles.myStatusTextBottom]}>My status</Text>
@@ -779,11 +810,11 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
                       <View style={styles.myStatusAvatarContainer} pointerEvents="none">
                         <SoulAvatar 
                            uri={proxySupabaseUrl(currentUser?.avatar)} 
-                           size={44} 
+                           size={64} 
                            avatarType={currentUser?.avatarType as any}
-                           style={styles.myStatusAvatar} 
+                           isOnline={false}
                         />
-                        <View style={styles.myStatusAddBadge}><MaterialIcons name="add" size={16} color="#fff" /></View>
+                        <View style={styles.myStatusAddBadge}><MaterialIcons name="add" size={18} color="#fff" /></View>
                       </View>
                       <Text style={styles.startStoryText}>
                         {currentUser?.note && isNoteValid(currentUser.noteTimestamp)
@@ -826,9 +857,8 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
                 <View style={[styles.contactAvatarBadge, { borderColor: hasUnseen ? '#3b82f6' : 'rgba(255,255,255,0.4)' }]}>
                   <SoulAvatar 
                      uri={proxySupabaseUrl(contact.avatar)} 
-                     size={32} 
+                     size={44} 
                      avatarType={contact.avatarType as any}
-                     style={styles.smallStatusAvatar} 
                   />
                 </View>
                 <LinearGradient
@@ -977,28 +1007,28 @@ const styles = StyleSheet.create({
   },
   statusRail: { marginTop: 10, marginBottom: 0, overflow: 'visible' },
   statusContent: { paddingHorizontal: 20, paddingVertical: 12, paddingTop: 10, gap: 12, overflow: 'visible' },
-  statusCard: { width: 140, height: 200, marginTop: 34, borderRadius: 28, backgroundColor: 'transparent', zIndex: 10, overflow: 'visible' },
+  statusCard: { width: 110, height: 160, marginTop: 10, borderRadius: 24, backgroundColor: 'transparent', zIndex: 10, overflow: 'visible' },
   statusCardSurface: {
     flex: 1,
-    borderRadius: 28,
+    borderRadius: 24,
     backgroundColor: '#1a1a1a',
     overflow: 'hidden',
   },
-  myStatusBackground: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#121212', borderRadius: 28, overflow: 'hidden' },
+  myStatusBackground: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#121212', borderRadius: 24, overflow: 'hidden' },
   myStatusPreviewBg: { ...StyleSheet.absoluteFillObject, opacity: 0.42 },
   myStatusPreviewBgFull: { ...StyleSheet.absoluteFillObject, opacity: 1 },
-  myStatusAvatarContainer: { position: 'relative', marginBottom: 16 },
-  myStatusAvatar: { width: 64, height: 64, borderRadius: 32, borderWidth: 2, borderColor: '#3b82f6' },
-  myStatusAvatarSmall: { width: 48, height: 48, borderRadius: 24, borderWidth: 2, borderColor: '#fff' },
-  myStatusAvatarBadgeCorner: { position: 'absolute', top: 12, left: 12, zIndex: 5 },
-  myStatusAddBadge: { position: 'absolute', bottom: -2, right: -2, width: 24, height: 24, borderRadius: 12, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#262626' },
-  myStatusAddBadgeBlue: { position: 'absolute', bottom: -2, right: -2, width: 20, height: 20, borderRadius: 10, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#000' },
+  myStatusAvatarContainer: { position: 'relative', marginBottom: 12 },
+  myStatusAvatar: { width: 64, height: 64, borderRadius: 32 },
+  myStatusAvatarSmall: { width: 32, height: 32, borderRadius: 16 },
+  myStatusAvatarBadgeCorner: { position: 'absolute', top: 10, left: 10, zIndex: 5 },
+  myStatusAddBadge: { position: 'absolute', bottom: 0, right: 0, width: 22, height: 22, borderRadius: 11, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#121212' },
+  myStatusAddBadgeBlue: { position: 'absolute', bottom: -1, right: -1, width: 18, height: 18, borderRadius: 9, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#000' },
   startStoryText: { color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: '600', textAlign: 'center' },
   myStatusTextBottom: { position: 'absolute', bottom: 16, width: '100%', textAlign: 'center', color: '#fff', fontSize: 15, fontWeight: '700' },
-  statusMediaBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: '#1a1a1a', borderRadius: 28 },
+  statusMediaBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: '#1a1a1a', borderRadius: 24 },
   statusPlaceholder: { backgroundColor: 'rgba(255,255,255,0.08)' },
   statusOverlay: { ...StyleSheet.absoluteFillObject },
-  contactAvatarBadge: { position: 'absolute', top: 12, left: 12, width: 52, height: 52, borderRadius: 26, borderWidth: 2.5, padding: 3, backgroundColor: 'rgba(0,0,0,0.4)' },
+  contactAvatarBadge: { position: 'absolute', top: 10, left: 10, width: 48, height: 48, borderRadius: 24, borderWidth: 2, padding: 2, backgroundColor: 'rgba(0,0,0,0.4)', alignItems: 'center', justifyContent: 'center' },
   smallStatusAvatar: { width: '100%', height: '100%', borderRadius: 22 },
   statusNameGradient: {
     position: 'absolute',

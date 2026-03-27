@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import * as Env from './env';
+import { R2_CONFIG } from './r2';
 
 // Configuration from centralized env.ts
 export const SUPABASE_URL = Env.SUPABASE_URL;
@@ -119,12 +120,24 @@ export const getSaavnApiUrl = () => SAAVN_API_URL;
  */
 export function proxySupabaseUrl(url: string | null | undefined): string {
     if (!url) return '';
-    if (url.startsWith('data:')) return url;
+    if (url.startsWith('data:') || url.startsWith('file://')) return url;
+    
+    // Handle Supabase Storage URLs (legacy)
     if (url.includes('xuipxbyvsawhuldopvjn.supabase.co/storage/v1/object/public/')) {
         return url.replace(
             'https://xuipxbyvsawhuldopvjn.supabase.co',
             SUPABASE_ENDPOINT
         );
     }
+
+    // Handle R2 keys (new)
+    // Keys look like 'avatars/uuid-timestamp.jpg'
+    if (url.includes('/') && !url.startsWith('http')) {
+        const publicBase = R2_CONFIG.PUBLIC_URL?.replace(/\/$/, '');
+        if (publicBase) {
+            return `${publicBase}/${url}`;
+        }
+    }
+
     return url;
 }

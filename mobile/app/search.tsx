@@ -10,7 +10,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInDown, FadeInRight } from 'react-native-reanimated';
 
 export default function SearchScreen() {
-    const { currentUser } = useApp();
+    const { currentUser, activeTheme } = useApp();
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -167,26 +167,39 @@ export default function SearchScreen() {
                             disabled={connectingId === item.id}
                         >
                             <LinearGradient
-                                colors={['#3b82f6', '#2563eb']}
+                                colors={[activeTheme.primary, activeTheme.accent]}
                                 style={styles.connectButton}
                             >
                                 {connectingId === item.id ? (
                                     <ActivityIndicator size="small" color="#fff" />
                                 ) : (
-                                    <Text style={styles.connectText}>Connect</Text>
+                                    <Text style={styles.connectText}>Request</Text>
                                 )}
                             </LinearGradient>
                         </TouchableOpacity>
                     )}
                     
                     {item.connectionStatus === 'request_sent' && (
-                        <TouchableOpacity style={styles.pendingBadge} onPress={() => handleCancel(item.id)}>
+                        <TouchableOpacity 
+                            style={styles.pendingBadge} 
+                            onPress={() => {
+                                Alert.alert(
+                                    'Cancel Request',
+                                    'Do you want to cancel this connection request?',
+                                    [
+                                        { text: 'No', style: 'cancel' },
+                                        { text: 'Yes, Cancel', onPress: () => handleCancel(item.id), style: 'destructive' }
+                                    ]
+                                );
+                            }}
+                        >
                             {connectingId === item.id ? (
                                 <ActivityIndicator size="small" color="rgba(255,255,255,0.4)" />
                             ) : (
                                 <>
                                     <MaterialIcons name="hourglass-empty" size={14} color="rgba(255,255,255,0.6)" />
                                     <Text style={styles.pendingText}>Sent</Text>
+                                    <View style={styles.cancelDot} />
                                 </>
                             )}
                         </TouchableOpacity>
@@ -200,7 +213,7 @@ export default function SearchScreen() {
                         >
                             <LinearGradient
                                 colors={['#22c55e', '#16a34a']}
-                                style={styles.connectButton}
+                                style={[styles.connectButton, { opacity: 0.9 }]}
                             >
                                 {connectingId === item.id ? (
                                     <ActivityIndicator size="small" color="#fff" />
@@ -217,7 +230,7 @@ export default function SearchScreen() {
                             onPress={() => router.push(`/chat/${item.id}`)}
                         >
                             <LinearGradient
-                                colors={['#3b82f6', '#2563eb']}
+                                colors={[activeTheme.primary, activeTheme.accent]}
                                 style={styles.chatButtonGradient}
                             >
                                 <MaterialIcons name="chat" size={20} color="#fff" />
@@ -239,7 +252,7 @@ export default function SearchScreen() {
                 <View style={styles.searchWrapper}>
                     <GlassView intensity={30} tint="dark" style={styles.searchGlass} />
                     <View style={styles.searchContainer}>
-                        <MaterialIcons name="search" size={20} color="rgba(255,255,255,0.5)" />
+                        <MaterialIcons name="search" size={20} color={activeTheme.primary} />
                         <TextInput
                             style={styles.searchInput}
                             placeholder="Find Soulmates..."
@@ -247,9 +260,14 @@ export default function SearchScreen() {
                             value={query}
                             onChangeText={setQuery}
                             autoFocus
-                            selectionColor="#3b82f6"
+                            selectionColor={activeTheme.primary}
                         />
-                        {loading && <ActivityIndicator color="#3b82f6" size="small" />}
+                        {query.length > 0 && (
+                            <TouchableOpacity onPress={() => setQuery('')} style={{ marginRight: 8 }}>
+                                <Ionicons name="close-circle" size={20} color="rgba(255,255,255,0.3)" />
+                            </TouchableOpacity>
+                        )}
+                        {loading && <ActivityIndicator color={activeTheme.primary} size="small" />}
                     </View>
                 </View>
             </View>
@@ -331,6 +349,13 @@ const styles = StyleSheet.create({
         borderColor: 'rgba(255,255,255,0.1)'
     },
     pendingText: { color: 'rgba(255,255,255,0.5)', fontWeight: '600', fontSize: 13 },
+    cancelDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: '#ef4444',
+        marginLeft: 2
+    },
     chatButton: { 
         width: 44, 
         height: 44, 
