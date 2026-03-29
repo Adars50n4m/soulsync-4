@@ -55,6 +55,7 @@ interface AppContextType {
     
     // Status
     statuses: any[];
+    uploadingStory: { localUri: string; mediaType: 'image' | 'video'; progress: number; caption?: string } | null;
     addStatus: (params: any) => Promise<boolean | void>;
     deleteStatus: (id: string) => Promise<void>;
     toggleStatusLike: (id: string) => Promise<void>;
@@ -162,6 +163,7 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
 
         // Status
         statuses: status.stories,
+        uploadingStory: status.uploadingStory,
         addStatus: status.addStory,
         deleteStatus: status.deleteStory,
         toggleStatusLike: status.toggleStoryLike,

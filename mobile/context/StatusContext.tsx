@@ -1,14 +1,16 @@
 import * as React from 'react';
 import { useState, useEffect, createContext, useContext, useCallback, useMemo } from 'react';
 import { statusService } from '../services/StatusService';
+import { storageService } from '../services/StorageService';
 import { useAuth } from './AuthContext';
 import { type StatusUpdate } from '../types';
 
 interface StatusContextType {
   stories: StatusUpdate[];
   notes: any[];
+  uploadingStory: { localUri: string; mediaType: 'image' | 'video'; progress: number; caption?: string } | null;
   refreshStatuses: () => Promise<void>;
-  addStory: (params: { mediaUrl: string; mediaType: 'image' | 'video'; caption?: string; music?: any }) => Promise<boolean>;
+  addStory: (params: { mediaUrl: string; localUri?: string; mediaType: 'image' | 'video'; caption?: string; music?: any }) => Promise<boolean>;
   updateNote: (text: string | null) => Promise<boolean>;
   deleteStory: (id: string) => Promise<void>;
   toggleStoryLike: (id: string) => Promise<void>;
@@ -21,6 +23,7 @@ export const StatusProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const { currentUser } = useAuth();
   const [stories, setStories] = useState<StatusUpdate[]>([]);
   const [notes, setNotes] = useState<any[]>([]);
+  const [uploadingStory, setUploadingStory] = useState<{ localUri: string; mediaType: 'image' | 'video'; progress: number; caption?: string } | null>(null);
 
   const refreshStatuses = useCallback(async () => {
     if (!currentUser) return;
@@ -46,9 +49,64 @@ export const StatusProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return () => clearInterval(interval);
   }, [refreshStatuses]);
 
-  const addStory = useCallback(async (params: { mediaUrl: string; mediaType: 'image' | 'video'; caption?: string; music?: any }) => {
+  const addStory = useCallback(async (params: { mediaUrl: string; localUri?: string; mediaType: 'image' | 'video'; caption?: string; music?: any }) => {
     if (!currentUser) return false;
     
+    // If localUri is provided, we handle upload in background
+    if (params.localUri) {
+      console.log(`[StatusContext] Starting background upload for status: ${params.localUri}`);
+      
+      // Immediately set placeholder state for UI
+      setUploadingStory({
+        localUri: params.localUri,
+        mediaType: params.mediaType,
+        progress: 0,
+        caption: params.caption
+      });
+
+      // Background the processing in the next tick to ensure no blocking
+      setTimeout(() => {
+        (async () => {
+          try {
+            // 1. Upload to storage
+            const uploadedUrl = await storageService.uploadImage(
+              params.localUri!, 
+              'status-media', 
+              currentUser.id,
+              (p: number) => setUploadingStory(prev => prev ? { ...prev, progress: p } : null)
+            );
+
+            if (!uploadedUrl) throw new Error('Failed to upload status media');
+
+            // 2. Post to DB
+            const success = await statusService.postStory({
+              userId: currentUser.id,
+              userName: currentUser.name || currentUser.username || 'User',
+              userAvatar: currentUser.avatar || '',
+              mediaUrl: uploadedUrl,
+              mediaType: params.mediaType,
+              caption: params.caption,
+              music: params.music
+            });
+
+            if (success) {
+              console.log('[StatusContext] Background story post successful');
+              await refreshStatuses();
+            } else {
+               throw new Error('Failed to post story record to database');
+            }
+          } catch (err) {
+            console.error('[StatusContext] Background status error:', err);
+          } finally {
+            setUploadingStory(null);
+          }
+        })();
+      }, 0);
+
+      return true; // Success in triggering the background work
+    }
+
+    // Traditional way if mediaUrl is already public
     const success = await statusService.postStory({
       userId: currentUser.id,
       userName: currentUser.name || currentUser.username || 'User',
@@ -98,13 +156,14 @@ export const StatusProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const value = useMemo(() => ({
     stories,
     notes,
+    uploadingStory,
     refreshStatuses,
     addStory,
     updateNote,
     deleteStory,
     toggleStoryLike,
     viewStory
-  }), [stories, notes, refreshStatuses, addStory, updateNote, deleteStory, toggleStoryLike, viewStory]);
+  }), [stories, notes, uploadingStory, refreshStatuses, addStory, updateNote, deleteStory, toggleStoryLike, viewStory]);
 
   return <StatusContext.Provider value={value}>{children}</StatusContext.Provider>;
 };

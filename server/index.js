@@ -256,7 +256,12 @@ app.get('/api/users/search', authenticateUser, async (req, res) => {
             .neq('id', currentUserId)
             .limit(20);
 
-        if (error) throw error;
+        if (error) {
+            console.error('[Search] Profile fetch error:', error);
+            throw error;
+        }
+
+        console.log(`[Search] Found ${users?.length || 0} matching users for query "${query}"`);
 
         // Fetch connection status for these users relative to current user
         const { data: requests } = await supabase.from('connection_requests')
@@ -285,10 +290,16 @@ app.get('/api/users/search', authenticateUser, async (req, res) => {
                 if (reqData) {
                     if (reqData.status === 'pending') {
                         status = (reqData.sender_id === currentUserId) ? 'request_sent' : 'request_received';
-                    } else if (reqData.status === 'rejected' && reqData.sender_id === currentUserId) {
-                        status = 'rejected_by_them';
+                    } else if (reqData.status === 'rejected') {
+                        // If rejected, treat as not connected so they can try again 
+                        // as requested: "request cancle ho jayega... uss user ko wapis bhejna pdega"
+                        status = 'not_connected';
                     }
                 }
+            }
+            
+            if (status !== 'not_connected') {
+                console.log(`[Search] User ${u.username} status for ${currentUserId}: ${status}`);
             }
             
             return { ...u, connectionStatus: status };

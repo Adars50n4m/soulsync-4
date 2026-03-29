@@ -26,7 +26,6 @@ export default function AddStatusScreen() {
     const { addStatus, activeTheme, currentUser } = useApp();
     const [media, setMedia] = useState<{ uri: string; type: 'image' | 'video' } | null>(null);
     const [caption, setCaption] = useState('');
-    const [uploading, setUploading] = useState(false);
     const [keyboardVisible, setKeyboardVisible] = useState(false);
     const [initialLaunch, setInitialLaunch] = useState(true);
     const [isCropModalVisible, setIsCropModalVisible] = useState(false);
@@ -97,48 +96,33 @@ export default function AddStatusScreen() {
         }
     };
 
-    const handlePost = async () => {
+    const handlePost = () => {
         if (!media) {
             Alert.alert('Error', 'Please select an image or video');
             return;
         }
 
-        setUploading(true);
+        // Dismiss keyboard first to avoid layout jumps during navigation
+        Keyboard.dismiss();
 
-        // Add status with 24h expiry
-        const now = new Date();
-        const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours
+        // Trigger context in a timeout to avoid blocking the main thread
+        setTimeout(() => {
+            addStatus({
+                mediaUrl: '',
+                localUri: media.uri,
+                mediaType: media.type,
+                caption: caption.trim(),
+            });
+        }, 0);
 
-        // Upload media first
-        let publicUrl = media.uri;
-        if (media.uri.startsWith('file://')) {
-            try {
-                // Upload
-                const uploadedUrl = await storageService.uploadImage(media.uri, 'status-media', currentUser?.id);
-                if (uploadedUrl) {
-                    publicUrl = uploadedUrl;
-                }
-            } catch (error: any) {
-                setUploading(false);
-                console.warn('Status upload error:', error);
-                Alert.alert('Upload Error', `Could not process media: ${error.message || 'Unknown error'}`);
-                return;
+        // Immediate navigation back in an animation frame for maximum smoothness
+        requestAnimationFrame(() => {
+            if (navigation.canGoBack()) {
+                navigation.goBack();
+            } else {
+                router.replace('/' as any);
             }
-        }
-
-        addStatus({
-            userId: currentUser?.id || 'anonymous',
-            mediaUrl: publicUrl,
-            localUri: media.uri,
-            mediaType: media.type,
-            caption: caption.trim(),
-            timestamp: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            expiresAt: expiresAt.toISOString(),
         });
-
-        setUploading(false);
-        Alert.alert('Success', 'Status posted!');
-        if (navigation.canGoBack()) navigation.goBack();
     };
 
     if (!media) {
@@ -186,7 +170,7 @@ export default function AddStatusScreen() {
                         <Pressable
                             style={styles.iconButton}
                             onPress={() => {
-                                if (media?.type !== 'image' || uploading) return;
+                                if (media?.type !== 'image') return;
                                 setIsCropModalVisible(true);
                             }}
                         >
@@ -229,14 +213,9 @@ export default function AddStatusScreen() {
                     
                     <Pressable 
                         onPress={handlePost}
-                        disabled={uploading}
                         style={[styles.sendButton, { backgroundColor: activeTheme.primary }]}
                     >
-                        {uploading ? (
-                            <ActivityIndicator color="white" size="small" />
-                        ) : (
-                            <MaterialIcons name="send" size={24} color="white" />
-                        )}
+                        <MaterialIcons name="send" size={24} color="white" />
                     </Pressable>
                 </Animated.View>
             </KeyboardAvoidingView>

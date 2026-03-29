@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
-import { View, Text, Image, Pressable, StyleSheet, StatusBar, Dimensions, Alert, FlatList, Platform, TouchableOpacity, RefreshControl, ActionSheetIOS, TextInput, Modal } from 'react-native';
+import { View, Text, Image, Pressable, StyleSheet, StatusBar, Dimensions, Alert, FlatList, Platform, TouchableOpacity, RefreshControl, ActionSheetIOS, TextInput, Modal, ActivityIndicator } from 'react-native';
+import { Svg, Circle } from 'react-native-svg';
 import { FlashList } from '@shopify/flash-list';
 
 import { useRouter, useNavigation } from 'expo-router';
@@ -341,6 +342,40 @@ const AnimatedMoreMenu = ({ router, isSearching }: { router: any, isSearching: b
   );
 };
 
+const StatusProgressRing = ({ progress, size = 80, strokeWidth = 3, color = '#3b82f6' }: { progress: number, size?: number, strokeWidth?: number, color?: string }) => {
+    const radius = (size - strokeWidth) / 2;
+    const circumference = radius * 2 * Math.PI;
+    const strokeDashoffset = circumference - (progress * circumference);
+
+    return (
+        <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
+            <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }] }}>
+                {/* Background circle */}
+                <Circle
+                    cx={size / 2}
+                    cy={size / 2}
+                    r={radius}
+                    stroke="rgba(255,255,255,0.15)"
+                    strokeWidth={strokeWidth}
+                    fill="transparent"
+                />
+                {/* Progress circle */}
+                <Circle
+                    cx={size / 2}
+                    cy={size / 2}
+                    r={radius}
+                    stroke={color}
+                    strokeWidth={strokeWidth}
+                    strokeDasharray={circumference}
+                    strokeDashoffset={strokeDashoffset}
+                    strokeLinecap="round"
+                    fill="transparent"
+                />
+            </Svg>
+        </View>
+    );
+};
+
 export default function HomeScreen() {
   const {
     contacts,
@@ -359,6 +394,7 @@ export default function HomeScreen() {
     clearChatMessages,
     addStatusView,
     sendChatMessage,
+    uploadingStory,
   } = useApp();
   const { getPresence } = usePresence();
   const navigation = useNavigation();
@@ -372,7 +408,6 @@ export default function HomeScreen() {
   const [isMediaPickerVisible, setIsMediaPickerVisible] = useState(false);
   const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
   const [statusMediaPreview, setStatusMediaPreview] = useState<{ uri: string; type: 'image' | 'video' | 'audio' } | null>(null);
-  const [isUploadingStatus, setIsUploadingStatus] = useState(false);
   const [statusInitialLayout, setStatusInitialLayout] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -670,35 +705,21 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
     if (!item) return;
 
     try {
-      setIsUploadingStatus(true);
-      const mediaUrl = await storageService.uploadImage(item.uri, 'status-media', currentUser.id);
-      if (!mediaUrl) throw new Error('Upload failed');
-
-      const expiresAt = new Date();
-      expiresAt.setHours(expiresAt.getHours() + 24);
-      
-      const mediaType = item.type === 'video' ? 'video' : 'image';
-      const timestamp = new Date().toISOString();
-      const expiresAtString = expiresAt.toISOString();
-
+      // Trigger non-blocking context method with localUri
       addStatus({
-        userId: currentUser.id,
-        mediaUrl,
+        mediaUrl: '', 
         localUri: item.uri,
-        mediaType,
-        timestamp,
-        expiresAt: expiresAtString,
+        mediaType: item.type === 'video' ? 'video' : 'image',
         caption: caption || '',
       });
       
+      // Reset UI immediately
       setStatusMediaPreview(null);
-      setIsUploadingStatus(false);
       setIsMediaPickerVisible(false);
     } catch (error) {
-      console.error('Failed to upload status:', error);
-      Alert.alert('Error', 'Failed to upload status. Please try again.');
+      console.error('Failed to initiate status upload:', error);
+      Alert.alert('Error', 'Failed to start upload.');
       setStatusMediaPreview(null);
-      setIsUploadingStatus(false);
       setIsMediaPickerVisible(false);
     }
   };
@@ -781,20 +802,44 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
     if (item.id === 'my-status') {
       const myStoryPreviewUrl = myStories[0]?.url;
       const hasStory = myStories.length > 0;
+      const isUploading = !!uploadingStory;
       
       return (
         <Pressable 
           ref={ref => statusRefs.current['my-status'] = ref}
           style={styles.statusCard} 
           onPress={() => {
+            if (isUploading) {
+              Alert.alert('Uploading', 'Your status is currently being uploaded. Please wait.');
+              return;
+            }
             statusRefs.current['my-status']?.measureInWindow((x: number, y: number, width: number, height: number) => {
               handleMyStatusPress({ x, y, width, height });
             });
           }}
         >
           <View style={styles.statusCardSurface}>
-            <View style={[styles.myStatusBackground, hasStory && { justifyContent: 'center', alignItems: 'center' }]}>
-              {hasStory && myStoryPreviewUrl ? (
+            <View style={[styles.myStatusBackground, (hasStory || isUploading) && { justifyContent: 'center', alignItems: 'center' }]}>
+              {uploadingStory ? (
+                <View style={StyleSheet.absoluteFill}>
+                  <Image source={{ uri: uploadingStory.localUri }} style={[styles.myStatusPreviewBgFull, { opacity: 0.6 }]} />
+                  <View style={styles.uploadingOverlay}>
+                    <StatusProgressRing 
+                        progress={uploadingStory.progress} 
+                        size={78} 
+                        color={activeTheme.primary} 
+                    />
+                    <View style={{ position: 'absolute' }}>
+                        <SoulAvatar 
+                            uri={proxySupabaseUrl(currentUser?.avatar)} 
+                            size={64} 
+                            avatarType={currentUser?.avatarType as any}
+                            isOnline={false}
+                        />
+                    </View>
+                  </View>
+                </View>
+              ) : hasStory && myStoryPreviewUrl ? (
                 <View style={StyleSheet.absoluteFill}>
                   <Image source={{ uri: myStoryPreviewUrl }} style={styles.myStatusPreviewBgFull} />
                   <LinearGradient
@@ -837,7 +882,11 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
             <View style={styles.statusInfoGlassWrapper}>
               <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
               <View style={styles.statusInfoContent}>
-                <Text style={styles.statusName} numberOfLines={1}>My Status</Text>
+                <Text style={styles.statusName} numberOfLines={1}>
+                  {uploadingStory 
+                    ? `Uploading ${Math.round(uploadingStory.progress * 100)}%` 
+                    : 'My Status'}
+                </Text>
               </View>
             </View>
           </View>
@@ -907,7 +956,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
         )}
       </Pressable>
     );
-  }, [myStories, currentUser, contactStoriesMap, handleMyStatusPress, handleStatusPress]);
+  }, [myStories, currentUser, contactStoriesMap, uploadingStory, handleMyStatusPress, handleStatusPress]);
 
   // Pre-compute last messages map to avoid recalculating in renderItem
   const lastMessagesMap = useMemo(() => {
@@ -1094,7 +1143,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => ({
         mediaType={statusMediaPreview?.type || 'image'}
         onClose={closeModalRobustly}
         onSend={handleSendStatus}
-        isUploading={isUploadingStatus}
+        isUploading={!!uploadingStory}
         mode="status"
       />
 
@@ -1335,5 +1384,17 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: 'rgba(255,255,255,0.1)',
     marginHorizontal: 14,
+  },
+  uploadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  uploadingText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 4,
   },
 });
