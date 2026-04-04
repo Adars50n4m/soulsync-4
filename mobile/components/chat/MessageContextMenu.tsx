@@ -179,14 +179,14 @@ const MessageContextMenu = ({
                         {/* 3. Action Menu */}
                         <View style={{
                             width: 200,
-                            maxHeight: MAX_ACTION_HEIGHT,
+                            height: MAX_ACTION_HEIGHT,
                             shadowColor: '#000',
                             shadowOffset: { width: 0, height: 10 },
                             shadowOpacity: 0.5,
                             shadowRadius: 15,
                             elevation: 10,
                         }}>
-                            <GlassView intensity={80} tint="dark" style={{ flex: 1, borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(30,30,30,0.5)' }} >
+                            <GlassView intensity={80} tint="dark" style={{ borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(30,30,30,0.5)', height: '100%' }} >
                                 <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
                                     <Pressable style={ChatStyles.contextActionBtn} onPress={() => { onAction('reply'); handleClose(); }}>
                                         <MaterialIcons name="reply" size={20} color="#fff" />
