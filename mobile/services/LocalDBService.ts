@@ -266,7 +266,7 @@ class OfflineService {
 
   async getPendingMessages(): Promise<QueuedMessage[]> {
     const db = await getDb();
-    const rows = await db.getAllAsync(`SELECT * FROM messages WHERE status = 'pending' OR status = 'failed' ORDER BY timestamp ASC;`);
+    const rows = await db.getAllAsync(`SELECT * FROM messages WHERE status = 'pending' ORDER BY timestamp ASC;`);
     return (rows as any[]).map(rowToQueuedMessage);
   }
 
@@ -572,16 +572,11 @@ class OfflineService {
 
   async clearChat(partnerId: string): Promise<void> {
     const db = await getDb();
-    await db.execAsync('BEGIN TRANSACTION;');
-    try {
+    await db.withTransactionAsync(async () => {
       await db.runAsync(`DELETE FROM messages WHERE chat_id = ?;`, [partnerId]);
       await db.runAsync(`UPDATE contacts SET last_message = '', unread_count = 0, is_archived = 0 WHERE id = ?;`, [partnerId]);
       await db.runAsync(`DELETE FROM chats WHERE id = ?;`, [partnerId]);
-      await db.execAsync('COMMIT;');
-    } catch (e) {
-      await db.execAsync('ROLLBACK;');
-      throw e;
-    }
+    });
   }
 
   async removePendingSyncOpsForEntity(entityType: string, entityId: string): Promise<void> {
@@ -652,8 +647,7 @@ class OfflineService {
       // Fail open and allow the transaction to try/fail normally
     }
     
-    await db.execAsync('BEGIN TRANSACTION;');
-    try {
+    await db.withTransactionAsync(async () => {
       for (const [legacyId, uuid] of Object.entries(mapping)) {
         // 1. Update messages table (no unique constraint on chat_id/receiver)
         await db.runAsync(
@@ -664,13 +658,13 @@ class OfflineService {
           'UPDATE messages SET receiver = ? WHERE receiver = ?',
           [uuid, legacyId]
         );
-        
+
         // 2. Update statuses table
         await db.runAsync(
           'UPDATE statuses SET user_id = ? WHERE user_id = ?',
           [uuid, legacyId]
         );
-        
+
         // 3. Handle contacts table (Primary Key conflict potential)
         const existingUuid = await db.getFirstAsync('SELECT id FROM contacts WHERE id = ?', [uuid]);
         if (existingUuid) {
@@ -682,16 +676,11 @@ class OfflineService {
             [uuid, legacyId]
           );
         }
-        
+
         console.log(`[SQLite] Migrated ${legacyId} -> ${uuid}`);
       }
-      await db.execAsync('COMMIT;');
       console.log('[SQLite] Migration completed successfully');
-    } catch (e) {
-      await db.execAsync('ROLLBACK;');
-      console.error('[SQLite] Migration failed:', e);
-      throw e;
-    }
+    });
   }
 
   /**
@@ -701,21 +690,15 @@ class OfflineService {
   async clearDatabase(): Promise<void> {
     const db = await getDb();
     console.log('[SQLite] Clearing user database...');
-    await db.execAsync('BEGIN TRANSACTION;');
-    try {
+    await db.withTransactionAsync(async () => {
       await db.runAsync('DELETE FROM messages;');
       await db.runAsync('DELETE FROM contacts;');
       await db.runAsync('DELETE FROM chats;');
       await db.runAsync('DELETE FROM statuses;');
       await db.runAsync('DELETE FROM pending_sync_ops;');
       await db.runAsync('DELETE FROM media_downloads;');
-      await db.execAsync('COMMIT;');
-      console.log('[SQLite] Database cleared successfully.');
-    } catch (e) {
-      await db.execAsync('ROLLBACK;');
-      console.error('[SQLite] Failed to clear database:', e);
-      throw e;
-    }
+    });
+    console.log('[SQLite] Database cleared successfully.');
   }
 }
 
