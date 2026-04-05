@@ -19,8 +19,10 @@ import Animated, {
 import { Video, ResizeMode } from 'expo-av';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import GlassView from '../components/ui/GlassView';
+import { SoulAvatar } from '../components/SoulAvatar';
 import { statusService } from '../services/StatusService';
 import { useApp } from '../context/AppContext';
+import { proxySupabaseUrl } from '../config/api';
 import { UserStatusGroup } from '../types';
 
 const StatusProgressBar = ({ idx, currentIndex, progress }: any) => {
@@ -99,8 +101,11 @@ export default function ViewStatusScreen() {
                 return;
             }
             setMediaSource(source);
-            setLoading(false);
-            
+            // For images, loading is done. For videos, defer to onLoad callback.
+            if (currentStatus.mediaType !== 'video') {
+                setLoading(false);
+            }
+
             // Mark as viewed
             if (currentUser) {
                 statusService.onStatusViewed(currentStatus.id, currentUser.id);
@@ -242,7 +247,7 @@ export default function ViewStatusScreen() {
                                     resizeMode={ResizeMode.CONTAIN}
                                     shouldPlay={!loading && !isPaused}
                                     isMuted={false}
-                                    onLoad={() => {}}
+                                    onLoad={() => setLoading(false)}
                                 />
                             ) : (
                                 <Image 
@@ -281,7 +286,11 @@ export default function ViewStatusScreen() {
                             <Ionicons name="chevron-back" size={28} color="#fff" />
                         </Pressable>
                         <View style={styles.userRow}>
-                            <Image source={{ uri: statusGroup.user.avatarUrl }} style={styles.avatar} />
+                            <SoulAvatar
+                                uri={proxySupabaseUrl(statusGroup.user.avatarUrl)}
+                                localUri={statusGroup.user.localAvatarUri}
+                                size={36}
+                            />
                             <View>
                                 <Text style={styles.userName}>{statusGroup.user.displayName || statusGroup.user.username}</Text>
                                 <Text style={styles.timeLabel}>
@@ -335,7 +344,10 @@ export default function ViewStatusScreen() {
                         <ScrollView contentContainerStyle={styles.modalList}>
                             {viewers.map((v, i) => (
                                 <View key={i} style={styles.viewerItem}>
-                                    <Image source={{ uri: v.profiles?.avatar_url }} style={styles.viewerAvatar} />
+                                    <SoulAvatar
+                                        uri={proxySupabaseUrl(v.profiles?.avatar_url)}
+                                        size={40}
+                                    />
                                     <Text style={styles.viewerName}>{v.profiles?.display_name || v.profiles?.username}</Text>
                                 </View>
                             ))}

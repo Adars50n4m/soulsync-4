@@ -94,6 +94,8 @@ export const isOnline = async (): Promise<boolean> => {
  */
 export const isOnlineCached = (): boolean => _isOnline;
 
+export const getConnectionType = (): string => _connectionType;
+
 /**
  * Subscribe to network changes (for UI banners, sync triggers)
  */

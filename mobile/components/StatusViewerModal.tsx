@@ -12,8 +12,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   BackHandler,
-  ActivityIndicator
+  ActivityIndicator,
 } from 'react-native';
+import { Video, ResizeMode } from 'expo-av';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import Animated, { 
@@ -30,6 +31,7 @@ import Animated, {
 
 import { statusService } from '../services/StatusService';
 import { CachedStatus, CachedUser, UserStatusGroup } from '../types';
+import { proxySupabaseUrl } from '../config/api';
 import { SoulAvatar } from './SoulAvatar';
 import GlassView from './ui/GlassView';
 import ProgressiveBlur from './chat/ProgressiveBlur';
@@ -156,10 +158,13 @@ export const StatusViewerModal = ({
                         resizeMode="contain" 
                     />
                 ) : (
-                    <View style={styles.placeholderContainer}>
-                        <ActivityIndicator color="#fff" />
-                        <Text style={{color: '#fff', marginTop: 10}}>Video support refactoring...</Text>
-                    </View>
+                    <Video
+                        source={{ uri: mediaSource.uri }}
+                        style={styles.fullMedia}
+                        resizeMode={ResizeMode.CONTAIN}
+                        shouldPlay={!isPaused}
+                        isMuted={false}
+                    />
                 )
             ) : (
                 <View style={styles.placeholderContainer}>
@@ -185,10 +190,10 @@ export const StatusViewerModal = ({
 
             <View style={styles.header}>
                 <View style={styles.userInfo}>
-                    <SoulAvatar 
-                      uri={group.user.avatarUrl || ''} 
+                    <SoulAvatar
+                      uri={proxySupabaseUrl(group.user.avatarUrl) || ''}
                       localUri={group.user.localAvatarUri}
-                      size={40} 
+                      size={40}
                     />
                     <View style={styles.userNameContainer}>
                         <Text style={styles.userName}>{group.user.displayName || 'Soulmate'}</Text>

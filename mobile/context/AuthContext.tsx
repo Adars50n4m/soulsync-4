@@ -74,6 +74,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         currentUserRef.current = currentUser;
     }, [currentUser]);
 
+    const isSyncingRef = useRef(false);
+    const syncQueueRef = useRef<string | null>(null);
+
     const isDeveloperBypassId = useCallback((userId?: string | null): boolean => {
         if (!userId) return false;
         return userId === LEGACY_TO_UUID['shri']
@@ -82,6 +85,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, []);
 
     const synchronizeSession = useCallback(async (userId: string) => {
+        // Mutex: prevent concurrent sync calls from racing
+        if (isSyncingRef.current) {
+            console.log('[AuthContext] Sync already in progress, queuing:', userId);
+            syncQueueRef.current = userId;
+            return;
+        }
+        isSyncingRef.current = true;
+
         try {
             console.log('[AuthContext] Synchronizing session for:', userId);
             // Add timeout to prevent hanging
@@ -124,6 +135,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 setCurrentUser(userObj);
                 await AsyncStorage.setItem('ss_current_user', userId);
                 await AsyncStorage.setItem('ss_cached_user_profile', JSON.stringify(userObj));
+                await AsyncStorage.setItem('ss_cached_user_profile_at', String(Date.now()));
             } else {
                 // FALLBACK: For Developer Bypass users (shri/hari) who don't exist in Supabase DB
                 console.log('[AuthContext] Profile not found, applying bypass logic for:', userId);
@@ -183,6 +195,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         } catch (e) {
             console.error('[AuthContext] Session synchronization failed:', e);
+        } finally {
+            isSyncingRef.current = false;
+            // Process queued sync if another call came in while we were busy
+            const queued = syncQueueRef.current;
+            if (queued) {
+                syncQueueRef.current = null;
+                synchronizeSession(queued);
+            }
         }
     }, []);
 
@@ -232,14 +252,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     await synchronizeSession(user.id);
                 }
             } else if (event === 'SIGNED_OUT') {
+                // Super users (shri/hari) survive Supabase SIGNED_OUT events
+                // (e.g. token refresh failures, network issues). They are only
+                // cleared via the explicit logout() call.
                 const cachedUserId = await AsyncStorage.getItem('ss_current_user');
                 if (isDeveloperBypassId(cachedUserId)) {
-                    console.log('[AuthContext] Ignoring SIGNED_OUT clear for developer bypass cache');
+                    console.log('[AuthContext] Super user preserved through SIGNED_OUT event');
                     return;
                 }
 
                 setCurrentUser(null);
-                await AsyncStorage.multiRemove(['ss_current_user', 'ss_cached_user_profile']);
+                await AsyncStorage.multiRemove(['ss_current_user', 'ss_cached_user_profile', 'ss_cached_user_profile_at', 'ss_device_session_id']);
             } else if (event === 'PASSWORD_RECOVERY') {
                 router.push('/forgot-password?mode=reset' as any);
             }
@@ -247,7 +270,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const { data: { subscription } } = authService.onAuthStateChange(handleAuthChange);
 
-        return () => subscription.unsubscribe();
+        // Wire up token refresh monitoring so expired sessions are detected
+        const cleanupTokenRefresh = authService.setupTokenRefreshHandling((isRefreshing) => {
+            if (!isRefreshing) {
+                console.log('[AuthContext] Token refresh cycle complete');
+            }
+        });
+
+        return () => {
+            subscription.unsubscribe();
+            cleanupTokenRefresh();
+        };
     }, [isDeveloperBypassId, synchronizeSession]);
 
     useEffect(() => {
@@ -336,7 +369,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         }
 
                         const cachedProfileRaw = await AsyncStorage.getItem('ss_cached_user_profile');
-                        if (cachedProfileRaw) {
+                        const cachedAt = Number(await AsyncStorage.getItem('ss_cached_user_profile_at') || '0');
+                        const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+                        if (cachedProfileRaw && (Date.now() - cachedAt) < CACHE_TTL_MS) {
                             try {
                                 const parsed = JSON.parse(cachedProfileRaw) as User;
                                 if (parsed?.id === cachedUserId) {
@@ -410,7 +446,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         await authService.signOut();
         setCurrentUser(null);
-        await AsyncStorage.multiRemove(['ss_current_user', 'ss_cached_user_profile', 'ss_device_session_id']);
+        await AsyncStorage.multiRemove([
+            'ss_current_user',
+            'ss_cached_user_profile',
+            'ss_cached_user_profile_at',
+            'ss_device_session_id',
+            'auth_token_expired',
+        ]);
         router.replace('/login');
     }, []);
 

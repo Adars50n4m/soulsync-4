@@ -216,23 +216,26 @@ export default function CallScreen() {
     useEffect(() => {
         let timeout: NodeJS.Timeout;
         const subscription = AppState.addEventListener('change', nextAppState => {
-            const isVideoCall = activeCall?.type === 'video' && activeCall?.isAccepted && !isMinimizing.current;
-            
+            const isActiveCall = activeCall?.isAccepted && !isMinimizing.current;
+            const isVideoCall = activeCall?.type === 'video';
+
             if (nextAppState.match(/inactive|background/)) {
-                if (isVideoCall) {
-                    if (Platform.OS === 'ios') {
+                if (isActiveCall) {
+                    if (Platform.OS === 'ios' && isVideoCall) {
+                        // iOS native PiP only supports video via RTCPIPView
                         if (startIOSPIP && rtcPipRef.current) {
                             try { startIOSPIP(rtcPipRef); } catch (e) { console.warn('startIOSPIP error:', e); }
                         }
                         timeout = setTimeout(() => setIosIsInPipMode(true), 150);
                     } else if (Platform.OS === 'android') {
+                        // Android PiP for both audio and video calls
                         if (!canUseExpoPip) {
                             console.log('[CallScreen] Android PiP unavailable in this build.');
                         } else {
                             try {
                                 ExpoPip.enterPipMode({
-                                    width: Math.floor(width),
-                                    height: Math.floor(height),
+                                    width: isVideoCall ? Math.floor(width) : 200,
+                                    height: isVideoCall ? Math.floor(height) : 200,
                                     autoEnterEnabled: true
                                 });
                                 setAndroidIsInPipMode(true);
@@ -263,6 +266,11 @@ export default function CallScreen() {
     // Track if we are minimizing to prevent ending call on unmount
     const isMinimizing = useRef(false);
     const rtcPipRef = useRef(null);
+
+    // Reset isMinimizing when call screen re-mounts (user returned from PiP/overlay)
+    useEffect(() => {
+        isMinimizing.current = false;
+    }, []);
 
     // Keep a ref to the latest endAppCall to avoid stale closures in listeners
     const endAppCallRef = useRef(endAppCall);
@@ -631,13 +639,13 @@ export default function CallScreen() {
 
         // Enable PIP Auto-Enter for ALL Calls (Android)
         // This ensures that moving to home screen during a call triggers native PiP
-            if (activeCall.isAccepted && Platform.OS === 'android' && canUseExpoPip) {
-                try {
-                    ExpoPip.setPictureInPictureParams({
-                        autoEnterEnabled: true,
-                        // Provide aspect ratio hints
-                        width: Math.floor(width),
-                    height: Math.floor(width * 1.5)
+        if (activeCall.isAccepted && Platform.OS === 'android' && canUseExpoPip) {
+            try {
+                const isVideoCall = activeCall.type === 'video';
+                ExpoPip.setPictureInPictureParams({
+                    autoEnterEnabled: true,
+                    width: isVideoCall ? Math.floor(width) : 200,
+                    height: isVideoCall ? Math.floor(width * 1.5) : 200,
                 });
             } catch (e) {
                 console.log('Failed to set PIP params:', e);

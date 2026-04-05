@@ -18,6 +18,9 @@ if (supabaseUrl && supabaseKey && !supabaseKey.includes('ADD_YOUR')) {
     console.warn('⚠️ Supabase credentials missing or placeholders used. Some features (status metadata sync) will be limited.');
 }
 
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } }); // 100MB max
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -68,6 +71,23 @@ app.post('/api/media/delete', async (req, res) => {
     } catch (err) {
         console.error('Error deleting media:', err);
         res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// Direct multipart upload — fallback when R2 Worker is unreachable from mobile
+app.post('/api/media/upload', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No file provided' });
+
+        const folder = req.body.folder || 'uploads';
+        const ext = (req.file.originalname || 'file').split('.').pop() || 'bin';
+        const key = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+        await R2Service.uploadBuffer(key, req.file.buffer, req.file.mimetype);
+        res.json({ success: true, key });
+    } catch (err) {
+        console.error('Error uploading media:', err);
+        res.status(500).json({ error: 'Upload failed' });
     }
 });
 

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback, useLayoutEffect, useMe
 // Force re-bundle: 2026-03-10T21:48:59+05:30
 import * as ImageManipulator from 'expo-image-manipulator';
 import {
-    View, Text, TextInput, Pressable,
+    View, Text, TextInput, Pressable, AppState,
     StyleSheet, StatusBar, Platform,
     Modal, Animated as RNAnimated, Dimensions, Keyboard, KeyboardEvent, Alert, InteractionManager, ScrollView, FlatList,
     Image as RNImage
@@ -13,6 +13,7 @@ import { FlashList } from '@shopify/flash-list';
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import GlassView from '../../components/ui/GlassView';
+import ConnectionBanner from '../../components/ConnectionBanner';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -21,12 +22,14 @@ import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import * as DocumentPicker from 'expo-document-picker';
-import { offlineService } from '../../services/LocalDBService';
+import * as Crypto from 'expo-crypto';
+import { soulFolderService } from '../../services/SoulFolderService';
 import VoiceNotePlayer from '../../components/chat/VoiceNotePlayer';
 import ProgressiveBlur from '../../components/chat/ProgressiveBlur';
 import MessageBubble from '../../components/chat/MessageBubble';
 import MessageContextMenu from '../../components/chat/MessageContextMenu';
 import { ChatStyles, SCREEN_WIDTH, SCREEN_HEIGHT, HEADER_PILL_HEIGHT, HEADER_PILL_RADIUS } from '../../components/chat/ChatStyles';
+import FlyingBubbleLayer, { FlyingBubbleData } from '../../components/chat/FlyingBubbleLayer';
 import { formatDuration } from '../../utils/formatters';
 import { getMessageMediaItems, sanitizeSongTitle } from '../../utils/chatUtils';
 
@@ -45,8 +48,6 @@ import Animated, {
     Easing,
     FadeInDown,
     FadeOutDown,
-    FadeIn,
-    FadeOut,
 } from 'react-native-reanimated';
 import 'react-native-gesture-handler';
 
@@ -59,7 +60,7 @@ import { chatTransitionState } from '../../services/chatTransitionState';
 import { MusicPlayerOverlay } from '../../components/MusicPlayerOverlay';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { MediaPreviewModal } from '../../components/MediaPreviewModal';
-import { storageService } from '../../services/StorageService';
+import { downloadQueue } from '../../services/DownloadQueueService';
 import { EnhancedMediaViewer } from '../../components/EnhancedMediaViewer';
 import {
     PROFILE_AVATAR_SHARED_TRANSITION,
@@ -251,7 +252,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     
     const router = useRouter();
     const isFocused = useIsFocused();
-    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, deleteMessage, musicState, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, initializeChatSession, cleanupChatSession, fetchOtherUserProfile } = useApp() as any;
+    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, deleteMessage, musicState, getPlaybackPosition, seekTo, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, initializeChatSession, cleanupChatSession, fetchOtherUserProfile } = useApp() as any;
     const { getPresence } = usePresence();
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
@@ -506,8 +507,28 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     // Refs
     const flatListRef = useRef<any>(null);
     const profileAvatarRef = useRef<View>(null);
+    const inputContainerRef = useRef<View>(null);
     const hasScrolledInitial = useRef(false);
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Music progress for header glow
+    const [musicProgress, setMusicProgress] = useState(0);
+    useEffect(() => {
+        if (!musicState?.isPlaying || !musicState?.currentSong) { setMusicProgress(0); return; }
+        const interval = setInterval(async () => {
+            try {
+                const pos = await getPlaybackPosition();
+                const dur = (musicState.currentSong?.duration || 240) * 1000;
+                setMusicProgress(Math.min((pos / dur) * 100, 100));
+            } catch {}
+        }, 1000);
+        return () => clearInterval(interval);
+    }, [musicState?.isPlaying, musicState?.currentSong?.id]);
+
+    // Animation Layout State
+    const [inputLayout, setInputLayout] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
+    const [flyingBubbles, setFlyingBubbles] = useState<any[]>([]);
+    const [pendingAnimationIds, setPendingAnimationIds] = useState<Set<string>>(new Set());
     // Derived State
     const contact = useMemo(() => {
         const found = contacts.find(c => c.id === id);
@@ -566,15 +587,25 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         };
     }, [cleanupChatSession, id, currentUser?.id, initializeChatSession, fetchOtherUserProfile, isFocused]);
 
-    // Mark incoming messages as read when chat is open
+    // Mark incoming messages as read when chat is open or app returns to foreground
     useEffect(() => {
-        const unreadIds = chatMessages
-            .filter(m => m.sender === 'them' && m.status !== 'read')
-            .map(m => m.id);
-        if (unreadIds.length > 0) {
-            chatService.markMessagesAsRead(unreadIds);
-        }
-    }, [chatMessages.length]);
+        const markUnread = () => {
+            const unreadIds = chatMessages
+                .filter(m => m.sender === 'them' && m.status !== 'read')
+                .map(m => m.id);
+            if (unreadIds.length > 0) {
+                chatService.markMessagesAsRead(unreadIds);
+            }
+        };
+
+        markUnread();
+
+        // Also mark read when app comes back to foreground
+        const subscription = AppState.addEventListener('change', (state) => {
+            if (state === 'active') markUnread();
+        });
+        return () => subscription.remove();
+    }, [chatMessages]);
 
     // Toggle inline sharing options above the composer
     const toggleOptions = () => {
@@ -593,6 +624,26 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             easing: Easing.out(Easing.cubic),
         });
     };
+
+    const handleInputLayout = () => {
+        inputContainerRef.current?.measure((x, y, width, height, pageX, pageY) => {
+            if (width && height) {
+                setInputLayout({ x: pageX, y: pageY, width, height });
+            }
+        });
+    };
+
+    const handleBubbleComplete = useCallback((id: string, messageId?: string) => {
+        // Remove flying bubble and reveal list item in the same batch to avoid double-flash.
+        setFlyingBubbles(prev => prev.filter(b => b.id !== id));
+        if (messageId) {
+            setPendingAnimationIds(prev => {
+                const next = new Set(prev);
+                next.delete(messageId);
+                return next;
+            });
+        }
+    }, []);
 
     // Close options when typing
     const handleFocus = () => {
@@ -928,10 +979,12 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
 
 
-    // Instant scroll to latest message when new messages arrive (animated)
+    // Smart scroll: only auto-scroll to latest message if user is already at bottom.
+    // Prevents yanking the user away when they're reading older messages.
+    const isNearBottomRef = useRef(true);
     const prevMsgCount = useRef(chatMessages?.length || 0);
     useEffect(() => {
-        if ((chatMessages?.length || 0) > prevMsgCount.current) {
+        if ((chatMessages?.length || 0) > prevMsgCount.current && isNearBottomRef.current) {
             setTimeout(() => {
                 flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
             }, 100);
@@ -1012,9 +1065,33 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             return;
         }
 
-        // FIX: Use messageKey (UUID) for sending messages
-        const replyToId = replyingTo ? replyingTo.id : undefined;
-        sendChatMessage(messageKey, content, undefined, replyToId);
+        // Measure global position for perfect flight path from the actual input bar
+        inputContainerRef.current?.measure((x, y, width, height, pageX, pageY) => {
+            const nextMessageId = Crypto.randomUUID();
+            const replyToId = replyingTo ? replyingTo.id : undefined;
+            const now = new Date().toISOString();
+            
+            // 1. UPDATE ANIMATION STATE
+            setPendingAnimationIds(prev => new Set(prev).add(nextMessageId));
+            
+            const newBubble: FlyingBubbleData = {
+                id: `fly-${Date.now()}`,
+                messageId: nextMessageId,
+                text: content,
+                timestamp: now,
+                status: 'pending',
+                startX: pageX + 16, // Inset to match the bubble on the right
+                startY: pageY,
+                endX: pageX + 16,
+                endY: pageY - 65, // Fly up slightly from the actual keyboard
+                width: 0, 
+                height: 0,
+            };
+            setFlyingBubbles(prev => [...prev, newBubble]);
+
+            // 2. TRIGGER ASYNC SEND
+            sendChatMessage(messageKey, content, undefined, replyToId, undefined, nextMessageId);
+        });
 
         setReplyingTo(null);
     };
@@ -1106,6 +1183,12 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const unreadIncomingIds = useMemo(
         () => reversedMessages.filter((m: any) => m.sender === 'them' && m.status !== 'read').map((m: any) => m.id),
         [reversedMessages]
+    );
+
+    // The oldest unread message (last in the inverted list's unread group)
+    const firstUnreadId = useMemo(
+        () => unreadIncomingIds.length > 0 ? unreadIncomingIds[unreadIncomingIds.length - 1] : null,
+        [unreadIncomingIds]
     );
 
     const jumpToFirstUnread = useCallback(() => {
@@ -1208,7 +1291,9 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 localUri = downloaded.uri;
             }
 
-            await MediaLibrary.saveToLibraryAsync(localUri);
+            // Save to Soul album in gallery (WhatsApp-style) + device library
+            const mediaType = current.type === 'video' ? 'video' : 'image';
+            await soulFolderService.saveToDeviceGallery(localUri, mediaType as any, false);
             Alert.alert('Saved', 'Media saved to your gallery.');
         } catch (error) {
             Alert.alert('Save Failed', 'Could not save this media.');
@@ -1217,30 +1302,22 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
     const handleMediaDownload = useCallback(async (msgId: string, url: string, index: number) => {
         try {
-            console.log(`[ChatScreen] Starting media resolution for msgId: ${msgId}, url: ${url}`);
-            const localUri = await storageService.getMediaUrl(url);
-            
-            if (!localUri) {
-               throw new Error('Failed to resolve media URL');
+            // Route through download queue for concurrency control + wifi-only policy
+            const result = await downloadQueue.enqueue(msgId, url, undefined, false, 1, false);
+
+            if (!result.success || !result.localUri) {
+                console.warn(`[ChatScreen] Media download failed for ${msgId}:`, result.error);
+                return;
             }
-
-            console.log(`[ChatScreen] Resolved to localUri: ${localUri}`);
-
-            // Update Database
-            await offlineService.updateMessageLocalUri(msgId, localUri);
 
             // Update AppContext State to trigger re-render in UI
             if (updateMessage && id) {
                 const currentMsg = (chatMessages || []).find(m => m.id === msgId);
                 if (currentMsg) {
-                    console.log(`[ChatScreen] Updating AppContext state for msgId: ${msgId}`);
-                    updateMessage(id as string, msgId, { 
-                         localFileUri: localUri,
-                         // Force a partial update that React.memo will see
+                    updateMessage(id as string, msgId, {
+                         localFileUri: result.localUri,
                          media: currentMsg.media ? { ...currentMsg.media } : {}
                     } as any);
-                } else {
-                    console.warn(`[ChatScreen] Message ${msgId} not found in current chatMessages state`);
                 }
             }
         } catch (error) {
@@ -1258,27 +1335,69 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         }
     }, [id, updateMessage]);
 
-    const renderMessage = useCallback(({ item }: { item: any }) => (
-        <MessageBubble
-            msg={item}
-            contactName={contact?.name || 'Them'}
-            isSelected={selectedContextMessage?.msg.id === item.id}
-            onLongPress={(mid: string, layout: any) => setSelectedContextMessage({ msg: item, layout })}
-            onReply={(m: any) => setReplyingTo(m)}
-            onReaction={handleReaction}
-            onDoubleTap={handleDoubleTap}
-            onMediaTap={handleMediaTap}
-            quotedMessage={item.replyTo ? chatMessages.find((m: any) => m.id === item.replyTo) : null}
-            selectionMode={selectionMode}
-            isChecked={selectedMessageIds.includes(item.id)}
-            onSelectToggle={handleSelectToggle}
-            isHighlighted={highlightedMessageId === item.id}
-            onQuotePress={handleQuotePress}
-            uploadProgress={uploadProgressTracker?.[item.id]}
-            onMediaDownload={handleMediaDownload}
-            onRetry={handleRetryMessage}
-        />
-    ), [selectedContextMessage, chatMessages, contact?.name, handleMediaTap, selectionMode, selectedMessageIds, handleSelectToggle, uploadProgressTracker, handleMediaDownload, handleRetryMessage]);
+    const renderMessage = useCallback(({ item, index }: { item: any; index: number }) => {
+        // Date separator logic (inverted list: index 0 = newest)
+        const msgDate = new Date(item.timestamp);
+        const nextItem = reversedMessages[index + 1]; // older message
+        const showDateSeparator = !nextItem || new Date(nextItem.timestamp).toDateString() !== msgDate.toDateString();
+
+        const formatDateLabel = (d: Date) => {
+            const today = new Date();
+            const yesterday = new Date(today);
+            yesterday.setDate(yesterday.getDate() - 1);
+            if (d.toDateString() === today.toDateString()) return 'Today';
+            if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+            return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: d.getFullYear() !== today.getFullYear() ? 'numeric' : undefined });
+        };
+
+        return (
+            <>
+                <MessageBubble
+                    msg={item}
+                    contactName={contact?.name || 'Them'}
+                    isSelected={selectedContextMessage?.msg.id === item.id}
+                    onLongPress={(mid: string, layout: any) => setSelectedContextMessage({ msg: item, layout })}
+                    onReply={(m: any) => setReplyingTo(m)}
+                    onReaction={handleReaction}
+                    onDoubleTap={handleDoubleTap}
+                    onMediaTap={handleMediaTap}
+                    quotedMessage={item.replyTo ? chatMessages.find((m: any) => m.id === item.replyTo) : null}
+                    selectionMode={selectionMode}
+                    isChecked={selectedMessageIds.includes(item.id)}
+                    onSelectToggle={handleSelectToggle}
+                    isHighlighted={highlightedMessageId === item.id}
+                    onQuotePress={handleQuotePress}
+                    uploadProgress={uploadProgressTracker?.[item.id]}
+                    onMediaDownload={handleMediaDownload}
+                    onRetry={handleRetryMessage}
+                    isHidden={pendingAnimationIds.has(item.id)}
+                />
+                {item.id === firstUnreadId && unreadIncomingIds.length > 0 && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8 }}>
+                        <View style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(96,165,250,0.4)' }} />
+                        <Text style={{ color: 'rgba(96,165,250,0.8)', fontSize: 11, fontWeight: '600', marginHorizontal: 10 }}>
+                            {unreadIncomingIds.length} NEW {unreadIncomingIds.length === 1 ? 'MESSAGE' : 'MESSAGES'}
+                        </Text>
+                        <View style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(96,165,250,0.4)' }} />
+                    </View>
+                )}
+                {showDateSeparator && (
+                    <View style={{ alignItems: 'center', paddingVertical: 12 }}>
+                        <View style={{
+                            backgroundColor: 'rgba(255,255,255,0.08)',
+                            borderRadius: 16,
+                            paddingHorizontal: 14,
+                            paddingVertical: 5,
+                        }}>
+                            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, fontWeight: '600' }}>
+                                {formatDateLabel(msgDate)}
+                            </Text>
+                        </View>
+                    </View>
+                )}
+            </>
+        );
+    }, [selectedContextMessage, chatMessages, contact?.name, handleMediaTap, selectionMode, selectedMessageIds, handleSelectToggle, uploadProgressTracker, handleMediaDownload, handleRetryMessage, pendingAnimationIds, handleQuotePress, highlightedMessageId, reversedMessages, firstUnreadId, unreadIncomingIds]);
     
     const renderCollectionItem = useCallback(({ item, index }: { item: any, index: number }) => (
         <Pressable
@@ -1392,29 +1511,41 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             for (let i = 0; i < mediaList.length; i++) {
                 const item = mediaList[i];
                 let thumbnail: string | undefined = undefined;
+                let finalUri = item.uri;
+
                 try {
                     if (item.type === 'image') {
-                        const manipResult = await ImageManipulator.manipulateAsync(
+                        // Generate thumbnail (32px blurhash-like preview)
+                        const thumbResult = await ImageManipulator.manipulateAsync(
                             item.uri,
                             [{ resize: { width: 32 } }],
-                            { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+                            { compress: 0.3, format: ImageManipulator.SaveFormat.JPEG, base64: true }
                         );
-                        thumbnail = `data:image/jpeg;base64,${manipResult.base64}`;
+                        thumbnail = `data:image/jpeg;base64,${thumbResult.base64}`;
+
+                        // Compress original image for upload (max 1280px wide, 70% quality)
+                        const compressed = await ImageManipulator.manipulateAsync(
+                            item.uri,
+                            [{ resize: { width: 1280 } }],
+                            { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+                        );
+                        finalUri = compressed.uri;
                     }
                 } catch (thumbErr) {
-                    console.warn('[ChatScreen] Thumbnail generation failed:', thumbErr);
+                    console.warn('[ChatScreen] Image processing failed:', thumbErr);
                 }
 
                 preparedItems.push({
                     type: item.type === 'file' ? 'file' : item.type,
                     url: '',
-                    localFileUri: item.uri,
+                    localFileUri: finalUri,
                     thumbnail,
                     name: item.name,
                 });
             }
 
             const isGrouped = preparedItems.length > 1;
+            console.log(`[ChatScreen] Sending ${preparedItems.length} media items (grouped: ${isGrouped})`);
             if (isGrouped) {
                 const media: Message['media'] = {
                     type: 'image',
@@ -1452,29 +1583,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         <View style={styles.container} pointerEvents={isFocused ? 'auto' : 'none'}>
             <StatusBar barStyle="light-content" />
             
-            {/* Offline Connectivity Banner */}
-            {(!connectivity.isDeviceOnline || !connectivity.isServerReachable) && (
-              <Animated.View 
-                entering={FadeIn} 
-                exiting={FadeOut}
-                style={{
-                  backgroundColor: 'rgba(239, 68, 68, 0.9)', 
-                  paddingVertical: 4,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  position: 'absolute',
-                  top: Platform.OS === 'ios' ? 100 : 80, // Position below header
-                  left: 20,
-                  right: 20,
-                  borderRadius: 12,
-                  zIndex: 9999,
-                  borderWidth: 1,
-                  borderColor: 'rgba(255, 255, 255, 0.2)',
-                }}
-              >
-                <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700', letterSpacing: 1.2 }}>OFFLINE MODE</Text>
-              </Animated.View>
-            )}
+            <ConnectionBanner connectivity={connectivity} mode="absolute" />
 
             {/* Screen Background — always solid black so there's never a transparent flash */}
             <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000', zIndex: -1 }]} />
@@ -1500,6 +1609,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                 contentContainerStyle={styles.messagesContent}
                                 showsVerticalScrollIndicator={false}
                                 removeClippedSubviews={false}
+                                onScroll={(e: any) => { isNearBottomRef.current = e.nativeEvent.contentOffset.y < 150; }}
+                                scrollEventThrottle={200}
                                  ListHeaderComponent={null}
                                 ListEmptyComponent={
                                     <View style={styles.emptyChat}>
@@ -1577,7 +1688,11 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             );
                         })()}
                         {/* Unified Pill Container */}
-                        <View style={styles.unifiedPillContainer}>
+                        <View 
+                            ref={inputContainerRef}
+                            onLayout={handleInputLayout}
+                            style={styles.unifiedPillContainer}
+                        >
                             <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill}  />
                             
                             <Animated.View style={[styles.optionsMenu, animatedOptionsStyle]}>
@@ -1731,6 +1846,29 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                     style={[styles.headerGlass, headerMorphAnimatedStyle, { position: 'absolute', top: HEADER_PILL_TOP, left: 16, right: 16, height: HEADER_PILL_HEIGHT, borderRadius: HEADER_PILL_RADIUS, zIndex: 1 }]}
                 >
                     <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill}  />
+                    {/* Music progress glow — tap to seek */}
+                    {musicState?.currentSong && musicProgress > 0 && (
+                        <Pressable
+                            onPress={(e) => {
+                                const tapX = e.nativeEvent.locationX;
+                                const width = e.nativeEvent.target ? SCREEN_WIDTH - 32 : SCREEN_WIDTH - 32;
+                                const percent = Math.max(0, Math.min(tapX / width, 1));
+                                const dur = (musicState.currentSong?.duration || 240) * 1000;
+                                seekTo(percent * dur);
+                            }}
+                            style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 10, justifyContent: 'flex-end', borderBottomLeftRadius: HEADER_PILL_RADIUS, borderBottomRightRadius: HEADER_PILL_RADIUS, overflow: 'hidden' }}
+                        >
+                            <View style={{
+                                width: `${musicProgress}%`,
+                                height: 3,
+                                backgroundColor: '#ff0080',
+                                shadowColor: '#ff0080',
+                                shadowOpacity: 1,
+                                shadowRadius: 6,
+                                shadowOffset: { width: 0, height: 0 },
+                            }} />
+                        </Pressable>
+                    )}
                 </Animated.View>
 
                     {/* Original Header Content - Rendered exactly over the morph bounds as an absolute overlay */}
@@ -1825,7 +1963,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             <Animated.View style={headerAccessoryAnimatedStyle}>
                                 <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
                                     {({ pressed }) => (
-                                        <MaterialIcons name="audiotrack" size={20} color={pressed ? activeTheme.primary : '#ffffff'} />
+                                        <MaterialIcons name={musicState?.isPlaying ? 'equalizer' : 'audiotrack'} size={20} color={musicState?.currentSong ? '#ff0080' : pressed ? activeTheme.primary : '#ffffff'} />
                                     )}
                                 </Pressable>
                             </Animated.View>
@@ -2054,6 +2192,11 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 isOpen={showMusicPlayer}
                 onClose={() => setShowMusicPlayer(false)}
                 contactName={contact?.name || 'Someone'}
+            />
+            
+            <FlyingBubbleLayer 
+                bubbles={flyingBubbles} 
+                onComplete={handleBubbleComplete} 
             />
         </View>
     );

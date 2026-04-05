@@ -1,5 +1,5 @@
-import React, { useRef, useCallback, useMemo } from 'react';
-import { View, Text, Pressable, Alert, Platform, Image as RNImage } from 'react-native';
+import React, { useRef, useCallback, useMemo, useEffect } from 'react';
+import { View, Text, Pressable, Alert, Platform, Image as RNImage, Linking } from 'react-native';
 import { Image } from 'expo-image';
 import * as FileSystem from 'expo-file-system';
 import GlassView from '../ui/GlassView';
@@ -42,7 +42,33 @@ interface MessageBubbleProps {
     uploadProgress?: number;
     onMediaDownload?: (msgId: string, url: string, index: number) => void;
     onRetry?: (msgId: string) => void;
+    isHidden?: boolean;
 }
+
+const URL_REGEX = /(https?:\/\/[^\s]+)/g;
+
+const LinkedText = ({ text, style }: { text: string; style: any }) => {
+    const parts = text.split(URL_REGEX);
+    if (parts.length === 1) return <Text style={style}>{text}</Text>;
+
+    return (
+        <Text style={style}>
+            {parts.map((part, i) =>
+                URL_REGEX.test(part) ? (
+                    <Text
+                        key={i}
+                        style={{ textDecorationLine: 'underline', color: '#60a5fa' }}
+                        onPress={() => Linking.openURL(part).catch(() => {})}
+                    >
+                        {part}
+                    </Text>
+                ) : (
+                    <Text key={i}>{part}</Text>
+                )
+            )}
+        </Text>
+    );
+};
 
 const formatTime = (ts: string) => {
     if (!ts) return '';
@@ -92,7 +118,23 @@ const MessageBubble = React.memo(({
   uploadProgress,
     onMediaDownload,
     onRetry,
+    isHidden,
 }: MessageBubbleProps) => {
+    // Fade-in when transitioning from hidden → visible (flying bubble handoff)
+    const revealOpacity = useSharedValue(isHidden ? 0 : 1);
+    const wasHidden = useRef(isHidden);
+    useEffect(() => {
+        if (wasHidden.current && !isHidden) {
+            revealOpacity.value = 0;
+            revealOpacity.value = withTiming(1, { duration: 250 });
+        }
+        wasHidden.current = isHidden;
+    }, [isHidden]);
+
+    const revealStyle = useAnimatedStyle(() => ({
+        opacity: revealOpacity.value,
+    }));
+
     const initialMediaItems = getMessageMediaItems(msg);
     const initialMediaSource =
         initialMediaItems[0]?.localFileUri ||
@@ -173,7 +215,12 @@ const MessageBubble = React.memo(({
                 }
                 setAspectRatio(prev => (isSameRatio(prev, ratio) ? prev : ratio));
             },
-            () => {}
+            () => {
+                if (!cancelled) {
+                    // Fallback to square aspect ratio on measurement failure
+                    setAspectRatio(prev => prev ?? 1);
+                }
+            }
         );
 
         return () => {
@@ -193,16 +240,14 @@ const MessageBubble = React.memo(({
                     return;
                 }
 
-                // If it's a key (doesn't look like a URL or file path) and we don't have it locally, auto-download
-                const isKey = media.url && 
-                             !media.url.startsWith('http') && 
-                             !media.url.startsWith('file:') && 
-                             !media.url.startsWith('data:');
-                
-                if (isKey && !usableLocalUri && !downloadingIndices.includes(index)) {
-                    console.log(`[MessageBubble] Auto-downloading media key: ${media.url}`);
-                    setDownloadingIndices(prev => [...prev, index]);
-                    onMediaDownload(msg.id, media.url, index);
+                // Auto-download any media we don't have locally (keys or remote URLs)
+                if (media.url && !usableLocalUri && !downloadingIndices.includes(index)) {
+                    const isLocalPath = media.url.startsWith('file:') || media.url.startsWith('data:');
+                    if (!isLocalPath) {
+                        console.log(`[MessageBubble] Auto-downloading media: ${media.url.substring(0, 60)}...`);
+                        setDownloadingIndices(prev => [...prev, index]);
+                        onMediaDownload(msg.id, media.url, index);
+                    }
                 }
             });
         }
@@ -367,10 +412,14 @@ const MessageBubble = React.memo(({
                     {!shouldHideInitialFlash && (
                         <Image
                             source={previewSource ? { uri: previewSource } : undefined}
-                            style={{ 
+                            placeholder={media.thumbnail && !media.thumbnail.startsWith('http') && !media.thumbnail.startsWith('file:')
+                                ? { blurhash: media.thumbnail }
+                                : undefined
+                            }
+                            style={{
                                 width: mediaWidth,
                                 height: mediaHeight,
-                            }} 
+                            }}
                             contentFit="cover"
                             transition={showDownloadOverlay ? 0 : 120}
                             cachePolicy="memory-disk"
@@ -423,6 +472,77 @@ const MessageBubble = React.memo(({
 
         const visibleItems = mediaItems.slice(0, 4);
         const extraCount = mediaItems.length - 4;
+
+        // Split items into rows of 2 (WhatsApp-style grid)
+        const rows: typeof visibleItems[] = [];
+        for (let i = 0; i < visibleItems.length; i += 2) {
+            rows.push(visibleItems.slice(i, i + 2));
+        }
+
+        const renderTile = (media: typeof visibleItems[0], index: number) => {
+            const usableLocalUri = invalidLocalIndexSet.has(index) ? undefined : media.localFileUri;
+            const fallbackRemoteUri = media.url && (media.url.startsWith('http') || media.url.startsWith('file:') || media.url.startsWith('data:'))
+                ? media.url
+                : undefined;
+            const previewSource = usableLocalUri || fallbackRemoteUri || media.thumbnail;
+            const showDownloadOverlay = !isMe && !usableLocalUri;
+            const showMore = index === 3 && extraCount > 0;
+            return (
+                <Pressable
+                    key={`grid-${index}`}
+                    style={ChatStyles.mediaGridTile}
+                    onPress={() => handleMediaPress(index, showMore)}
+                >
+                    <Image
+                        source={previewSource ? { uri: previewSource } : undefined}
+                        placeholder={media.thumbnail && !media.thumbnail.startsWith('http') && !media.thumbnail.startsWith('file:')
+                            ? { blurhash: media.thumbnail }
+                            : undefined
+                        }
+                        style={ChatStyles.mediaGridImage}
+                        contentFit="cover"
+                        transition={showDownloadOverlay ? 0 : 120}
+                        cachePolicy="memory-disk"
+                        blurRadius={showDownloadOverlay ? 18 : 0}
+                        onError={() => {
+                            if (usableLocalUri && !invalidLocalIndexSet.has(index)) {
+                                setInvalidLocalIndices(prev => (prev.includes(index) ? prev : [...prev, index]));
+                            }
+                        }}
+                    />
+                    {media.type === 'video' && !showMore && uploadProgress === undefined && (
+                        <View style={ChatStyles.mediaTilePlayOverlay}>
+                            <MaterialIcons name="play-circle-filled" size={34} color="rgba(255,255,255,0.92)" />
+                        </View>
+                    )}
+                    {uploadProgress !== undefined && uploadProgress < 1 && (
+                        <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 34 }]}>
+                            <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold' }}>
+                                {Math.round(uploadProgress * 100)}%
+                            </Text>
+                        </View>
+                    )}
+                    {showDownloadOverlay && (
+                        <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'transparent', borderRadius: 34 }]}>
+                            <View style={ChatStyles.mediaDownloadScrim} />
+                            <GlassView intensity={55} tint="dark" style={ChatStyles.mediaDownloadBadgeSmall}>
+                                <MaterialIcons
+                                    name={downloadingIndices.includes(index) ? 'hourglass-empty' : 'file-download'}
+                                    size={18}
+                                    color="#fff"
+                                />
+                            </GlassView>
+                        </View>
+                    )}
+                    {showMore && (
+                        <View style={ChatStyles.mediaMoreOverlay}>
+                            <Text style={ChatStyles.mediaMoreText}>{`+${extraCount}`}</Text>
+                        </View>
+                    )}
+                </Pressable>
+            );
+        };
+
         return (
             <View style={[
                 ChatStyles.mediaSurface,
@@ -430,67 +550,17 @@ const MessageBubble = React.memo(({
                 isMe ? ChatStyles.mediaSurfaceMe : ChatStyles.mediaSurfaceThem,
                 !hasText && !hasCaption && ChatStyles.mediaGridNoGap
             ]}>
-                <View style={ChatStyles.mediaGrid}>
-                    {visibleItems.map((media, index) => {
-                        const usableLocalUri = invalidLocalIndexSet.has(index) ? undefined : media.localFileUri;
-                        const fallbackRemoteUri = media.url && (media.url.startsWith('http') || media.url.startsWith('file:') || media.url.startsWith('data:'))
-                            ? media.url
-                            : undefined;
-                        const previewSource = usableLocalUri || fallbackRemoteUri || media.thumbnail;
-                        const showDownloadOverlay = !isMe && !usableLocalUri;
-                        const showMore = index === 3 && extraCount > 0;
-                        return (
-                            <Pressable
-                                key={`${media.url}-${index}`}
-                                style={ChatStyles.mediaGridTile}
-                                onPress={() => handleMediaPress(index, showMore)}
-                            >
-                                 <Image
-                                     source={previewSource ? { uri: previewSource } : undefined} 
-                                     style={ChatStyles.mediaGridImage} 
-                                     contentFit="cover" 
-                                     transition={showDownloadOverlay ? 0 : 120}
-                                     cachePolicy="memory-disk"
-                                     blurRadius={showDownloadOverlay ? 18 : 0}
-                                     onError={() => {
-                                        if (usableLocalUri && !invalidLocalIndexSet.has(index)) {
-                                            setInvalidLocalIndices(prev => (prev.includes(index) ? prev : [...prev, index]));
-                                        }
-                                     }}
-                                />
-                                {media.type === 'video' && !showMore && uploadProgress === undefined && (
-                                    <View style={ChatStyles.mediaTilePlayOverlay}>
-                                        <MaterialIcons name="play-circle-filled" size={34} color="rgba(255,255,255,0.92)" />
-                                    </View>
-                                )}
-                                {uploadProgress !== undefined && uploadProgress < 1 && (
-                                    <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 34 }]}>
-                                        <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold' }}>
-                                            {Math.round(uploadProgress * 100)}%
-                                        </Text>
-                                    </View>
-                                )}
-                                {showDownloadOverlay && (
-                                    <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'transparent', borderRadius: 34 }]}>
-                                        <View style={ChatStyles.mediaDownloadScrim} />
-                                        <GlassView intensity={55} tint="dark" style={ChatStyles.mediaDownloadBadgeSmall}>
-                                            <MaterialIcons
-                                                name={downloadingIndices.includes(index) ? 'hourglass-empty' : 'file-download'}
-                                                size={18}
-                                                color="#fff"
-                                            />
-                                        </GlassView>
-                                    </View>
-                                )}
-                                {showMore && (
-                                    <View style={ChatStyles.mediaMoreOverlay}>
-                                        <Text style={ChatStyles.mediaMoreText}>{`+${extraCount}`}</Text>
-                                    </View>
-                                )}
-                            </Pressable>
-                        );
-                    })}
-                </View>
+                {rows.map((row, rowIndex) => (
+                    <View
+                        key={`row-${rowIndex}`}
+                        style={[
+                            ChatStyles.mediaGridRow,
+                            rowIndex === rows.length - 1 && ChatStyles.mediaGridRowLast
+                        ]}
+                    >
+                        {row.map((media, colIndex) => renderTile(media, rowIndex * 2 + colIndex))}
+                    </View>
+                ))}
             </View>
         );
     };
@@ -525,9 +595,7 @@ const MessageBubble = React.memo(({
                             </Text>
                         )}
                         {hasText && (
-                            <Text style={[ChatStyles.messageText, isMe && ChatStyles.messageTextMe]}>
-                                {msg.text}
-                            </Text>
+                            <LinkedText text={msg.text} style={[ChatStyles.messageText, isMe && ChatStyles.messageTextMe]} />
                         )}
                     </View>
                 </View>
@@ -565,7 +633,12 @@ const MessageBubble = React.memo(({
             </View>
 
             <GestureDetector gesture={composedGestures}>
-                <Animated.View style={[bubbleStyle, { alignItems: isMe ? 'flex-end' : 'flex-start' }, selectionMode && !isClone && !isMe && { paddingLeft: 34 }]}>
+                <Animated.View style={[
+                    bubbleStyle,
+                    { alignItems: isMe ? 'flex-end' : 'flex-start' },
+                    selectionMode && !isClone && !isMe && { paddingLeft: 34 },
+                    revealStyle,
+                ]}>
                     <View style={ChatStyles.bubbleReactionAnchor}>
                         <View ref={bubbleRef} style={[
                             ChatStyles.bubbleContainer,
@@ -627,7 +700,7 @@ const MessageBubble = React.memo(({
                                     </Text>
                                 )}
                                 {hasText && (
-                                    <Text style={[ChatStyles.messageText, isMe && ChatStyles.messageTextMe]}>{msg.text}</Text>
+                                    <LinkedText text={msg.text} style={[ChatStyles.messageText, isMe && ChatStyles.messageTextMe]} />
                                 )}
                             </View>
                         </View>
@@ -654,26 +727,41 @@ const MessageBubble = React.memo(({
                             <Text style={[ChatStyles.timestamp, { marginRight: 4, fontSize: 10 }]}>edited</Text>
                         )}
                         <Text style={ChatStyles.timestamp}>{formatTime(msg.timestamp)}</Text>
-                        {isMe && (
-                            msg.status === 'failed' ? (
-                                <Pressable onPress={() => onRetry?.(msg.id)} hitSlop={10}>
-                                    <MaterialIcons name="error-outline" size={12} color="#ef4444" />
-                                </Pressable>
-                            ) : (
-                                <MaterialIcons
-                                    name={
-                                        msg.status === 'pending' ? 'schedule' :
-                                        msg.status === 'delivered' || msg.status === 'read' ? 'done-all' :
-                                        'done'
-                                    }
-                                    size={10}
-                                    color={msg.status === 'read' ? '#34B7F1' : 'rgba(255,255,255,0.3)'}
-                                />
-                            )
+                        {isMe && msg.status !== 'failed' && (
+                            <MaterialIcons
+                                name={
+                                    msg.status === 'pending' ? 'schedule' :
+                                    msg.status === 'delivered' || msg.status === 'read' ? 'done-all' :
+                                    'done'
+                                }
+                                size={10}
+                                color={msg.status === 'read' ? '#34B7F1' : 'rgba(255,255,255,0.3)'}
+                            />
                         )}
                     </View>
                 </Animated.View>
             </GestureDetector>
+
+            {/* WhatsApp-style retry banner for failed messages */}
+            {isMe && msg.status === 'failed' && (
+                <Pressable
+                    onPress={() => onRetry?.(msg.id)}
+                    style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        alignSelf: 'flex-end',
+                        marginTop: 2,
+                        paddingVertical: 4,
+                        paddingHorizontal: 8,
+                    }}
+                    hitSlop={8}
+                >
+                    <MaterialIcons name="error-outline" size={13} color="#ef4444" style={{ marginRight: 4 }} />
+                    <Text style={{ color: '#ef4444', fontSize: 11, fontWeight: '500' }}>
+                        Not sent. Tap to retry
+                    </Text>
+                </Pressable>
+            )}
         </View>
     );
 }, (prevProps, nextProps) => {
@@ -693,6 +781,7 @@ const MessageBubble = React.memo(({
   if (prevProps.quotedMessage?.id !== nextProps.quotedMessage?.id) return false;
   if (prevProps.selectionMode !== nextProps.selectionMode) return false;
   if (prevProps.isChecked !== nextProps.isChecked) return false;
+  if (prevProps.isHidden !== nextProps.isHidden) return false;
   return true;
 });
 

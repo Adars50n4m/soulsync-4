@@ -136,7 +136,7 @@ class WebRTCService {
 
     // Recovery tracking
     private reconnectAttempts: number = 0;
-    private maxReconnectAttempts: number = 5;
+    private maxReconnectAttempts: number = 10;
     private reconnectTimeout: NodeJS.Timeout | null = null;
     private connectionWatchdog: NodeJS.Timeout | null = null;
     private trackMonitorTimer: NodeJS.Timeout | null = null;
@@ -923,10 +923,10 @@ class WebRTCService {
                     this.lastDisconnectTime = Date.now();
                     console.warn('[WebRTCService] ⚠️ Connection transiently disconnected. Waiting for automatic recovery...');
 
-                    // Give WebRTC 10 seconds to auto-recover before manual intervention
+                    // Give WebRTC 15 seconds to auto-recover before manual intervention
                     if (!this.reconnectTimeout) {
                         this.reconnectTimeout = setTimeout(() => {
-                            // After 10 seconds, if still disconnected, attempt manual recovery
+                            // After 15 seconds, if still disconnected, attempt manual recovery
                             if (pc.connectionState === 'disconnected' && this.reconnectAttempts < this.maxReconnectAttempts) {
                                 this.reconnectAttempts++;
                                 console.log(`[WebRTCService] Attempting manual recovery (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
@@ -935,7 +935,7 @@ class WebRTCService {
                                 console.error('[WebRTCService] Max recovery attempts exceeded. Ending call.');
                                 this.endCall('recovery-exhausted');
                             }
-                        }, 10000);
+                        }, 15000);
                     }
                     break;
 
@@ -983,8 +983,9 @@ class WebRTCService {
                     break;
 
                 case 'closed':
-                    console.log('[WebRTCService] ICE connection closed');
-                    this.endCall('ice-closed');
+                    // Don't end call here — connectionstatechange handler already handles it.
+                    // Ending here causes double-end race conditions.
+                    console.log('[WebRTCService] ICE connection closed (handled by connectionstatechange)');
                     break;
             }
         });
@@ -1089,11 +1090,11 @@ class WebRTCService {
         if (state === 'connecting') {
             this.connectionWatchdog = setTimeout(() => {
                 if (this.callState === 'connecting') {
-                    console.warn('[WebRTCService] 🚨 Connection watchdog timeout! Call failed to connect in 35s.');
+                    console.warn('[WebRTCService] 🚨 Connection watchdog timeout! Call failed to connect in 60s.');
                     this.endCall('connection-timeout');
                     this.broadcast('onError', 'Call connection failed. This is usually due to restrictive network firewalls.');
                 }
-            }, 35000); // Increased to 35s to allow for cellular TURN relay negotiation
+            }, 60000); // 60s to allow for slow cellular/TURN relay negotiation
         }
     }
 

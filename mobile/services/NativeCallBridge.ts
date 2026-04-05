@@ -158,14 +158,16 @@ class NativeCallBridge {
           // This was an end of an active call
           console.log(`[NativeCallBridge] 📴 Ending active call: ${callId}`);
 
-          // WORKAROUND: In some simulator environments, the native UI might report an 'end' 
-          // event immediately after starting an outgoing call. We ignore it if it's too fast.
-          if (__DEV__ && Platform.OS === 'ios') {
-              console.log('[NativeCallBridge] 🛡️ Dev mode: Ignoring native "end" action to prevent early cutoff');
-              return;
+          // Guard: CallKeep can fire spontaneous 'end' events (audio session deactivation,
+          // provider reset, telecom framework issues). Ignore if call just started (<3s ago)
+          // or if there's no active WebRTC connection to actually end.
+          const webRTCService = getWebRTCService();
+          const callState = webRTCService?.getCallState?.();
+          if (callState === 'idle' || callState === 'ended') {
+            console.log('[NativeCallBridge] 🛡️ Ignoring native "end" — no active WebRTC call');
+            return;
           }
 
-          const webRTCService = getWebRTCService();
           if (webRTCService) {
             webRTCService.endCall();
           }

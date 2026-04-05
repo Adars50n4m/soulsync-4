@@ -159,9 +159,9 @@ export async function downloadMedia(
     
     // Update local URI in database
     await offlineService.updateMessageLocalUri(messageId, downloadResult.uri, fileSize);
-    
+
     console.log('[MediaDownload] Download complete:', downloadResult.uri, 'Size:', fileSize);
-    
+
     return {
       success: true,
       localUri: downloadResult.uri,
@@ -233,13 +233,13 @@ export async function saveLocalMediaFromUri(
       from: sourceUri,
       to: destUri
     });
-    
+
     // Get file size
     const fileInfo = await FileSystem.getInfoAsync(destUri) as FileSystem.FileInfo;
     const fileSize = fileInfo.exists ? fileInfo.size : 0;
-    
+
     console.log('[MediaDownload] Saved sent media:', destUri, 'Size:', fileSize);
-    
+
     return {
       success: true,
       localUri: destUri,
@@ -412,6 +412,7 @@ export async function syncAvatar(
     if (result.status === 200) {
       // Update local database with the new path and timestamp
       await offlineService.updateContactAvatar(contactId, result.uri, serverUpdatedAt || new Date().toISOString());
+
       console.log(`[MediaDownload] DP synced: ${result.uri}`);
       return result.uri;
     }
@@ -458,6 +459,7 @@ export async function downloadStatusMedia(status: {
         'UPDATE cached_statuses SET media_local_path = ? WHERE id = ?',
         [result.uri, status.id]
       );
+
       console.log(`[MediaDownload] Status ${status.id} saved to ${result.uri}`);
       return result.uri;
     }

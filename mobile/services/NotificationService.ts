@@ -139,8 +139,12 @@ class NotificationService {
           senderName: params.senderName,
           messageId: params.messageId,
         } satisfies NotificationPayload,
+        // Group notifications by chat (iOS: threadIdentifier, Android: channelId)
+        ...(Platform.OS === 'ios' && { threadIdentifier: params.chatId }),
+        ...(Platform.OS === 'android' && { channelId: 'messages' }),
       },
       trigger: null,
+      identifier: `msg-${params.messageId || Date.now()}`,
     });
   }
 
@@ -225,6 +229,13 @@ class NotificationService {
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
         sound: 'default',
+      });
+      await Notifications.setNotificationChannelAsync('messages', {
+        name: 'Messages',
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250, 250, 250],
+        sound: 'default',
+        enableLights: true,
       });
     }
 

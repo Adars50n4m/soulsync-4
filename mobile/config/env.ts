@@ -35,7 +35,11 @@ const extractExpoDevHost = (): string | null => {
 
   for (const candidate of candidates) {
     if (typeof candidate === 'string' && candidate.length > 0) {
-      return candidate.split(':')[0];
+      const host = candidate.split(':')[0];
+      // Skip common internal Android NAT IPs or loopbacks that won't work on physical devices
+      if (host && host !== 'localhost' && host !== '127.0.0.1' && !host.startsWith('192.0.0.')) {
+        return host;
+      }
     }
   }
 
@@ -68,8 +72,14 @@ if (IS_DEV) {
   } else {
     // Fallback for when the debugger host is not available or is just "localhost".
     // Try EXPO_PUBLIC_HOST_IP first if explicitly set by the user in .env
-    const fallbackIp = getEnvVar('EXPO_PUBLIC_HOST_IP', '');
+    let fallbackIp = getEnvVar('EXPO_PUBLIC_HOST_IP', '');
     
+    // Ignore common non-routable carrier NAT IPs even if manually set
+    if (fallbackIp.startsWith('192.0.0.')) {
+        console.warn(`[Env] ⚠️ Ignoring invalid EXPO_PUBLIC_HOST_IP: ${fallbackIp} (non-routable Android NAT IP).`);
+        fallbackIp = '';
+    }
+
     if (fallbackIp && fallbackIp.length > 0) {
         resolvedServerUrl = `http://${fallbackIp}:3000`;
         console.log(`[Env] Using EXPO_PUBLIC_HOST_IP manual fallback: ${resolvedServerUrl}`);

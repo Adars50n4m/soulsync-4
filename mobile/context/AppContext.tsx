@@ -1,6 +1,7 @@
 import * as React from 'react';
 // Force re-bundle: 2026-04-03T16:00:00Z (DB Migration v27)
-import { useState, useEffect, createContext, useContext, useCallback } from 'react';
+import { useState, useEffect, useRef, createContext, useContext, useCallback } from 'react';
+import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth, AuthProvider } from './AuthContext';
 import { useChat, ChatProvider } from './ChatContext';
@@ -104,6 +105,12 @@ interface AppContextType {
     // Security
     isLocked: boolean;
     unlockApp: () => void;
+    biometricEnabled: boolean;
+    setBiometricEnabled: (val: boolean) => void;
+    pinEnabled: boolean;
+    setPinEnabled: (val: boolean) => void;
+    pin: string | null;
+    setPin: (pin: string | null) => void;
     refreshLocalCache: () => Promise<void>;
 }
 
@@ -123,6 +130,58 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         isRealtimeConnected: true
     });
     const [isLocked, setIsLocked] = useState(false);
+    const [biometricEnabled, setBiometricEnabledState] = useState(false);
+    const [pinEnabled, setPinEnabledState] = useState(false);
+    const [pin, setPinState] = useState<string | null>(null);
+
+    // Load security settings on mount
+    useEffect(() => {
+        Promise.all([
+            AsyncStorage.getItem('ss_biometric_enabled'),
+            AsyncStorage.getItem('ss_pin_enabled'),
+            AsyncStorage.getItem('ss_pin'),
+        ]).then(([bio, pinEn, pinVal]) => {
+            if (bio === 'true') setBiometricEnabledState(true);
+            if (pinEn === 'true') setPinEnabledState(true);
+            if (pinVal) setPinState(pinVal);
+            // Lock app on startup if any security is enabled
+            if (bio === 'true' || pinEn === 'true') setIsLocked(true);
+        });
+    }, []);
+
+    const setBiometricEnabled = useCallback((val: boolean) => {
+        setBiometricEnabledState(val);
+        AsyncStorage.setItem('ss_biometric_enabled', String(val));
+    }, []);
+
+    const setPinEnabled = useCallback((val: boolean) => {
+        setPinEnabledState(val);
+        AsyncStorage.setItem('ss_pin_enabled', String(val));
+    }, []);
+
+    const setPin = useCallback((newPin: string | null) => {
+        setPinState(newPin);
+        if (newPin) {
+            AsyncStorage.setItem('ss_pin', newPin);
+        } else {
+            AsyncStorage.removeItem('ss_pin');
+        }
+    }, []);
+
+    // Signal-style: lock app when going to background
+    const appStateRef = useRef(AppState.currentState);
+    useEffect(() => {
+        const sub = AppState.addEventListener('change', (nextState) => {
+            if (appStateRef.current === 'active' && nextState.match(/inactive|background/)) {
+                // Going to background — lock if security is enabled
+                if (biometricEnabled || pinEnabled) {
+                    setIsLocked(true);
+                }
+            }
+            appStateRef.current = nextState;
+        });
+        return () => sub.remove();
+    }, [biometricEnabled, pinEnabled]);
 
     useEffect(() => {
         AsyncStorage.getItem('ss_theme').then(t => {
@@ -202,6 +261,18 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         toggleFavoriteSong: music.toggleFavoriteSong,
         seekTo: music.seekTo,
         getPlaybackPosition: music.getPlaybackPosition,
+        repeatMode: music.repeatMode,
+        toggleRepeat: music.toggleRepeat,
+        shuffle: music.shuffle,
+        toggleShuffle: music.toggleShuffle,
+        queue: music.queue,
+        addToQueue: music.addToQueue,
+        removeFromQueue: music.removeFromQueue,
+        clearQueue: music.clearQueue,
+        playNext: music.playNext,
+        playPrevious: music.playPrevious,
+        sleepTimerMinutes: music.sleepTimerMinutes,
+        setSleepTimer: music.setSleepTimer,
 
         // Settings
         theme,
@@ -210,6 +281,12 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         connectivity,
         isLocked,
         unlockApp: () => setIsLocked(false),
+        biometricEnabled,
+        setBiometricEnabled,
+        pinEnabled,
+        setPinEnabled,
+        pin,
+        setPin,
         refreshLocalCache: chat.refreshLocalCache
     };
 
@@ -270,6 +347,12 @@ export const useAppContext = (): AppContextType => {
             connectivity: { isDeviceOnline: true, isServerReachable: true, isRealtimeConnected: true },
             isLocked: false,
             unlockApp: () => {},
+            biometricEnabled: false,
+            setBiometricEnabled: () => {},
+            pinEnabled: false,
+            setPinEnabled: () => {},
+            pin: null,
+            setPin: () => {},
             refreshLocalCache: async () => {},
             // Default no-ops for functions
             sendChatMessage: async () => {},

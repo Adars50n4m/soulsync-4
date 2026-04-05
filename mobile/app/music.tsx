@@ -21,6 +21,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useApp } from '../context/AppContext';
 import { getSaavnApiUrl } from '../config/api';
+import { lyricsService, LyricLine } from '../services/LyricsService';
 
 
 
@@ -39,22 +40,26 @@ interface Song {
 }
 
 // Memoized Song Item for performance
-const SongItem = memo(({ 
-    item, 
-    isCurrent, 
-    isFavorite, 
-    onPress, 
-    magentaColor 
-}: { 
-    item: Song; 
-    isCurrent: boolean; 
-    isFavorite: boolean; 
+const SongItem = memo(({
+    item,
+    isCurrent,
+    isFavorite,
+    onPress,
+    onLongPress,
+    magentaColor
+}: {
+    item: Song;
+    isCurrent: boolean;
+    isFavorite: boolean;
     onPress: (song: Song) => void;
+    onLongPress?: (song: Song) => void;
     magentaColor: string;
 }) => {
     return (
-        <Pressable 
+        <Pressable
             onPress={() => onPress(item)}
+            onLongPress={() => onLongPress?.(item)}
+            delayLongPress={400}
             style={[styles.songItem, isCurrent && styles.songItemActive]}
         >
             {!!item.image ? (
@@ -80,74 +85,156 @@ const SongItem = memo(({
 });
 
 // Memoized Header to fix keyboard dismissal
-const ListHeader = memo(({ 
-    currentSong, 
-    isPlaying, 
-    progress, 
-    playbackMs, 
-    onTogglePlay, 
-    onSeek, 
-    searchQuery, 
-    onSearchChange, 
+const ListHeader = memo(({
+    currentSong,
+    isPlaying,
+    progress,
+    playbackMs,
+    onTogglePlay,
+    onSeek,
+    onNext,
+    onPrevious,
+    repeatMode,
+    onToggleRepeat,
+    shuffle,
+    onToggleShuffle,
+    searchQuery,
+    onSearchChange,
     activeTab,
     isKeyboardVisible,
-    formatClock 
+    formatClock,
+    showLyrics,
+    onToggleLyrics,
+    lyricsAvailable,
+    lyricsLines,
+    lyricsLoading,
+    currentLyricIndex,
+    onSeekLyric,
 }: any) => {
     return (
         <View style={[styles.overlayHeader, isKeyboardVisible && { paddingBottom: 0 }]}>
-            <View style={[styles.playerInfoRow, isKeyboardVisible && { marginBottom: 16 }]}>
-                <View style={[styles.artworkWrapper, isKeyboardVisible && { width: 60, height: 60, borderRadius: 12 }]}>
-                    {currentSong && currentSong.image ? (
-                        <Image source={{ uri: currentSong.image }} style={styles.artwork} />
-                    ) : (
-                        <View style={[styles.artwork, { backgroundColor: '#1a1a1a', alignItems: 'center', justifyContent: 'center' }]}>
-                            <MaterialIcons name="music-note" size={isKeyboardVisible ? 30 : 60} color="rgba(255,255,255,0.1)" />
+            {/* Top area: either Artwork+Info OR Lyrics (toggled) */}
+            {showLyrics && !isKeyboardVisible && currentSong ? (
+                <Animated.View entering={FadeInDown.duration(300)} style={{ height: 220, marginBottom: 4, width: '100%', paddingHorizontal: 4 }}>
+                    {/* Compact song name + close */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+                        <View style={{ flex: 1 }}>
+                            <Text style={{ color: '#ff0080', fontSize: 11, fontWeight: '700', letterSpacing: 1 }}>LYRICS</Text>
+                            <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600', marginTop: 1 }} numberOfLines={1}>
+                                {currentSong.name} — {currentSong.artist}
+                            </Text>
                         </View>
-                    )}
-                    <LinearGradient colors={['transparent', 'rgba(255,0,128,0.2)']} style={StyleSheet.absoluteFill} />
-                    {currentSong && !isKeyboardVisible && (
-                        <View style={styles.artworkBadge}>
-                            <MaterialIcons name="equalizer" size={16} color="#fff" />
-                        </View>
-                    )}
-                </View>
-
-                <View style={styles.playerTextContainer}>
-                    <Text style={[styles.overlayTrackTitle, isKeyboardVisible && { fontSize: 16 }]} numberOfLines={1}>
-                        {currentSong?.name || "Choose a song"}
-                    </Text>
-                    <Text style={[styles.overlayTrackArtist, isKeyboardVisible && { fontSize: 12 }]} numberOfLines={1}>
-                        {currentSong?.artist || "Search to start listening"}
-                    </Text>
-                    
-                    {!isKeyboardVisible && (
-                        <View style={styles.progressBarWrapper}>
-                            <Pressable onPress={onSeek} hitSlop={{ top: 10, bottom: 10 }}>
-                                <View style={styles.progressBarBg}>
-                                    <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
-                                </View>
-                            </Pressable>
-                            <View style={styles.timeLabels}>
-                                <Text style={styles.timeText}>{formatClock(playbackMs / 1000)}</Text>
-                                <Text style={styles.timeText}>
-                                    {currentSong ? formatClock(currentSong.duration || 0) : "No Media"}
-                                </Text>
+                        <Pressable onPress={onToggleLyrics} hitSlop={10} style={{ padding: 5, backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 16 }}>
+                            <MaterialIcons name="close" size={14} color="rgba(255,255,255,0.5)" />
+                        </Pressable>
+                    </View>
+                    {/* Progress */}
+                    <View style={[styles.progressBarWrapper, { marginBottom: 4 }]}>
+                        <Pressable onPress={onSeek} hitSlop={{ top: 10, bottom: 10 }}>
+                            <View style={styles.progressBarBg}>
+                                <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
                             </View>
+                        </Pressable>
+                        <View style={styles.timeLabels}>
+                            <Text style={styles.timeText}>{formatClock(playbackMs / 1000)}</Text>
+                            <Text style={styles.timeText}>{formatClock(currentSong.duration || 0)}</Text>
                         </View>
+                    </View>
+                    {/* Scrollable lyrics */}
+                    {lyricsLoading ? (
+                        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                            <ActivityIndicator color="#ff0080" size="small" />
+                        </View>
+                    ) : lyricsLines.length === 0 ? (
+                        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                            <Text style={{ color: 'rgba(255,255,255,0.2)', fontSize: 12 }}>No lyrics available</Text>
+                        </View>
+                    ) : (
+                        <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled fadingEdgeLength={30}>
+                            {lyricsLines.map((line: any, idx: number) => {
+                                const isCurrent = idx === currentLyricIndex;
+                                const isPast = idx < currentLyricIndex;
+                                return (
+                                    <Pressable key={idx} onPress={() => onSeekLyric(line.time * 1000)} style={{ paddingVertical: 3 }}>
+                                        <Text style={{
+                                            fontSize: isCurrent ? 18 : 13,
+                                            fontWeight: isCurrent ? '800' : '400',
+                                            color: isCurrent ? '#fff' : isPast ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.25)',
+                                            lineHeight: isCurrent ? 24 : 18,
+                                        }}>{line.text}</Text>
+                                    </Pressable>
+                                );
+                            })}
+                            <View style={{ height: 20 }} />
+                        </ScrollView>
                     )}
+                </Animated.View>
+            ) : (
+                <View style={[styles.playerInfoRow, isKeyboardVisible && { marginBottom: 16 }]}>
+                    <View style={[styles.artworkWrapper, isKeyboardVisible && { width: 60, height: 60, borderRadius: 12 }]}>
+                        {currentSong && currentSong.image ? (
+                            <Image source={{ uri: currentSong.image }} style={styles.artwork} />
+                        ) : (
+                            <View style={[styles.artwork, { backgroundColor: '#1a1a1a', alignItems: 'center', justifyContent: 'center' }]}>
+                                <MaterialIcons name="music-note" size={isKeyboardVisible ? 30 : 60} color="rgba(255,255,255,0.1)" />
+                            </View>
+                        )}
+                        <LinearGradient colors={['transparent', 'rgba(255,0,128,0.2)']} style={StyleSheet.absoluteFill} />
+                    </View>
+                    <View style={styles.playerTextContainer}>
+                        <Text style={[styles.overlayTrackTitle, isKeyboardVisible && { fontSize: 16 }]} numberOfLines={1}>
+                            {currentSong?.name || "Choose a song"}
+                        </Text>
+                        <Text style={[styles.overlayTrackArtist, isKeyboardVisible && { fontSize: 12 }]} numberOfLines={1}>
+                            {currentSong?.artist || "Search to start listening"}
+                        </Text>
+                        {!isKeyboardVisible && (
+                            <View style={styles.progressBarWrapper}>
+                                <Pressable onPress={onSeek} hitSlop={{ top: 10, bottom: 10 }}>
+                                    <View style={styles.progressBarBg}>
+                                        <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
+                                    </View>
+                                </Pressable>
+                                <View style={styles.timeLabels}>
+                                    <Text style={styles.timeText}>{formatClock(playbackMs / 1000)}</Text>
+                                    <Text style={styles.timeText}>{currentSong ? formatClock(currentSong.duration || 0) : "No Media"}</Text>
+                                </View>
+                            </View>
+                        )}
+                    </View>
                 </View>
-            </View>
+            )}
 
+            {/* Controls Row — shuffle, prev, play, next, repeat, LYRICS icon */}
             {!isKeyboardVisible && (
                 <View style={styles.controlsRow}>
-                    <Pressable><MaterialIcons name="skip-previous" size={36} color="rgba(255,255,255,0.4)" /></Pressable>
-                    <Pressable 
-                        onPress={() => currentSong ? onTogglePlay() : null} 
+                    <Pressable onPress={onToggleShuffle} hitSlop={8}>
+                        <MaterialIcons name="shuffle" size={20} color={shuffle ? '#ff0080' : 'rgba(255,255,255,0.3)'} />
+                    </Pressable>
+                    <Pressable onPress={onPrevious} hitSlop={8}>
+                        <MaterialIcons name="skip-previous" size={34} color="rgba(255,255,255,0.7)" />
+                    </Pressable>
+                    <Pressable
+                        onPress={() => currentSong ? onTogglePlay() : null}
                         style={[styles.playButton, !currentSong && { opacity: 0.5 }]}
                     >
                         <MaterialIcons name={isPlaying ? "pause" : "play-arrow"} size={44} color="#000" />
                     </Pressable>
-                    <Pressable><MaterialIcons name="skip-next" size={36} color="rgba(255,255,255,0.4)" /></Pressable>
+                    <Pressable onPress={onNext} hitSlop={8}>
+                        <MaterialIcons name="skip-next" size={34} color="rgba(255,255,255,0.7)" />
+                    </Pressable>
+                    <Pressable onPress={onToggleRepeat} hitSlop={8}>
+                        <MaterialIcons
+                            name={repeatMode === 'one' ? 'repeat-one' : 'repeat'}
+                            size={20}
+                            color={repeatMode !== 'off' ? '#ff0080' : 'rgba(255,255,255,0.3)'}
+                        />
+                    </Pressable>
+                    {currentSong && lyricsAvailable && (
+                        <Pressable onPress={onToggleLyrics} hitSlop={8}>
+                            <MaterialIcons name="lyrics" size={20} color={showLyrics ? '#ff0080' : 'rgba(255,255,255,0.3)'} />
+                        </Pressable>
+                    )}
                 </View>
             )}
 
@@ -170,9 +257,11 @@ const ListHeader = memo(({
             {!isKeyboardVisible && (
                 <View style={styles.listHeader}>
                     <Text style={styles.listTitle}>
-                        {activeTab === 'music' 
-                            ? (searchQuery ? `RESULTS FOR "${searchQuery.toUpperCase()}"` : 'TRENDING HINDI SONGS') 
-                            : 'FAVORITES'}
+                        {activeTab === 'music'
+                            ? (searchQuery ? `RESULTS FOR "${searchQuery.toUpperCase()}"` : 'TRENDING HINDI SONGS')
+                            : activeTab === 'favorites' ? 'FAVORITES'
+                            : activeTab === 'queue' ? 'UP NEXT'
+                            : 'LYRICS'}
                     </Text>
                     <MaterialIcons name="filter-list" size={18} color="rgba(255,255,255,0.2)" />
                 </View>
@@ -184,9 +273,9 @@ const ListHeader = memo(({
 export default function MusicScreen() {
     const { width, height } = useWindowDimensions();
     const router = useRouter();
-    const { musicState, currentUser, playSong, togglePlayMusic, toggleFavoriteSong, startCall, getPlaybackPosition, seekTo } = useApp();
+    const { musicState, currentUser, playSong, togglePlayMusic, toggleFavoriteSong, startCall, getPlaybackPosition, seekTo, repeatMode, toggleRepeat, shuffle, toggleShuffle, queue, addToQueue, playNext, playPrevious, sleepTimerMinutes, setSleepTimer } = useApp() as any;
 
-    const [activeTab, setActiveTab] = useState<'music' | 'favorites'>('music');
+    const [activeTab, setActiveTab] = useState<'music' | 'favorites' | 'lyrics' | 'queue'>('music');
     const [searchQuery, setSearchQuery] = useState('');
     const [songs, setSongs] = useState<Song[]>([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -195,6 +284,14 @@ export default function MusicScreen() {
     const lastClickTime = useRef<{ [key: string]: number }>({});
     const [keyboardVisible, setKeyboardVisible] = useState(false);
     const isMountedRef = useRef(true);
+
+    // Lyrics state
+    const [lyrics, setLyrics] = useState<LyricLine[]>([]);
+    const [lyricsLoading, setLyricsLoading] = useState(false);
+    const [currentLyricIndex, setCurrentLyricIndex] = useState(0);
+    const [showLyrics, setShowLyrics] = useState(false);
+    const [recommendedSongs, setRecommendedSongs] = useState<Song[]>([]);
+    const lyricsListRef = useRef<FlatList>(null);
     const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -264,6 +361,13 @@ export default function MusicScreen() {
                 const progressPercent = (pos / (duration * 1000)) * 100;
                 setProgress(progressPercent);
                 setPlaybackMs(pos);
+                // Sync lyrics highlight
+                if (lyrics.length > 0) {
+                    const idx = lyricsService.getCurrentLineIndex(lyrics, pos / 1000);
+                    if (idx !== currentLyricIndex) {
+                        setCurrentLyricIndex(idx);
+                    }
+                }
             }, 1000);
         }
         return () => clearInterval(interval);
@@ -273,6 +377,33 @@ export default function MusicScreen() {
         // Reset when switching songs
         setPlaybackMs(0);
         setProgress(0);
+        setShowLyrics(false);
+
+        // Fetch lyrics + recommended songs
+        const song = musicState.currentSong;
+        if (song) {
+            setLyricsLoading(true);
+            setLyrics([]);
+            lyricsService.getLyrics(song.name, song.artist, song.duration)
+                .then(result => { if (result) setLyrics(result.lines); })
+                .finally(() => setLyricsLoading(false));
+
+            const apiUrl = getSaavnApiUrl();
+            if (apiUrl) {
+                fetch(`${apiUrl}/songs/${song.id}/suggestions?limit=10`)
+                    .then(r => r.ok ? r.json() : null)
+                    .then(data => {
+                        if (data?.data) {
+                            const recs = data.data.map((s: any) => transformSong(s)).filter(Boolean);
+                            setRecommendedSongs(recs);
+                        }
+                    })
+                    .catch(() => setRecommendedSongs([]));
+            }
+        } else {
+            setLyrics([]);
+            setRecommendedSongs([]);
+        }
     }, [musicState.currentSong?.id]);
 
     const [page, setPage] = useState(1);
@@ -486,7 +617,9 @@ export default function MusicScreen() {
         musicState.favorites.some(s => s.id === songId)
     , [musicState.favorites]);
 
-    const displaySongs = activeTab === 'favorites' ? musicState.favorites : songs;
+    const displaySongs = activeTab === 'favorites' ? musicState.favorites
+        : activeTab === 'queue' ? queue
+        : songs;
 
     const handleSeek = useCallback((e: any) => {
         const { locationX } = e.nativeEvent;
@@ -507,30 +640,48 @@ export default function MusicScreen() {
     };
 
     const memoizedHeader = useMemo(() => (
-        <ListHeader 
+        <ListHeader
             currentSong={musicState.currentSong}
             isPlaying={musicState.isPlaying}
             progress={progress}
             playbackMs={playbackMs}
             onTogglePlay={togglePlayMusic}
             onSeek={handleSeek}
+            onNext={playNext}
+            onPrevious={playPrevious}
+            repeatMode={repeatMode}
+            onToggleRepeat={toggleRepeat}
+            shuffle={shuffle}
+            onToggleShuffle={toggleShuffle}
             searchQuery={searchQuery}
             onSearchChange={handleSearchInput}
             activeTab={activeTab}
             isKeyboardVisible={keyboardVisible}
             formatClock={formatClock}
+            showLyrics={showLyrics}
+            onToggleLyrics={() => setShowLyrics(prev => !prev)}
+            lyricsAvailable={lyrics.length > 0}
+            lyricsLines={lyrics}
+            lyricsLoading={lyricsLoading}
+            currentLyricIndex={currentLyricIndex}
+            onSeekLyric={seekTo}
         />
-    ), [musicState.currentSong, musicState.isPlaying, progress, playbackMs, searchQuery, activeTab, keyboardVisible]);
+    ), [musicState.currentSong, musicState.isPlaying, progress, playbackMs, searchQuery, activeTab, keyboardVisible, repeatMode, shuffle, showLyrics, lyrics, lyricsLoading, currentLyricIndex]);
+
+    const handleSongLongPress = useCallback((song: Song) => {
+        addToQueue(song);
+    }, [addToQueue]);
 
     const renderSongItem = useCallback(({ item }: { item: Song }) => (
-        <SongItem 
+        <SongItem
             item={item}
             isCurrent={musicState.currentSong?.id === item.id}
             isFavorite={isFavorite(item.id)}
             onPress={handleSongInteraction}
+            onLongPress={handleSongLongPress}
             magentaColor={MAGENTA}
         />
-    ), [musicState.currentSong?.id, musicState.favorites, handleSongInteraction]);
+    ), [musicState.currentSong?.id, musicState.favorites, handleSongInteraction, handleSongLongPress]);
 
     return (
         <View style={styles.container}>
@@ -538,16 +689,16 @@ export default function MusicScreen() {
             
             {/* Combined Backdrop: Single layer of glass + subtle tint */}
             <Animated.View style={[StyleSheet.absoluteFill, backdropBlurOpacity, { zIndex: 40 }]}>
-                <GlassView 
-                    intensity={60} 
-                    tint="dark" 
+                <GlassView
+                    intensity={Platform.OS === 'android' ? 80 : 60}
+                    tint="dark"
                     style={StyleSheet.absoluteFill}
                 />
-                <View 
+                <View
                     style={[
-                        StyleSheet.absoluteFill, 
-                        { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.3)' }
-                    ]} 
+                        StyleSheet.absoluteFill,
+                        { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.75)' : 'rgba(0,0,0,0.3)' }
+                    ]}
                 />
             </Animated.View>
 
@@ -563,7 +714,7 @@ export default function MusicScreen() {
                     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
                         <View style={styles.dragHandle} />
 
-                        {FlashList && (
+                        {FlashList ? (
                             <FlashList
                                 data={displaySongs}
                                 renderItem={renderSongItem}
@@ -578,15 +729,45 @@ export default function MusicScreen() {
                                 onEndReachedThreshold={0.5}
                                 removeClippedSubviews={Platform.OS === 'android'}
                                 ListFooterComponent={
-                                    <View style={{ height: 120, alignItems: 'center', paddingTop: 20 }}>
-                                        {isLoading && songs.length > 0 && <ActivityIndicator color={MAGENTA} />}
+                                    <View style={{ paddingBottom: 120 }}>
+                                        {isLoading && songs.length > 0 && (
+                                            <ActivityIndicator color={MAGENTA} style={{ marginVertical: 20 }} />
+                                        )}
+                                        {/* Recommended Songs Section */}
+                                        {recommendedSongs.length > 0 && activeTab === 'music' && !searchQuery && (
+                                            <View style={{ marginTop: 16, paddingHorizontal: 4 }}>
+                                                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, fontWeight: '700', letterSpacing: 1.5, marginBottom: 10 }}>
+                                                    RECOMMENDED FOR YOU
+                                                </Text>
+                                                {recommendedSongs.map(song => (
+                                                    <Pressable
+                                                        key={song.id}
+                                                        onPress={() => playSong(song)}
+                                                        onLongPress={() => { addToQueue(song); }}
+                                                        style={{
+                                                            flexDirection: 'row', alignItems: 'center',
+                                                            paddingVertical: 8, paddingHorizontal: 4,
+                                                        }}
+                                                    >
+                                                        <Image source={{ uri: song.image }} style={{ width: 40, height: 40, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)' }} />
+                                                        <View style={{ flex: 1, marginLeft: 12 }}>
+                                                            <Text style={{ color: '#fff', fontSize: 14, fontWeight: '500' }} numberOfLines={1}>{song.name}</Text>
+                                                            <Text style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11, marginTop: 1 }} numberOfLines={1}>{song.artist}</Text>
+                                                        </View>
+                                                        <Pressable onPress={() => addToQueue(song)} hitSlop={8} style={{ padding: 6 }}>
+                                                            <MaterialIcons name="playlist-add" size={20} color="rgba(255,255,255,0.3)" />
+                                                        </Pressable>
+                                                    </Pressable>
+                                                ))}
+                                            </View>
+                                        )}
                                     </View>
                                 }
                                 ListEmptyComponent={isLoading && songs.length === 0 ? (
                                     <ActivityIndicator color={MAGENTA} style={{ marginTop: 20 }} />
                                 ) : null}
                             />
-                        )}
+                        ) : null}
 
 
                         {/* Liquid Tabs Navigation */}
@@ -597,18 +778,25 @@ export default function MusicScreen() {
                                     tint="dark" 
                                     style={styles.tabPill} 
                                 >
-                                    <Pressable 
+                                    <Pressable
                                         onPress={() => setActiveTab('favorites')}
                                         style={[styles.tabBtn, activeTab === 'favorites' && styles.tabBtnActive]}
                                     >
-                                        <MaterialIcons name="favorite" size={20} color={activeTab === 'favorites' ? MAGENTA : 'rgba(255,255,255,0.4)'} />
-                                        <Text style={[styles.tabText, activeTab === 'favorites' && styles.tabTextActive]}>Favorites</Text>
+                                        <MaterialIcons name="favorite" size={18} color={activeTab === 'favorites' ? MAGENTA : 'rgba(255,255,255,0.4)'} />
+                                        <Text style={[styles.tabText, activeTab === 'favorites' && styles.tabTextActive]}>Favs</Text>
                                     </Pressable>
-                                    <Pressable 
+                                    <Pressable
+                                        onPress={() => setActiveTab('queue')}
+                                        style={[styles.tabBtn, activeTab === 'queue' && styles.tabBtnActive]}
+                                    >
+                                        <MaterialIcons name="queue-music" size={18} color={activeTab === 'queue' ? MAGENTA : 'rgba(255,255,255,0.4)'} />
+                                        <Text style={[styles.tabText, activeTab === 'queue' && styles.tabTextActive]}>Queue</Text>
+                                    </Pressable>
+                                    <Pressable
                                         onPress={() => setActiveTab('music')}
                                         style={[styles.tabBtn, activeTab === 'music' && styles.tabBtnActive]}
                                     >
-                                        <MaterialIcons name="library-music" size={20} color={activeTab === 'music' ? MAGENTA : 'rgba(255,255,255,0.4)'} />
+                                        <MaterialIcons name="library-music" size={18} color={activeTab === 'music' ? MAGENTA : 'rgba(255,255,255,0.4)'} />
                                         <Text style={[styles.tabText, activeTab === 'music' && styles.tabTextActive]}>Music</Text>
                                     </Pressable>
                                 </GlassView>
@@ -645,7 +833,7 @@ const styles = StyleSheet.create({
     timeLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
     timeText: { color: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: '600' },
 
-    controlsRow: { flexDirection: 'row', alignItems: 'center', gap: 40, marginBottom: 32 },
+    controlsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 24, marginBottom: 24, width: '100%', paddingHorizontal: 8 },
     playButton: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#fff', shadowOpacity: 0.2, shadowRadius: 15 },
 
     searchSection: { width: '100%', marginBottom: 24 },

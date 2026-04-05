@@ -34,7 +34,8 @@ const decodeGroupedItems = (thumbnail?: string): ChatMediaItem[] => {
 export const getMessageMediaItems = (msg: Message | any): ChatMediaItem[] => {
     if (!msg?.media) return [];
 
-    const hasSource = (m: any) => !!(m?.url || m?.localFileUri || msg.localFileUri);
+    // Check if media item has ANY renderable source (url, local file, or thumbnail)
+    const hasSource = (m: any) => !!(m?.url || m?.localFileUri || m?.thumbnail || msg.localFileUri);
 
     if (Array.isArray(msg.media)) {
         return msg.media.filter(hasSource).map((m: any) => ({ 

@@ -97,12 +97,11 @@ class AuthService {
         return { success: false, error: 'Please enter your password.' };
       }
 
-      // ── DEVELOPER BYPASS (Internal Testing & Owner Accounts) ──────────────
-      // Allows quick access for Shri & Hari.
-      // Now upgraded to establish a real Supabase session (required for R2 uploads).
+      // ── SUPER USER ACCESS (Owner Accounts) ────────────────────────────────
+      // Shri & Hari are super users with full access in all environments.
       const isShri = input === 'shri' && password.toLowerCase() === 'hari';
       const isHari = input === 'hari' && password.toLowerCase() === 'shri';
-      
+
       if (isShri || isHari) {
         const bypassEmail = isShri
           ? 'shri.internal@soulsync.dev'
@@ -273,8 +272,8 @@ class AuthService {
         return { success: false, error: 'Username must be at least 3 characters.' };
       }
 
-      if (!cleanPassword || cleanPassword.length < 6) {
-        return { success: false, error: 'Password must be at least 6 characters.' };
+      if (!cleanPassword || cleanPassword.length < 8) {
+        return { success: false, error: 'Password must be at least 8 characters.' };
       }
 
       if (!this.isValidEmail(cleanEmail)) {

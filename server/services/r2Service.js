@@ -56,9 +56,23 @@ async function deleteFile(key) {
     return await s3Client.send(command);
 }
 
+async function uploadBuffer(key, buffer, contentType = 'application/octet-stream') {
+    if (!s3Client) throw new Error('R2 Service not configured');
+    console.log(`[R2Service] Direct upload: key=${key}, size=${buffer.length}, type=${contentType}`);
+    const command = new PutObjectCommand({
+        Bucket: R2_BUCKET_NAME,
+        Key: key,
+        Body: buffer,
+        ContentType: contentType,
+    });
+    await s3Client.send(command);
+    return key;
+}
+
 module.exports = {
     generateUploadPresignedUrl,
     generateDownloadPresignedUrl,
     deleteFile,
+    uploadBuffer,
     bucketName: R2_BUCKET_NAME
 };

@@ -14,6 +14,7 @@ import { PresenceProvider } from '../context/PresenceContext';
 import { backgroundSyncService } from '../services/BackgroundSyncService';
 import { notificationService } from '../services/NotificationService';
 import PipOverlay from '../components/PipOverlay';
+// MiniPlayer disabled — music shown in chat header pill instead
 import { IncomingCallModal } from '../components/IncomingCallModal';
 import { SecurityLockOverlay } from '../components/SecurityLockOverlay';
 import { Toaster } from '../components/ui/Toaster';
@@ -28,6 +29,11 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 
   componentDidCatch(error: Error, errorInfo: any) {
     console.error('[ErrorBoundary] Caught error:', error, errorInfo);
+    // Report to crash reporting service
+    try {
+      const { crashReporting } = require('../services/CrashReportingService');
+      crashReporting.captureComponentError(error, errorInfo?.componentStack);
+    } catch {}
   }
 
   render() {
@@ -67,12 +73,29 @@ function RootContent() {
 
   // Handle Splash Screen hiding
   useEffect(() => {
+    // Init crash reporting first (captures all errors from this point)
+    const { crashReporting } = require('../services/CrashReportingService');
+    crashReporting.init();
+
     // Register background sync tasks
     backgroundSyncService.register();
     const cleanupListener = backgroundSyncService.setupListener();
-    
+
+    // Start disappearing message cleanup timer
+    const { disappearingMessageService } = require('../services/DisappearingMessageService');
+    disappearingMessageService.start();
+
+    // Init screen security (Signal-style screenshot prevention)
+    const { screenSecurityService } = require('../services/ScreenSecurityService');
+    screenSecurityService.init();
+
+    // Start persistent job queue (Signal-style JobManager)
+    const { jobManager } = require('../services/JobManager');
+    jobManager.start();
+
     return () => {
         cleanupListener();
+        disappearingMessageService.stop();
     };
   }, []); // This useEffect runs once on mount for background sync setup
 
@@ -213,7 +236,8 @@ function RootContent() {
         <Stack.Screen name="music" options={{
           presentation: 'transparentModal',
           animation: 'fade',
-          headerShown: false
+          headerShown: false,
+          contentStyle: { backgroundColor: 'transparent' },
         }} />
         <Stack.Screen name="chat/[id]" options={{
           presentation: 'card',

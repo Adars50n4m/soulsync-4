@@ -1,4 +1,5 @@
 import * as FileSystem from 'expo-file-system';
+import * as MediaLibrary from 'expo-media-library';
 import { Platform } from 'react-native';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -62,6 +63,10 @@ const MEDIA_FOLDER_MAP: Record<string, { received: string; sent: string }> = {
 
 let _initialized = false;
 let _initPromise: Promise<void> | null = null;
+let _mediaLibraryGranted = false;
+
+// Cache album references to avoid repeated lookups
+const _albumCache: Record<string, MediaLibrary.Album> = {};
 
 // Per-type daily counter for filenames (resets when date changes)
 let _counterDate = '';
@@ -113,20 +118,20 @@ export const soulFolderService = {
         }
       }
 
-      // Android: create .nomedia to prevent gallery from indexing Soul media
+      // Clean up old .nomedia if it exists — we now WANT gallery visibility
       if (Platform.OS === 'android') {
         const nomediaPath = `${SOUL_BASE}.nomedia`;
         try {
           const info = await FileSystem.getInfoAsync(nomediaPath);
-          if (!info.exists) {
-            await FileSystem.writeAsStringAsync(nomediaPath, '');
-            console.log('[SoulFolder] Created .nomedia');
+          if (info.exists) {
+            await FileSystem.deleteAsync(nomediaPath, { idempotent: true });
+            console.log('[SoulFolder] Removed old .nomedia file — gallery will now index Soul media');
           }
         } catch (_) {}
       }
 
       _initialized = true;
-      console.log('[SoulFolder] Folder structure ready.');
+      console.log('[SoulFolder] Folder structure ready (internal storage only).');
     })();
 
     return _initPromise;
@@ -400,5 +405,64 @@ export const soulFolderService = {
 
     console.log(`[SoulFolder] Cleared ${deleted} ${mediaType} files (${direction})`);
     return deleted;
+  },
+
+  // ── Save to device gallery (WhatsApp-style) ──────────────────────────────
+  // Registers the file with the device's media library so it appears in:
+  //   - Android: File Manager, Gallery, Google Photos under "Soul" album
+  //   - iOS: Photos app under "Soul" album
+  //
+  // Call this AFTER saving the file to the internal Soul/ folder.
+  // Non-destructive: if permission denied or save fails, the internal copy still exists.
+  //
+  async saveToDeviceGallery(
+    localUri: string,
+    mediaType: 'image' | 'video' | 'audio' | 'document' | 'file' | 'voice_note' | 'status' | 'profile_photo',
+    isSent: boolean = false
+  ): Promise<boolean> {
+    // Only images and videos are relevant for gallery — audio/docs won't show
+    const galleryTypes = ['image', 'video'];
+    if (!galleryTypes.includes(mediaType)) return false;
+
+    if (!_mediaLibraryGranted) {
+      try {
+        const { status } = await MediaLibrary.requestPermissionsAsync();
+        if (status !== 'granted') return false;
+        _mediaLibraryGranted = true;
+      } catch {
+        return false;
+      }
+    }
+
+    try {
+      // Determine album name — WhatsApp uses "WhatsApp Images", "WhatsApp Video" etc.
+      const albumSuffix = isSent ? ' Sent' : '';
+      const typeLabel = mediaType === 'image' ? 'Images' : 'Videos';
+      const albumName = `Soul ${typeLabel}${albumSuffix}`;
+
+      // Save the file to device media library
+      const asset = await MediaLibrary.createAssetAsync(localUri);
+
+      // Create or find the album, then move the asset into it
+      if (_albumCache[albumName]) {
+        await MediaLibrary.addAssetsToAlbumAsync([asset], _albumCache[albumName], false);
+      } else {
+        const existingAlbum = await MediaLibrary.getAlbumAsync(albumName);
+        if (existingAlbum) {
+          _albumCache[albumName] = existingAlbum;
+          await MediaLibrary.addAssetsToAlbumAsync([asset], existingAlbum, false);
+        } else {
+          const newAlbum = await MediaLibrary.createAlbumAsync(albumName, asset, false);
+          _albumCache[albumName] = newAlbum;
+        }
+      }
+
+      console.log(`[SoulFolder] Saved to gallery album "${albumName}": ${localUri}`);
+      return true;
+    } catch (e: any) {
+      // Non-fatal — internal copy still exists
+      console.warn(`[SoulFolder] Gallery save failed (non-fatal):`, e.message);
+      return false;
+    }
   },
 };

@@ -70,6 +70,8 @@ try {
     console.warn('[MusicContext] TrackPlayer load error:', e);
 }
 
+export type RepeatMode = 'off' | 'all' | 'one';
+
 interface MusicContextType {
     musicState: MusicState;
     playSong: (song: Song, broadcast?: boolean) => Promise<void>;
@@ -77,6 +79,19 @@ interface MusicContextType {
     toggleFavoriteSong: (song: Song) => Promise<void>;
     seekTo: (position: number) => Promise<void>;
     getPlaybackPosition: () => Promise<number>;
+    // New features
+    repeatMode: RepeatMode;
+    toggleRepeat: () => void;
+    shuffle: boolean;
+    toggleShuffle: () => void;
+    queue: Song[];
+    addToQueue: (song: Song) => void;
+    removeFromQueue: (songId: string) => void;
+    clearQueue: () => void;
+    playNext: () => Promise<void>;
+    playPrevious: () => Promise<void>;
+    sleepTimerMinutes: number | null;
+    setSleepTimer: (minutes: number | null) => void;
 }
 
 export const MusicContext = createContext<MusicContextType | undefined>(undefined);
@@ -89,6 +104,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         favorites: []
     });
     const [isPlayerReady, setIsPlayerReady] = useState(false);
+    const [repeatMode, setRepeatMode] = useState<RepeatMode>('off');
+    const [shuffle, setShuffle] = useState(false);
+    const [queue, setQueue] = useState<Song[]>([]);
+    const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(null);
+    const sleepTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const queueIndexRef = useRef(-1);
     
     // Safely use hooks
     const playbackState = TrackPlayerHooks.usePlaybackState();
@@ -279,7 +300,86 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return pos * 1000;
     }, [isPlayerReady]);
 
-    const value = { musicState, playSong, togglePlayMusic, toggleFavoriteSong, seekTo, getPlaybackPosition };
+    const toggleRepeat = useCallback(() => {
+        setRepeatMode(prev => prev === 'off' ? 'all' : prev === 'all' ? 'one' : 'off');
+    }, []);
+
+    const toggleShuffle = useCallback(() => {
+        setShuffle(prev => !prev);
+    }, []);
+
+    const addToQueue = useCallback((song: Song) => {
+        setQueue(prev => prev.some(s => s.id === song.id) ? prev : [...prev, song]);
+    }, []);
+
+    const removeFromQueue = useCallback((songId: string) => {
+        setQueue(prev => prev.filter(s => s.id !== songId));
+    }, []);
+
+    const clearQueue = useCallback(() => {
+        setQueue([]);
+        queueIndexRef.current = -1;
+    }, []);
+
+    const playNext = useCallback(async () => {
+        if (queue.length === 0) return;
+        let nextIndex: number;
+        if (shuffle) {
+            nextIndex = Math.floor(Math.random() * queue.length);
+        } else {
+            nextIndex = queueIndexRef.current + 1;
+            if (nextIndex >= queue.length) {
+                if (repeatMode === 'all') nextIndex = 0;
+                else return; // End of queue
+            }
+        }
+        queueIndexRef.current = nextIndex;
+        await playSong(queue[nextIndex]);
+    }, [queue, shuffle, repeatMode, playSong]);
+
+    const playPrevious = useCallback(async () => {
+        if (queue.length === 0) return;
+        let prevIndex = queueIndexRef.current - 1;
+        if (prevIndex < 0) {
+            if (repeatMode === 'all') prevIndex = queue.length - 1;
+            else prevIndex = 0;
+        }
+        queueIndexRef.current = prevIndex;
+        await playSong(queue[prevIndex]);
+    }, [queue, repeatMode, playSong]);
+
+    // Sleep timer
+    const setSleepTimer = useCallback((minutes: number | null) => {
+        if (sleepTimerRef.current) { clearTimeout(sleepTimerRef.current); sleepTimerRef.current = null; }
+        setSleepTimerMinutes(minutes);
+        if (minutes && minutes > 0) {
+            sleepTimerRef.current = setTimeout(async () => {
+                if (TrackPlayer) await TrackPlayer.pause();
+                setSleepTimerMinutes(null);
+            }, minutes * 60 * 1000);
+        }
+    }, []);
+
+    // Auto-play next when song ends (repeat one / queue next)
+    useEffect(() => {
+        if (!TrackPlayer) return;
+        const sub = TrackPlayer.addEventListener?.('playback-queue-ended', async () => {
+            if (repeatMode === 'one' && musicState.currentSong) {
+                await TrackPlayer.seekTo(0);
+                await TrackPlayer.play();
+            } else if (queue.length > 0) {
+                await playNext();
+            }
+        });
+        return () => sub?.remove?.();
+    }, [repeatMode, musicState.currentSong, queue, playNext]);
+
+    const value = {
+        musicState, playSong, togglePlayMusic, toggleFavoriteSong, seekTo, getPlaybackPosition,
+        repeatMode, toggleRepeat, shuffle, toggleShuffle,
+        queue, addToQueue, removeFromQueue, clearQueue, playNext, playPrevious,
+        sleepTimerMinutes, setSleepTimer,
+    };
     return <MusicContext.Provider value={value}>{children}</MusicContext.Provider>;
 };
 

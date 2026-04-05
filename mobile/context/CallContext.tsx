@@ -144,9 +144,16 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
                 case 'call-reject':
                 case 'call-end': {
-                    const wasAccepted = activeCallRef.current?.isAccepted;
                     const active = activeCallRef.current;
-                    
+
+                    // Validate: only end if the signal matches our active call
+                    if (active && signal.callId && active.callId && signal.callId !== active.callId) {
+                        console.warn(`[CallContext] Ignoring stale ${signal.type} for callId ${signal.callId} (active: ${active.callId})`);
+                        break;
+                    }
+
+                    const wasAccepted = active?.isAccepted;
+
                     if (active) {
                         const duration = callStartTimeRef.current ? Math.floor((Date.now() - callStartTimeRef.current) / 1000) : 0;
                         await callDbService.saveCallLog({

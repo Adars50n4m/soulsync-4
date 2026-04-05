@@ -4,6 +4,7 @@
  */
 
 import * as FileSystem from 'expo-file-system';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { R2_CONFIG } from '../config/r2';
 import { supabase } from '../config/supabase';
 
@@ -36,7 +37,8 @@ class R2StorageService {
     uri: string,
     bucket: string,
     folder: string = '',
-    onProgress?: (progress: number) => void
+    onProgress?: (progress: number) => void,
+    forceContentType?: string
   ): Promise<string | null> {
     let retries = 0;
     let lastError: any = null;
@@ -48,7 +50,7 @@ class R2StorageService {
         if (!token) throw new R2AuthError('Auth token missing');
 
         // 2. Detect content type & Filename
-        const contentType = this.getContentType(uri);
+        const contentType = forceContentType || this.getContentType(uri);
         const fileName = uri.split('/').pop() || `status-${Date.now()}`;
 
         // 3. Upload to Worker using direct Multipart.
@@ -131,53 +133,55 @@ class R2StorageService {
     throw lastError || new Error('R2 Upload failed after multiple attempts');
   }
 
+  // Cache token to avoid repeated network calls during grouped uploads
+  private _cachedToken: string | null = null;
+  private _cachedTokenAt: number = 0;
+  private static readonly TOKEN_CACHE_TTL = 4 * 60 * 1000; // 4 minutes
+
   /**
-   * Get Supabase authentication token
+   * Get Supabase authentication token (with caching)
    */
   private async getAuthToken(): Promise<string | null> {
+    // Return cached token if still fresh
+    if (this._cachedToken && (Date.now() - this._cachedTokenAt) < R2StorageService.TOKEN_CACHE_TTL) {
+      return this._cachedToken;
+    }
+
     try {
-      console.log('[R2Storage] Retrieving auth token...');
-      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      // Wrap getSession in a 5s timeout — it should be instant (local storage read)
+      const sessionPromise = supabase.auth.getSession();
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000));
+      const sessionResult = await Promise.race([sessionPromise, timeoutPromise]);
 
-      if (sessionError) {
-        console.warn('[R2Storage] getSession error:', sessionError.message);
+      if (sessionResult && 'data' in sessionResult && sessionResult.data.session?.access_token) {
+        this._cachedToken = sessionResult.data.session.access_token;
+        this._cachedTokenAt = Date.now();
+        return this._cachedToken;
       }
 
-      if (sessionData.session?.access_token) {
-        console.log('[R2Storage] Found session token');
-        return sessionData.session.access_token;
+      // Fallback: refresh session (network call — allow 10s)
+      console.log('[R2Storage] No cached session, trying refreshSession...');
+      const refreshPromise = supabase.auth.refreshSession();
+      const refreshTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000));
+      const refreshResult = await Promise.race([refreshPromise, refreshTimeout]);
+
+      if (refreshResult && 'data' in refreshResult && refreshResult.data.session?.access_token) {
+        this._cachedToken = refreshResult.data.session.access_token;
+        this._cachedTokenAt = Date.now();
+        return this._cachedToken;
       }
 
-      // First fallback: force refresh persisted session (if refresh token exists)
-      console.log('[R2Storage] No session found, trying refreshSession()...');
-      const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
-      if (refreshError) {
-        console.warn('[R2Storage] refreshSession error:', refreshError.message);
+      // Special handling for developer bypass users
+      const cachedUserId = await AsyncStorage.getItem('ss_current_user');
+      if (cachedUserId && cachedUserId.startsWith('f00f00f0-0000-0000-0000')) {
+        console.log('[R2Storage] Using developer bypass authorization');
+        return 'DEV_BYPASS_TOKEN';
       }
 
-      if (refreshData.session?.access_token) {
-        console.log('[R2Storage] Found token after refreshSession');
-        return refreshData.session.access_token;
-      }
-
-      // Final fallback: getUser() can sometimes hydrate session in edge cases
-      console.log('[R2Storage] refreshSession failed, trying getUser() fallback...');
-      const { error: userError } = await supabase.auth.getUser();
-      if (userError) {
-        console.warn('[R2Storage] getUser fallback error:', userError.message);
-      }
-
-      // Re-check session after getUser() which might have updated it
-      const { data: finalSession } = await supabase.auth.getSession();
-      if (finalSession.session?.access_token) {
-        console.log('[R2Storage] Found token after getUser fallback');
-        return finalSession.session.access_token;
-      }
-
-      console.warn('[R2Storage] Auth failure: No valid session or token found');
+      console.warn('[R2Storage] Auth failure: No valid session found');
       return null;
     } catch (error: any) {
-      console.warn('[R2Storage] Unexpected auth error:', error.message);
+      console.warn('[R2Storage] Auth error:', error.message);
       return null;
     }
   }

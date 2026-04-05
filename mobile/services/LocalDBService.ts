@@ -260,8 +260,21 @@ class OfflineService {
 
   async getMessages(chatId: string, limit = 100): Promise<QueuedMessage[]> {
     const db = await getDb();
-    const rows = await db.getAllAsync(`SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp ASC LIMIT ?;`, [chatId, limit]);
+    // Get the most recent messages, then return in ASC order for display
+    const rows = await db.getAllAsync(
+      `SELECT * FROM (SELECT * FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ?) sub ORDER BY timestamp ASC;`,
+      [chatId, limit]
+    );
     return (rows as any[]).map(rowToQueuedMessage);
+  }
+
+  async getLatestMessageTimestamp(chatId: string): Promise<string | null> {
+    const db = await getDb();
+    const row = await db.getFirstAsync<{ timestamp: string }>(
+      `SELECT timestamp FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT 1;`,
+      [chatId]
+    );
+    return row?.timestamp ?? null;
   }
 
   async getPendingMessages(): Promise<QueuedMessage[]> {
@@ -274,6 +287,15 @@ class OfflineService {
     const db = await getDb();
     const row = await db.getFirstAsync(`SELECT * FROM messages WHERE id = ? LIMIT 1;`, [messageId]);
     return row ? rowToQueuedMessage(row) : null;
+  }
+
+  async searchMessages(chatId: string, query: string, limit = 50): Promise<QueuedMessage[]> {
+    const db = await getDb();
+    const rows = await db.getAllAsync(
+      `SELECT * FROM messages WHERE chat_id = ? AND text LIKE ? ORDER BY timestamp DESC LIMIT ?;`,
+      [chatId, `%${query}%`, limit]
+    );
+    return (rows as any[]).map(rowToQueuedMessage);
   }
 
   async getAllMessages(): Promise<QueuedMessage[]> {
@@ -537,7 +559,7 @@ class OfflineService {
 
   async markStatusAsSeen(statusId: string): Promise<void> {
     const db = await getDb();
-    await db.runAsync(`UPDATE statuses SET is_seen = 1 WHERE id = ?;`, [statusId]);
+    await db.runAsync(`UPDATE cached_statuses SET is_seen = 1 WHERE id = ?;`, [statusId]);
   }
 
   async getPendingSyncActions(): Promise<any[]> {
@@ -572,11 +594,21 @@ class OfflineService {
 
   async clearChat(partnerId: string): Promise<void> {
     const db = await getDb();
-    await db.withTransactionAsync(async () => {
-      await db.runAsync(`DELETE FROM messages WHERE chat_id = ?;`, [partnerId]);
-      await db.runAsync(`UPDATE contacts SET last_message = '', unread_count = 0, is_archived = 0 WHERE id = ?;`, [partnerId]);
-      await db.runAsync(`DELETE FROM chats WHERE id = ?;`, [partnerId]);
-    });
+    console.log(`[LocalDBService] clearChat for partnerId: ${partnerId}`);
+    try {
+      await db.withTransactionAsync(async () => {
+        console.log(`[LocalDBService] clearChat: deleting messages...`);
+        await db.runAsync(`DELETE FROM messages WHERE chat_id = ?;`, [partnerId]);
+        console.log(`[LocalDBService] clearChat: updating contacts...`);
+        await db.runAsync(`UPDATE contacts SET last_message = '', unread_count = 0, is_archived = 0 WHERE id = ?;`, [partnerId]);
+        console.log(`[LocalDBService] clearChat: deleting chat...`);
+        await db.runAsync(`DELETE FROM chats WHERE id = ?;`, [partnerId]);
+      });
+      console.log(`[LocalDBService] clearChat: transaction committed.`);
+    } catch (e) {
+      console.error(`[LocalDBService] clearChat transaction failed:`, e);
+      throw e;
+    }
   }
 
   async removePendingSyncOpsForEntity(entityType: string, entityId: string): Promise<void> {
@@ -661,7 +693,7 @@ class OfflineService {
 
         // 2. Update statuses table
         await db.runAsync(
-          'UPDATE statuses SET user_id = ? WHERE user_id = ?',
+          'UPDATE cached_statuses SET user_id = ? WHERE user_id = ?',
           [uuid, legacyId]
         );
 
@@ -694,11 +726,113 @@ class OfflineService {
       await db.runAsync('DELETE FROM messages;');
       await db.runAsync('DELETE FROM contacts;');
       await db.runAsync('DELETE FROM chats;');
-      await db.runAsync('DELETE FROM statuses;');
+      await db.runAsync('DELETE FROM cached_statuses;');
       await db.runAsync('DELETE FROM pending_sync_ops;');
       await db.runAsync('DELETE FROM media_downloads;');
+      await db.runAsync('DELETE FROM users;');
+      await db.runAsync('DELETE FROM connection_requests;');
+      await db.runAsync('DELETE FROM connections;');
+      await db.runAsync('DELETE FROM avatar_cache;');
+      await db.runAsync('DELETE FROM pending_uploads;');
+      await db.runAsync('DELETE FROM cached_users;');
+      await db.runAsync('DELETE FROM sync_queue;');
     });
     console.log('[SQLite] Database cleared successfully.');
+  }
+
+  // ── Disappearing Messages ──────────────────────────────────────────────────
+
+  async getDisappearingTimer(chatId: string): Promise<number> {
+    const db = await getDb();
+    const row = await db.getFirstAsync<{ disappearing_timer: number }>(
+      `SELECT disappearing_timer FROM chat_settings WHERE chat_id = ? LIMIT 1;`,
+      [chatId]
+    );
+    return row?.disappearing_timer ?? 0;
+  }
+
+  async setDisappearingTimer(chatId: string, timerSeconds: number): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `INSERT OR REPLACE INTO chat_settings (chat_id, disappearing_timer, updated_at) VALUES (?, ?, ?);`,
+      [chatId, timerSeconds, new Date().toISOString()]
+    );
+  }
+
+  async startMessageExpiry(messageId: string, timerSeconds: number): Promise<void> {
+    const db = await getDb();
+    const now = Date.now();
+    const expiresAt = now + timerSeconds * 1000;
+    await db.runAsync(
+      `UPDATE messages SET expire_started_at = ?, expires_at = ?, expire_timer = ? WHERE id = ?;`,
+      [now, expiresAt, timerSeconds, messageId]
+    );
+  }
+
+  async deleteExpiredMessages(): Promise<number> {
+    const db = await getDb();
+    const now = Date.now();
+    const expired = await db.getAllAsync(
+      `SELECT id, local_file_uri FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?;`,
+      [now]
+    ) as any[];
+
+    if (expired.length === 0) return 0;
+
+    const ids = expired.map((m: any) => m.id);
+    // Delete in batches of 50
+    for (let i = 0; i < ids.length; i += 50) {
+      const batch = ids.slice(i, i + 50);
+      const placeholders = batch.map(() => '?').join(',');
+      await db.runAsync(`DELETE FROM messages WHERE id IN (${placeholders});`, batch);
+    }
+
+    console.log(`[SQLite] Deleted ${expired.length} expired messages`);
+    return expired.length;
+  }
+
+  // ── Persistent Job Queue ───────────────────────────────────────────────────
+
+  async enqueueJob(id: string, type: string, payload: any, priority = 0, maxRetries = 5): Promise<void> {
+    const db = await getDb();
+    const now = Date.now();
+    await db.runAsync(
+      `INSERT OR IGNORE INTO job_queue (id, type, payload, priority, max_retries, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?);`,
+      [id, type, JSON.stringify(payload), priority, maxRetries, now, now]
+    );
+  }
+
+  async getPendingJobs(limit = 20): Promise<any[]> {
+    const db = await getDb();
+    const now = Date.now();
+    return await db.getAllAsync(
+      `SELECT * FROM job_queue WHERE state = 'pending' AND next_run_at <= ? ORDER BY priority DESC, created_at ASC LIMIT ?;`,
+      [now, limit]
+    ) as any[];
+  }
+
+  async updateJobState(id: string, state: 'pending' | 'processing' | 'completed' | 'failed', error?: string): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `UPDATE job_queue SET state = ?, error = ?, updated_at = ? WHERE id = ?;`,
+      [state, error ?? null, Date.now(), id]
+    );
+  }
+
+  async rescheduleJob(id: string, retryCount: number, delayMs: number): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `UPDATE job_queue SET state = 'pending', retry_count = ?, next_run_at = ?, updated_at = ? WHERE id = ?;`,
+      [retryCount, Date.now() + delayMs, Date.now(), id]
+    );
+  }
+
+  async cleanCompletedJobs(olderThanMs: number = 24 * 60 * 60 * 1000): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `DELETE FROM job_queue WHERE state = 'completed' AND updated_at < ?;`,
+      [Date.now() - olderThanMs]
+    );
   }
 }
 

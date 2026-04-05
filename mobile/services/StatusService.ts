@@ -1,11 +1,12 @@
 import { supabase } from '../config/supabase';
-import { 
-    CachedStatus, 
-    PendingUpload, 
-    CachedUser, 
-    UserStatusGroup 
+import {
+    CachedStatus,
+    PendingUpload,
+    CachedUser,
+    UserStatusGroup
 } from '../types';
 import { storageService } from './StorageService';
+import { soulFolderService } from './SoulFolderService';
 import * as FileSystem from 'expo-file-system';
 import * as SQLite from 'expo-sqlite';
 import NetInfo from '@react-native-community/netinfo';
@@ -113,11 +114,26 @@ class StatusService {
     }
     const userId = actor.id;
 
+    const MAX_STATUS_RETRIES = 5;
+
     const pending = await db.getAllAsync<any>(
-      "SELECT id, local_uri as localUri, media_type as mediaType, media_key as mediaKey FROM pending_uploads WHERE upload_status != 'uploading' ORDER BY created_at ASC"
+      "SELECT id, local_uri as localUri, media_type as mediaType, media_key as mediaKey, retry_count as retryCount FROM pending_uploads WHERE upload_status != 'permanently_failed' ORDER BY created_at ASC"
     );
 
     for (const item of pending || []) {
+      // Max retry limit: stop wasting bandwidth on permanently failed uploads
+      if ((item.retryCount || 0) >= MAX_STATUS_RETRIES) {
+        console.warn(`[StatusSync] ${item.id} exceeded max retries (${MAX_STATUS_RETRIES}), deleting from queue`);
+        await db.runAsync('DELETE FROM pending_uploads WHERE id = ?', [item.id]);
+        continue;
+      }
+
+      // Exponential backoff: wait 2^retryCount seconds before retrying
+      const backoffMs = Math.min(Math.pow(2, item.retryCount || 0) * 1000, 60_000);
+      if ((item.retryCount || 0) > 0) {
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+      }
+
       try {
         console.log(`[StatusSync] Processing ${item.id} (mediaKey: ${item.mediaKey})`);
         await db.runAsync('UPDATE pending_uploads SET upload_status = ? WHERE id = ?', ['uploading', item.id]);
@@ -165,6 +181,7 @@ class StatusService {
           .single();
 
         if (error) {
+          console.error(`[StatusSync] Supabase insert failed for ${item.id}: code=${error.code}, msg=${error.message}`);
           throw error;
         }
 
@@ -213,7 +230,9 @@ class StatusService {
     // 1. Initial fetch from local DB
     const getLocalGroups = async (): Promise<UserStatusGroup[]> => {
       // Robust column check: if migration v26 just ran, we are safe.
-      const cachedUsers = await db.getAllAsync<CachedUser>('SELECT * FROM cached_users');
+      const cachedUsers = await db.getAllAsync<CachedUser>(
+        'SELECT id, username, display_name as displayName, avatar_url as avatarUrl, local_avatar_uri as localAvatarUri, soul_note as soulNote, soul_note_at as soulNoteAt FROM cached_users'
+      );
       
       // FIX: Use media_key in local query
       const cachedStatuses = await db.getAllAsync<any>(
@@ -447,9 +466,8 @@ class StatusService {
       if (info.exists) return { uri: status.mediaLocalPath, isLocal: true };
     }
 
-    if (status?.mediaUrl && status.mediaUrl.startsWith('http')) {
-      return { uri: status.mediaUrl, isLocal: false };
-    }
+    // Don't use cached signed URLs — they expire after 1 hour.
+    // Always regenerate from the media key for reliability.
 
     const keyToUse = mediaKey || status?.mediaKey || status?.mediaUrl || status?.mediaLocalPath;
     if (!keyToUse) return null;
@@ -461,9 +479,7 @@ class StatusService {
 
     const signedUrl = await storageService.getSignedUrl(keyToUse);
     if (signedUrl) {
-      console.log(`[StatusService] Successfully generated signed URL for ${statusId}`);
-      // Update cache with signed URL for faster subsequent loads
-      await db.runAsync('UPDATE cached_statuses SET mediaUrl = ? WHERE id = ?', [signedUrl, statusId]);
+      console.log(`[StatusService] Generated fresh signed URL for ${statusId}`);
       return { uri: signedUrl, isLocal: false };
     }
 
@@ -504,12 +520,17 @@ class StatusService {
       keyToDelete = data?.media_key || '';
     }
 
-    if (keyToDelete) {
-      await storageService.deleteMedia(keyToDelete);
-    }
-
+    // Delete from Supabase FIRST — if this fails, R2 media stays (recoverable).
+    // If we deleted R2 first and Supabase fails, we'd have a ghost record with no media.
     if (!statusId.startsWith('pending-')) {
       await supabase.from('statuses').delete().eq('id', statusId);
+    }
+
+    // Now safe to delete R2 media and local files
+    if (keyToDelete) {
+      await storageService.deleteMedia(keyToDelete).catch(e =>
+        console.warn('[StatusService] R2 delete failed (orphaned media):', e)
+      );
     }
 
     if (status?.mediaLocalPath) {

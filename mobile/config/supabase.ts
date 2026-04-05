@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SupabaseSecureStorage } from './secureStorage';
 import * as Env from './env';
 
 // Legacy ID mapping for transitioning to Supabase UUIDs
@@ -18,7 +19,7 @@ export const LEGACY_TO_UUID: Record<string, string> = {
 // HTTP REST calls are routed through the proxy via custom fetch to bypass ISP blocks.
 export const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
     auth: {
-        storage: AsyncStorage,
+        storage: SupabaseSecureStorage,
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: false,
@@ -33,10 +34,12 @@ export const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
             
             try {
                 // TRY PROXY FIRST (Avoid ISP blocks)
-                // We use a shorter internal timeout to avoid hanging on a slow proxy
                 const controller = new AbortController();
-                // 8s proxy cutoff (reduced from 15s to be more responsive in mobile environments)
-                const timeoutId = setTimeout(() => controller.abort(), 8000);
+                // Longer timeout for mutations (POST/PATCH/DELETE) that carry larger payloads
+                const method = (options?.method || 'GET').toUpperCase();
+                const isMutation = method === 'POST' || method === 'PATCH' || method === 'DELETE';
+                const timeoutMs = isMutation ? 30000 : 15000; // 30s for writes, 15s for reads
+                const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
                 const response = await fetch(proxied, {
                     ...options,

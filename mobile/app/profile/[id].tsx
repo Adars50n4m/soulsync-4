@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
-    View, Text, Image, Pressable, StyleSheet, StatusBar,
+    View, Text, Image, Pressable, StyleSheet, StatusBar, TextInput,
     ScrollView, useWindowDimensions, Alert, Modal, Share, FlatList, Platform, Dimensions, BackHandler
 } from 'react-native';
 
@@ -13,6 +13,7 @@ import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { proxySupabaseUrl } from '../../config/api';
 import { useApp } from '../../context/AppContext';
 import { useCall } from '../../context/CallContext';
+import { offlineService } from '../../services/LocalDBService';
 import { normalizeId, getSuperuserName, getSuperuserHandle } from '../../utils/idNormalization';
 import {
     PROFILE_AVATAR_SHARED_TRANSITION,
@@ -92,6 +93,11 @@ export default function ProfileScreen() {
     const [activeCategory, setActiveCategory] = useState<'photos' | 'videos' | 'audio' | 'docs'>('photos');
     const [viewerVisible, setViewerVisible] = useState(false);
     const [selectedIndex, setSelectedIndex] = useState(0);
+
+    // Message search
+    const [isSearching, setIsSearching] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState<{ id: string; text: string; timestamp: string; sender: string }[]>([]);
     const avatarOrigin = useMemo(() => ({
         x: Number(Array.isArray(params.avatarX) ? params.avatarX[0] : params.avatarX),
         y: Number(Array.isArray(params.avatarY) ? params.avatarY[0] : params.avatarY),
@@ -319,6 +325,21 @@ export default function ProfileScreen() {
             console.error(error);
         }
     };
+
+    const handleMessageSearch = useCallback(async (query: string) => {
+        setSearchQuery(query);
+        if (!query.trim() || !id) {
+            setSearchResults([]);
+            return;
+        }
+        const results = await offlineService.searchMessages(id, query.trim(), 30);
+        setSearchResults(results.map(m => ({
+            id: m.id,
+            text: m.text || (m.media ? `[${m.media.type}]` : ''),
+            timestamp: m.timestamp,
+            sender: m.sender || '',
+        })));
+    }, [id]);
 
     const handleClearChat = () => {
         if (!profileUser) return;
@@ -590,6 +611,82 @@ export default function ProfileScreen() {
                         mediaSectionAnimatedStyle
                     ]}
                 >
+                    {/* Message Search */}
+                    <Pressable
+                        onPress={() => setIsSearching(prev => !prev)}
+                        style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            backgroundColor: 'rgba(255,255,255,0.06)',
+                            borderRadius: 12,
+                            paddingHorizontal: 14,
+                            paddingVertical: 12,
+                            marginBottom: 20,
+                        }}
+                    >
+                        <MaterialIcons name="search" size={20} color="rgba(255,255,255,0.5)" />
+                        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 14, marginLeft: 10, flex: 1 }}>
+                            Search in conversation
+                        </Text>
+                    </Pressable>
+
+                    {isSearching && (
+                        <View style={{ marginBottom: 20 }}>
+                            <View style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                backgroundColor: 'rgba(255,255,255,0.08)',
+                                borderRadius: 10,
+                                paddingHorizontal: 12,
+                                marginBottom: 10,
+                            }}>
+                                <MaterialIcons name="search" size={18} color="rgba(255,255,255,0.4)" />
+                                <TextInput
+                                    autoFocus
+                                    placeholder="Type to search..."
+                                    placeholderTextColor="rgba(255,255,255,0.3)"
+                                    value={searchQuery}
+                                    onChangeText={handleMessageSearch}
+                                    style={{ flex: 1, color: '#fff', fontSize: 14, marginLeft: 8, paddingVertical: 10 }}
+                                    returnKeyType="search"
+                                />
+                                {searchQuery.length > 0 && (
+                                    <Pressable onPress={() => { setSearchQuery(''); setSearchResults([]); }} hitSlop={8}>
+                                        <MaterialIcons name="close" size={16} color="rgba(255,255,255,0.4)" />
+                                    </Pressable>
+                                )}
+                            </View>
+                            {searchResults.length > 0 && (
+                                <View style={{ maxHeight: 240 }}>
+                                    <FlatList
+                                        data={searchResults}
+                                        keyExtractor={item => item.id}
+                                        renderItem={({ item }) => (
+                                            <View style={{
+                                                paddingVertical: 8,
+                                                paddingHorizontal: 12,
+                                                borderBottomWidth: StyleSheet.hairlineWidth,
+                                                borderBottomColor: 'rgba(255,255,255,0.06)',
+                                            }}>
+                                                <Text style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>
+                                                    {item.sender === 'me' ? 'You' : profileUser?.name || 'Them'} · {new Date(item.timestamp).toLocaleDateString()}
+                                                </Text>
+                                                <Text style={{ color: '#fff', fontSize: 13, marginTop: 2 }} numberOfLines={2}>
+                                                    {item.text}
+                                                </Text>
+                                            </View>
+                                        )}
+                                    />
+                                </View>
+                            )}
+                            {searchQuery.length > 0 && searchResults.length === 0 && (
+                                <Text style={{ color: 'rgba(255,255,255,0.3)', fontSize: 13, textAlign: 'center', paddingVertical: 12 }}>
+                                    No messages found
+                                </Text>
+                            )}
+                        </View>
+                    )}
+
                     <Text style={styles.sectionTitle}>SHARED MEDIA</Text>
                     
                     {/* Category Tabs */}

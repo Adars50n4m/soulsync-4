@@ -145,10 +145,11 @@ export const storageService = {
         console.log(`[StorageService] Starting upload for: ${uri}`);
         let localUri = uri;
         let r2AuthUnavailable = false;
+        let contentType = 'application/octet-stream';
         try {
             // 1. Resolve URI to local file path
             localUri = await this.resolveUri(uri);
-            const contentType = this.getMimeType(localUri);
+            contentType = this.getMimeType(localUri);
             const ext = localUri.split('.').pop()?.toLowerCase() || 'jpg';
             const fileName = `${folder ? folder + '-' : ''}${Date.now()}.${ext}`;
 
@@ -158,7 +159,7 @@ export const storageService = {
             if (USE_R2) {
                 try {
                     console.log(`[StorageService] Priority: Direct R2 upload to ${bucket}/${folder}`);
-                    const r2Key = await r2StorageService.uploadImage(localUri, bucket, folder, onProgress);
+                    const r2Key = await r2StorageService.uploadImage(localUri, bucket, folder, onProgress, contentType);
                     if (r2Key) {
                         console.log(`[StorageService] Direct R2 success: ${r2Key}`);
                         return r2Key;
@@ -187,7 +188,10 @@ export const storageService = {
 
             // 3. Final fallback: Get Presigned PUT URL from Node Server
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout for presign
+            const timeoutId = setTimeout(() => {
+                console.warn(`[StorageService] Presign request timed out for: ${fileName}`);
+                controller.abort();
+            }, 30000); // 30s timeout for presign
 
             const { success, data, error } = await safeFetchJson<{ presignedUrl: string, key: string }>(
                 `${SERVER_URL}/api/media/presign-upload`, 
@@ -197,14 +201,17 @@ export const storageService = {
                     body: JSON.stringify({ fileName, contentType }),
                     signal: controller.signal
                 }
-            ).finally(() => clearTimeout(timeoutId));
+            ).catch(err => {
+                if (err.name === 'AbortError') throw new Error('Request timed out (30s)');
+                throw err;
+            }).finally(() => clearTimeout(timeoutId));
             
             if (!success || !data) {
                 console.warn(`[StorageService] Presign failed (${error}). Falling back to Direct R2.`);
                 // Fallback to direct R2 worker if server fails
                 if (!r2AuthUnavailable) {
                     try {
-                        return await r2StorageService.uploadImage(localUri, bucket, folder);
+                        return await r2StorageService.uploadImage(localUri, bucket, folder, undefined, contentType);
                     } catch (fallbackErr: any) {
                         console.warn('[StorageService] Fallback also failed:', fallbackErr.message);
                     }
@@ -255,7 +262,7 @@ export const storageService = {
             if (isNetworkLikeError(e) && !r2AuthUnavailable) {
                try {
                  console.log(`[StorageService] Emergency R2 fallback for: ${localUri}`);
-                 return await r2StorageService.uploadImage(localUri, bucket, folder);
+                 return await r2StorageService.uploadImage(localUri, bucket, folder, undefined, contentType);
                } catch (finalErr) {
                  console.warn('[StorageService] Emergency fallback failed:', finalErr);
                }
@@ -287,6 +294,7 @@ export const storageService = {
         }
 
         try {
+            // Check local cache first
             if (messageId) {
                 const cachedPath = await offlineService.getMediaDownload(messageId);
                 if (cachedPath) {
@@ -297,23 +305,31 @@ export const storageService = {
 
             const ext = r2Key.split('.').pop()?.split('?')[0] || 'jpg';
             const inferredType = mediaType || soulFolderService.inferMediaType(ext);
-            
-            const { success, data } = await safeFetchJson<{ presignedUrl: string }>(
-                `${SERVER_URL}/api/media/presign-download`, 
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ key: r2Key })
-                }
-            );
 
-            let downloadUrl = data?.presignedUrl;
+            let downloadUrl: string | undefined;
 
-            if (!success || !downloadUrl) {
-                if (R2_PUBLIC_BASE) {
-                    downloadUrl = `${R2_PUBLIC_BASE}/${r2Key}`;
-                } else {
-                    return r2Key.startsWith('http') ? r2Key : null;
+            // For direct HTTP URLs, use them directly as download source (skip presign)
+            if (r2Key.startsWith('http')) {
+                downloadUrl = r2Key;
+            } else {
+                // For R2 keys, get a presigned URL
+                const { success, data } = await safeFetchJson<{ presignedUrl: string }>(
+                    `${SERVER_URL}/api/media/presign-download`,
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ key: r2Key })
+                    }
+                );
+
+                downloadUrl = data?.presignedUrl;
+
+                if (!success || !downloadUrl) {
+                    if (R2_PUBLIC_BASE) {
+                        downloadUrl = `${R2_PUBLIC_BASE}/${r2Key}`;
+                    } else {
+                        return null;
+                    }
                 }
             }
 
@@ -379,6 +395,7 @@ export const storageService = {
 
             // Perform download from provided signedUrl
             const downloadRes = await FileSystem.downloadAsync(signedUrl, localPath);
+
             console.log(`[StorageService] Downloaded status ${statusId} to ${downloadRes.uri}`);
             return downloadRes.uri;
         } catch (e) {

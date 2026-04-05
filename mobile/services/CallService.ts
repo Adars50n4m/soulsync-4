@@ -74,7 +74,7 @@ class CallService {
     private roomSubscribeCallbacks: (() => void)[] = [];
     private signalBuffer: CallSignal[] = [];
     private callTimeoutTimer: NodeJS.Timeout | null = null;
-    private readonly CALL_TIMEOUT_MS = 45000; // 45 seconds timeout
+    private readonly CALL_TIMEOUT_MS = 60000; // 60 seconds timeout
     private reconnectTimer: NodeJS.Timeout | null = null;
     private personalChannelSubscribed: boolean = false;
     private processedSignalIds: Set<string> = new Set();

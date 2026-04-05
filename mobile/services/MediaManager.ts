@@ -118,6 +118,7 @@ export const downloadMedia = async (
   const destPath = destDir + filename;
 
   const result = await FileSystem.downloadAsync(url, destPath);
+  
   console.log(`[MediaManager] Downloaded: ${filename}`);
   return result.uri;
 };

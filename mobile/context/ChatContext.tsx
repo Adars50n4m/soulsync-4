@@ -5,6 +5,7 @@ import { proxySupabaseUrl, SERVER_URL, safeFetchJson } from '../config/api';
 import { chatService, type ChatMessage } from '../services/ChatService';
 import { offlineService, type QueuedMessage } from '../services/LocalDBService';
 import { soulFolderService } from '../services/SoulFolderService';
+import { downloadQueue } from '../services/DownloadQueueService';
 import { useAuth } from './AuthContext';
 import { type Contact, type Message } from '../types';
 
@@ -119,6 +120,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await Promise.race([
         offlineService.initialize(),
         soulFolderService.init(),
+        downloadQueue.init(),
         new Promise<void>((resolve) => setTimeout(() => {
           console.warn(`[ChatContext] Offline DB/Folder init timed out after ${Date.now() - start}ms, moving on`);
           resolve();
@@ -179,7 +181,13 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         new Promise<any[]>((resolve) => setTimeout(() => resolve([]), dbQueryTimeout))
       ]) as any[];
 
-      const grouped = (localMessages || []).reduce((acc: Record<string, Message[]>, row: any) => {
+      // If timeout fired and returned empty, don't overwrite existing messages in state
+      if (!localMessages || localMessages.length === 0) {
+        console.warn('[ChatContext] No local messages returned (timeout or empty DB), preserving existing state');
+        return;
+      }
+
+      const grouped = (localMessages).reduce((acc: Record<string, Message[]>, row: any) => {
         const normalizedChatId = LEGACY_TO_UUID[row.chatId] || row.chatId;
         if (!acc[normalizedChatId]) acc[normalizedChatId] = [];
         acc[normalizedChatId].push(mapQueuedMessage(row));
@@ -413,6 +421,21 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     upsertMessage(partnerId, normalized);
     updateContactPreview(partnerId, normalized);
+
+    // WhatsApp-style: pre-fetch media in background when message arrives
+    if (normalized.media?.url && !normalized.localFileUri) {
+      const mediaUrl = normalized.media.url;
+      if (!mediaUrl.startsWith('file:') && !mediaUrl.startsWith('data:')) {
+        downloadQueue.enqueue(normalized.id, mediaUrl, normalized.media.type, false, 2, false)
+          .then((result) => {
+            if (result.success && result.localUri) {
+              // Update state so UI picks up the local file
+              upsertMessage(partnerId, { ...normalized, localFileUri: result.localUri });
+            }
+          })
+          .catch(() => {}); // Non-blocking background download
+      }
+    }
   }, [currentUser, updateContactPreview, upsertMessage]);
 
   const handleStatusUpdate = useCallback((messageId: string, status: ChatMessage['status'], newId?: string) => {
@@ -607,13 +630,13 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [currentUser]);
 
-  const sendChatMessage = useCallback(async (chatId: string, text: string, media?: Message['media'], replyTo?: string, localUri?: string) => {
+  const sendChatMessage = useCallback(async (chatId: string, text: string, media?: Message['media'], replyTo?: string, localUri?: string, id?: string) => {
     if (!currentUser) return;
     if (activeChatIdRef.current !== chatId) {
       await initializeChatSession(chatId);
     }
 
-    const sent = await chatService.sendMessage(chatId, text, media, replyTo, localUri);
+    const sent = await chatService.sendMessage(chatId, text, media, replyTo, localUri, id);
     if (sent) {
       const normalized = mapChatMessage(sent, currentUser.id);
       upsertMessage(chatId, normalized);
@@ -676,29 +699,38 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const deleteMessage = useCallback(async (chatId: string, messageId: string) => {
-    const current = messages[chatId]?.find(m => m.id === messageId);
-    
-    // Within 5 minutes and I am the sender -> DELETE FOR EVERYONE
-    if (current && current.sender === 'me' && isWithinEditWindow(current.timestamp)) {
-      console.log(`[ChatContext] Deleting for everyone: ${messageId}`);
-      await chatService.requestDeleteForEveryone(messageId);
-      // Fall through to local delete
-    } else {
-      console.log(`[ChatContext] Deleting for me only: ${messageId}`);
+    // Read current message from state updater to avoid depending on `messages`
+    let current: Message | undefined;
+    setMessages((prev) => {
+      current = prev[chatId]?.find(m => m.id === messageId);
+      return {
+        ...prev,
+        [chatId]: (prev[chatId] || []).filter((message) => message.id !== messageId),
+      };
+    });
+
+    try {
+      if (current && current.sender === 'me' && isWithinEditWindow(current.timestamp)) {
+        await chatService.requestDeleteForEveryone(messageId);
+      } else {
+        await chatService.deleteMessageFromServer(messageId);
+      }
+    } catch (e) {
+      console.warn('[ChatContext] Server deletion failed, proceeding with local-only delete:', e);
     }
 
-    setMessages((prev) => ({
-      ...prev,
-      [chatId]: (prev[chatId] || []).filter((message) => message.id !== messageId),
-    }));
     await offlineService.deleteMessage(messageId);
-  }, [messages]);
+  }, []);
 
   const toggleHeart = useCallback(async (chatId: string, messageId: string) => {
-    const current = messages[chatId]?.find((message) => message.id === messageId);
-    const nextEmoji = current?.reactions?.[0] === '❤️' ? null : '❤️';
+    let nextEmoji: string | null = null;
+    setMessages((prev) => {
+      const current = prev[chatId]?.find((message) => message.id === messageId);
+      nextEmoji = current?.reactions?.[0] === '❤️' ? null : '❤️';
+      return prev; // no mutation, just reading
+    });
     await addReaction(chatId, messageId, nextEmoji);
-  }, [addReaction, messages]);
+  }, [addReaction]);
 
   const sendTyping = useCallback((isTyping: boolean) => {
     if (!currentUser || !otherUser) return;
@@ -710,6 +742,16 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [currentUser, otherUser]);
 
   const clearChatMessages = useCallback(async (partnerId: string) => {
+    if (!currentUser) return;
+    
+    try {
+      // 1. Remote Clear (Supabase + R2)
+      await chatService.clearServerMessages(currentUser.id, partnerId);
+    } catch (e) {
+      console.error('[ChatContext] clearServerMessages failed:', e);
+    }
+
+    // 2. Local Clear
     await offlineService.clearChat(partnerId);
     setMessages((prev) => ({ ...prev, [partnerId]: [] }));
     setContacts((prev) =>
@@ -719,7 +761,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
           : contact
       )
     );
-  }, []);
+  }, [currentUser]);
 
   const archiveContact = useCallback(async (partnerId: string, archive: boolean = true) => {
     await offlineService.setContactArchived(partnerId, archive);

@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ⬆️  Bump this number every time you change the schema.
-const DB_TARGET_VERSION = 27;
+const DB_TARGET_VERSION = 29;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper — read the stored schema version (returns 0 if brand-new install)
@@ -894,45 +894,68 @@ async function migration_v26(db: any): Promise<void> {
 }
 
 
-// Helper to safely add a column if it doesn't exist
-async function safeAddColumn(db: any, table: string, column: string, type: string, defVal?: string): Promise<void> {
-    try {
-        // We use a safe check by trying to select the column first or checking table_info
-        const info = await db.getAllAsync(`PRAGMA table_info(${table});`);
-        const exists = (info as any[]).some(col => col.name === column);
-        if (!exists) {
-            console.log(`[SQLite] Repair: Adding missing column ${column} to ${table}`);
-            await db.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${type} ${defVal ? 'DEFAULT ' + defVal : ''};`);
+// MIGRATION v28 — Disappearing messages (Signal-style)
+async function migration_v28(db: any): Promise<void> {
+    const safeAlter = async (col: string, type: string, defVal?: string) => {
+        try {
+            await db.execAsync(`ALTER TABLE messages ADD COLUMN ${col} ${type}${defVal ? ' DEFAULT ' + defVal : ''};`);
+        } catch (e: any) {
+            if (e?.message?.includes('duplicate column')) return;
         }
-    } catch (e: any) {
-        const msg = e?.message || String(e);
-        if (!msg.includes('duplicate column name') && !msg.includes('already exists')) {
-            console.warn(`[SQLite] Repair helper WARN for ${table}.${column}:`, msg);
-        }
-    }
+    };
+
+    // expires_at: when the message should be deleted (NULL = never)
+    await safeAlter('expires_at', 'INTEGER');
+    // expire_timer: per-chat timer setting in seconds (0 = off)
+    await safeAlter('expire_timer', 'INTEGER', '0');
+    // expire_started_at: when the timer started (read time for read-receipts, send time for sent)
+    await safeAlter('expire_started_at', 'INTEGER');
+
+    // Add chat-level disappearing message setting
+    await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS chat_settings (
+            chat_id TEXT PRIMARY KEY,
+            disappearing_timer INTEGER DEFAULT 0,
+            updated_at TEXT
+        );
+    `).catch(() => {});
+
+    // Index for efficient cleanup queries
+    await db.execAsync(`CREATE INDEX IF NOT EXISTS idx_messages_expires ON messages(expires_at) WHERE expires_at IS NOT NULL;`).catch(() => {});
+
+    console.log('[SQLite] Migration v28: Disappearing messages support');
+}
+
+// MIGRATION v29 — Persistent Job Queue (Signal JobManager pattern)
+async function migration_v29(db: any): Promise<void> {
+    await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS job_queue (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            priority INTEGER DEFAULT 0,
+            state TEXT DEFAULT 'pending',
+            payload TEXT,
+            retry_count INTEGER DEFAULT 0,
+            max_retries INTEGER DEFAULT 5,
+            next_run_at INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            error TEXT
+        );
+    `);
+    await db.execAsync(`CREATE INDEX IF NOT EXISTS idx_jobs_state_priority ON job_queue(state, priority DESC, next_run_at);`);
+    console.log('[SQLite] Migration v29: Persistent job queue');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN EXPORT — call this once in your app's DB initialisation
 // ─────────────────────────────────────────────────────────────────────────────
 export const MIGRATE_DB = async (db: any): Promise<void> => {
-  console.log('[!!! DATABASE !!!] MIGRATE_DB called.');
-  
-  // ── EMERGENCY REPAIR ────────────────────────────────────────────────────────
-  // Sometimes migrations fail to detect version drift. We force check the 
-  // most critical column causing the current crashes.
-  try {
-    console.log('[!!! DATABASE !!!] Running Emergency Repair Check...');
-    await safeAddColumn(db, 'cached_statuses', 'media_key', 'TEXT');
-    await safeAddColumn(db, 'pending_uploads', 'media_key', 'TEXT');
-    console.log('[!!! DATABASE !!!] Emergency Repair Check Complete.');
-  } catch (repairErr) {
-    console.warn('[!!! DATABASE !!!] Emergency Repair failed (ignoring):', repairErr);
-  }
+  console.log('[SQLite] MIGRATE_DB called.');
 
   let currentVersion = await getCurrentVersion(db);
   console.log(
-    `[!!! DATABASE !!!] DB version: ${currentVersion}, target: ${DB_TARGET_VERSION}`
+    `[SQLite] DB version: ${currentVersion}, target: ${DB_TARGET_VERSION}`
   );
 
   if (currentVersion >= DB_TARGET_VERSION) {
@@ -976,6 +999,8 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
         case 25: await migration_v25(db); break;
         case 26: await migration_v26(db); break;
         case 27: /* placeholder */ break;
+        case 28: await migration_v28(db); break;
+        case 29: await migration_v29(db); break;
         default:
           console.error(`[SQLite] No migration logic for v${nextVersion}!`);
       }

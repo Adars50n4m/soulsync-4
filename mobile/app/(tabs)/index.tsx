@@ -24,6 +24,7 @@ import { useRouter, useNavigation } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import GlassView from '../../components/ui/GlassView';
+import ConnectionBanner from '../../components/ConnectionBanner';
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, {
   useSharedValue,
@@ -484,6 +485,28 @@ export default function HomeScreen() {
   const [chatFilter, setChatFilter] = useState<'all' | 'unread'>('all');
   const [pinnedChatIds, setPinnedChatIds] = useState<string[]>([]);
   const [mutedChatIds, setMutedChatIds] = useState<string[]>([]);
+
+  // Load persisted pin/mute on mount
+  useEffect(() => {
+    AsyncStorage.getItem('ss_pinned_chats').then(v => { if (v) setPinnedChatIds(JSON.parse(v)); });
+    AsyncStorage.getItem('ss_muted_chats').then(v => { if (v) setMutedChatIds(JSON.parse(v)); });
+  }, []);
+
+  const togglePinChat = useCallback((chatId: string) => {
+    setPinnedChatIds(prev => {
+      const next = prev.includes(chatId) ? prev.filter(id => id !== chatId) : [...prev, chatId];
+      AsyncStorage.setItem('ss_pinned_chats', JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const toggleMuteChat = useCallback((chatId: string) => {
+    setMutedChatIds(prev => {
+      const next = prev.includes(chatId) ? prev.filter(id => id !== chatId) : [...prev, chatId];
+      AsyncStorage.setItem('ss_muted_chats', JSON.stringify(next));
+      return next;
+    });
+  }, []);
   
   const hasFocusedOnce = useRef(false);
   const statusRailOpacity = useSharedValue(0); // Start at 0, fade in when ready/focused
@@ -798,8 +821,13 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
   }, [contacts, messages, statuses, currentUser]);
 
   const filteredVisibleContacts = useMemo(() => {
-    return visibleContacts;
-  }, [visibleContacts]);
+    // Sort pinned chats to top (Signal/WhatsApp style)
+    return [...visibleContacts].sort((a, b) => {
+      const aPinned = pinnedChatIds.includes(a.id) ? 1 : 0;
+      const bPinned = pinnedChatIds.includes(b.id) ? 1 : 0;
+      return bPinned - aPinned; // pinned first
+    });
+  }, [visibleContacts, pinnedChatIds]);
 
   const contactsWithStories = useMemo(() => {
     return visibleContacts.filter(c => contactStatusGroupsMap.has(c.id));
@@ -1141,7 +1169,16 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
             unreadCount={item.unreadCount}
             isMuted={mutedChatIds.includes(item.id)}
             isPinned={pinnedChatIds.includes(item.id)}
-            onLongPress={() => {}}
+            onLongPress={() => {
+                const isPinned = pinnedChatIds.includes(item.id);
+                const isMuted = mutedChatIds.includes(item.id);
+                Alert.alert(item.name || 'Chat', undefined, [
+                    { text: isPinned ? 'Unpin' : 'Pin to top', onPress: () => togglePinChat(item.id) },
+                    { text: isMuted ? 'Unmute' : 'Mute', onPress: () => toggleMuteChat(item.id) },
+                    { text: 'Archive', onPress: () => archiveContact(item.id), style: 'destructive' },
+                    { text: 'Cancel', style: 'cancel' },
+                ]);
+            }}
             getPresence={getPresence}
             connectivity={connectivity}
             onSelect={handleUserSelect}
@@ -1264,27 +1301,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
       
-      {/* Offline Connectivity Banner */}
-      {(!connectivity.isDeviceOnline || !connectivity.isServerReachable) && (
-        <Animated.View 
-          entering={FadeIn} 
-          exiting={FadeOut}
-          style={{
-            backgroundColor: 'rgba(239, 68, 68, 0.9)', // Red-500 with slight glass effect
-            paddingVertical: 4,
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 2000,
-          }}
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <MaterialIcons name="wifi-off" size={14} color="#fff" style={{ marginRight: 6 }} />
-            <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700', letterSpacing: 0.5 }}>
-              OFFLINE MODE
-            </Text>
-          </View>
-        </Animated.View>
-      )}
+      <ConnectionBanner connectivity={connectivity} mode="inline" />
 
       <Animated.View pointerEvents="none" style={[styles.refreshContainer, refreshContainerStyle]}>
         <Animated.View style={[styles.refreshPill, refreshPillStyle]}>

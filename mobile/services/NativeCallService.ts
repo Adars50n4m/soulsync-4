@@ -89,12 +89,6 @@ class NativeCallService {
     // This is a dangerous permission and MUST be requested at runtime
     if (Platform.OS === 'android') {
       try {
-        // Only request permissions if the app is in the foreground to prevent crashes
-        if (AppState.currentState !== 'active') {
-          console.log('[NativeCallService] App not active, skipping permission request');
-          return;
-        }
-
         const { PermissionsAndroid } = require('react-native');
         const permissions = [
           PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
@@ -105,11 +99,24 @@ class NativeCallService {
         if (PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS) {
           permissions.push(PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS);
         }
-        console.log('[NativeCallService] Requesting required permissions at runtime...');
-        const granted = await PermissionsAndroid.requestMultiple(permissions);
-        console.log('[NativeCallService] Permissions result:', granted);
+
+        if (AppState.currentState === 'active') {
+          // Foreground: request permissions now
+          console.log('[NativeCallService] Requesting required permissions at runtime...');
+          const granted = await PermissionsAndroid.requestMultiple(permissions);
+          console.log('[NativeCallService] Permissions result:', granted);
+        } else {
+          // Background: check if already granted, don't block init
+          console.log('[NativeCallService] App not active, checking existing permissions...');
+          const audioGranted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+          if (!audioGranted) {
+            console.warn('[NativeCallService] RECORD_AUDIO not granted — background calls may fail. Will re-request on foreground.');
+          }
+          // Continue with init — permissions will be requested when app comes to foreground
+        }
       } catch (e) {
         console.warn('[NativeCallService] Failed to request permissions:', e);
+        // Don't return — continue with init so call infrastructure is ready
       }
     }
 

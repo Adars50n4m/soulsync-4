@@ -147,19 +147,23 @@ export const ChatStyles = StyleSheet.create({
     },
     mediaGridSurface: {
         width: Math.min(SCREEN_WIDTH * 0.65, 280),
+        padding: 2,
     },
-    mediaGrid: {
+    mediaGridRow: {
         flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 4,
+        marginBottom: 3,
+    },
+    mediaGridRowLast: {
+        marginBottom: 0,
     },
     mediaGridNoGap: {
         marginBottom: 0,
     },
     mediaGridTile: {
-        width: (Math.min(SCREEN_WIDTH * 0.65, 280) - 4) / 2,
-        aspectRatio: 1,
-        borderRadius: 12,
+        width: (Math.min(SCREEN_WIDTH * 0.65, 280) - 7) / 2, // fixed half-width, always
+        height: (Math.min(SCREEN_WIDTH * 0.65, 280) - 7) / 2, // 1:1 square
+        marginHorizontal: 1.5,
+        borderRadius: 10,
         overflow: 'hidden',
         backgroundColor: 'rgba(255,255,255,0.08)',
     },

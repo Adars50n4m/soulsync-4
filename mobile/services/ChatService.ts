@@ -130,6 +130,13 @@ class ChatService {
     onDeleteMessage?: (messageId: string) => void
   ): Promise<void> {
     if (this.isInitialized && this.userId === userId && this.partnerId === partnerId) {
+      // Same session — just refresh callback references to avoid stale closures
+      this.onNewMessage          = onMessage;
+      this.onStatusUpdate        = onStatus;
+      this.onNetworkStatusChange = onNetworkStatus ?? null;
+      this.onUploadProgressCb    = onUploadProgress ?? null;
+      this.onAcknowledgment      = onAcknowledgment ?? null;
+      this.onDeleteMessage       = onDeleteMessage ?? null;
       return;
     }
 
@@ -502,12 +509,14 @@ class ChatService {
     }
   }
 
+  private isFetchingMissed = false;
   private async fetchMissedMessages(): Promise<void> {
+    if (this.isFetchingMissed) return;
     if (!this.userId || !this.partnerId) return;
+    this.isFetchingMissed = true;
     try {
       // 1. Get the latest message timestamp from local DB to avoid redundant fetching
-      const localMessages = await offlineService.getMessages(this.partnerId, 1);
-      const latestLocalTimestamp = localMessages.length > 0 ? localMessages[0].timestamp : null;
+      const latestLocalTimestamp = await offlineService.getLatestMessageTimestamp(this.partnerId);
       
       let query = supabase
         .from('messages')
@@ -559,6 +568,8 @@ class ChatService {
       }
     } catch (e) {
       console.warn('[ChatService] fetchMissedMessages error:', e);
+    } finally {
+      this.isFetchingMissed = false;
     }
   }
 
@@ -570,7 +581,7 @@ class ChatService {
     return true;
   }
 
-  async sendMessage(chatId: string, text: string, media?: ChatMessage['media'], replyTo?: string, localUri?: string): Promise<ChatMessage | null> {
+  async sendMessage(chatId: string, text: string, media?: ChatMessage['media'], replyTo?: string, localUri?: string, id?: string): Promise<ChatMessage | null> {
     if (!this.userId) {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
@@ -582,7 +593,7 @@ class ChatService {
     const targetChatId = chatId || this.partnerId;
     if (!this.userId || !targetChatId) return null;
 
-    const messageId = Crypto.randomUUID();
+    const messageId = id || Crypto.randomUUID();
     const timestamp = new Date().toISOString();
 
     // WHATSAPP PATTERN: Move media to 'Sent' folder immediately for local-first persistence
@@ -594,8 +605,6 @@ class ChatService {
             await FileSystem.copyAsync({ from: localUri, to: destPath });
             finalLocalUri = destPath;
             console.log(`[ChatService] Media moved to local Sent folder: ${destPath}`);
-            // WhatsApp-style: also register in device gallery under "Soul Images Sent" / "Soul Videos Sent"
-            soulFolderService.saveToDeviceGallery(destPath, media.type as any, true).catch(() => {});
         } catch (e) {
             console.warn('[ChatService] Failed to move media to Sent folder:', e);
         }
@@ -653,9 +662,59 @@ class ChatService {
     return pending.filter(m => m.chatId === chatId).length;
   }
 
+  async deleteMessageFromServer(messageId: string): Promise<void> {
+    try {
+      // 1. Get the message to see if it has media
+      const { data: msg } = await supabase.from('messages').select('media_url').eq('id', messageId).single();
+      if (msg?.media_url) {
+        // Extract key and delete from storage
+        const mediaKey = msg.media_url.split('/').pop();
+        if (mediaKey) {
+          await storageService.deleteMedia(mediaKey);
+        }
+      }
+      // 2. Delete from Supabase
+      await supabase.from('messages').delete().eq('id', messageId);
+      // 3. Delete from Local DB
+      await offlineService.deleteMessage(messageId);
+    } catch (e) {
+      console.warn('[ChatService] Failed to delete message from server/storage:', e);
+      // Fallback: at least try to delete from local DB if not already
+      await offlineService.deleteMessage(messageId);
+    }
+  }
+
   async clearServerMessages(userId: string, partnerId: string): Promise<void> {
-    await supabase.from('messages').delete().or(`and(sender.eq.${userId},receiver.eq.${partnerId}),and(sender.eq.${partnerId},receiver.eq.${userId})`);
-    await offlineService.clearChat(partnerId);
+    try {
+      // 1. Fetch messages with media to clean up storage
+      const { data: mediaMessages } = await supabase
+        .from('messages')
+        .select('media_url')
+        .or(`and(sender.eq.${userId},receiver.eq.${partnerId}),and(sender.eq.${partnerId},receiver.eq.${userId})`)
+        .not('media_url', 'is', null);
+
+      if (mediaMessages && mediaMessages.length > 0) {
+        for (const msg of mediaMessages) {
+          if (msg.media_url) {
+            const mediaKey = msg.media_url.split('/').pop();
+            if (mediaKey) {
+              await storageService.deleteMedia(mediaKey).catch(() => {});
+            }
+          }
+        }
+      }
+
+      // 2. Delete from Supabase
+      await supabase
+        .from('messages')
+        .delete()
+        .or(`and(sender.eq.${userId},receiver.eq.${partnerId}),and(sender.eq.${partnerId},receiver.eq.${userId})`);
+
+      // 3. Clear Local Chat
+      await offlineService.clearChat(partnerId);
+    } catch (e) {
+      console.error('[ChatService] clearServerMessages failed:', e);
+    }
   }
 
   private mapDbRowToChatMessage(row: any): ChatMessage {
@@ -710,6 +769,7 @@ class ChatService {
     this.stopMessagePolling();
     if (this.networkListenerCleanup) { this.networkListenerCleanup(); this.networkListenerCleanup = null; }
     if (this.channel) { const oldChannel = this.channel; this.channel = null; supabase.removeChannel(oldChannel).catch(() => {}); }
+    this.onNewMessage = null; this.onStatusUpdate = null; this.onNetworkStatusChange = null; this.onUploadProgressCb = null; this.onAcknowledgment = null; this.onDeleteMessage = null;
     this.isInitialized = false; this.userId = null; this.partnerId = null; this.isDeviceOnline = true; this.isServerReachable = true; this.lastPollAt = null;
     this.realtimeRetryCount = 0; this.isReconnecting = false; this.isRealtimeConnecting = false;
     if (this.realtimeRetryTimer) { clearTimeout(this.realtimeRetryTimer); this.realtimeRetryTimer = null; }

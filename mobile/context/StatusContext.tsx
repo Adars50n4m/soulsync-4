@@ -5,6 +5,7 @@ import { statusService } from '../services/StatusService';
 import { UserStatusGroup, CachedStatus, PendingUpload } from '../types';
 import NetInfo from '@react-native-community/netinfo';
 import { useAuth } from './AuthContext';
+import { supabase } from '../config/supabase';
 
 interface StatusContextType {
   statusGroups: UserStatusGroup[];
@@ -47,7 +48,9 @@ export const StatusProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Background Sync: Download all media for truly offline access
       const userId = (await statusService.resolveStatusActor())?.id;
       if (userId) {
-        statusService.syncAllStatusMedia(userId, groups).catch(() => {});
+        statusService.syncAllStatusMedia(userId, groups).catch((e) => {
+          console.warn('[StatusContext] Background media sync failed:', e);
+        });
       }
     } catch (e) {
       console.error('[StatusContext] Refresh error:', e);
@@ -127,36 +130,55 @@ export const StatusProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     init();
 
+    // Refresh on every app resume — users expect fresh status feed instantly
     const subscription = AppState.addEventListener('change', (nextAppState) => {
       if (nextAppState === 'active') {
-        const now = Date.now();
-        const FIVE_MINUTES = 5 * 60 * 1000;
-        
-        // Only refresh if it's been more than 5 minutes since last background
-        if (lastBackgroundTime.current > 0 && (now - lastBackgroundTime.current > FIVE_MINUTES)) {
-          console.log('[StatusContext] App returned to foreground after 5+ mins, refreshing...');
-          void refreshStatuses();
-        }
-        lastBackgroundTime.current = 0;
-      } else if (nextAppState === 'background' || nextAppState === 'inactive') {
-        lastBackgroundTime.current = Date.now();
+        void refreshStatuses();
+        void syncPendingUploads();
       }
     });
+
+    // Real-time: listen for new statuses from other users
+    const realtimeChannel = supabase
+      .channel('status_feed_realtime')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'statuses' },
+        () => {
+          console.log('[StatusContext] New status detected via Realtime, refreshing feed...');
+          void refreshStatuses();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'statuses' },
+        () => {
+          void refreshStatuses();
+        }
+      )
+      .subscribe();
 
     return () => {
       isMounted = false;
       subscription.remove();
+      supabase.removeChannel(realtimeChannel);
     };
   }, [isReady, refreshPendingUploads, refreshStatuses, syncPendingUploads]);
 
   useEffect(() => {
-    if (pendingUploads.length === 0) {
-      return;
-    }
+    if (pendingUploads.length === 0) return;
 
+    let retryCount = 0;
+    const MAX_RETRIES = 10;
     const retryInterval = setInterval(() => {
+      if (retryCount >= MAX_RETRIES) {
+        console.warn('[StatusContext] Max retry attempts reached, stopping auto-sync');
+        clearInterval(retryInterval);
+        return;
+      }
+      retryCount++;
       void syncPendingUploads();
-    }, 8000);
+    }, 15000); // 15s between retries instead of 8s
 
     return () => clearInterval(retryInterval);
   }, [isReady, pendingUploads.length, syncPendingUploads]);
