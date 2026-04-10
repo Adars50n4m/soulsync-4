@@ -135,11 +135,27 @@ function withAndroidCallingPlugin(config) {
     const contents = config.modResults.contents;
     
     // Add Google services plugin if not present
-    if (!contents.includes("apply plugin: 'com.google.gms.google-services'")) {
-      config.modResults.contents = contents.replace(
-        "apply plugin: 'com.android.application'",
-        "apply plugin: 'com.android.application'\napply plugin: 'com.google.gms.google-services'"
-      );
+    if (
+      !contents.includes("apply plugin: 'com.google.gms.google-services'") &&
+      !contents.includes('apply plugin: "com.google.gms.google-services"')
+    ) {
+      let updated = contents;
+
+      if (updated.includes('apply plugin: "com.android.application"')) {
+        updated = updated.replace(
+          'apply plugin: "com.android.application"',
+          'apply plugin: "com.android.application"\napply plugin: "com.google.gms.google-services"'
+        );
+      } else if (updated.includes("apply plugin: 'com.android.application'")) {
+        updated = updated.replace(
+          "apply plugin: 'com.android.application'",
+          "apply plugin: 'com.android.application'\napply plugin: 'com.google.gms.google-services'"
+        );
+      } else {
+        updated = `apply plugin: "com.google.gms.google-services"\n${updated}`;
+      }
+
+      config.modResults.contents = updated;
     }
     
     return config;

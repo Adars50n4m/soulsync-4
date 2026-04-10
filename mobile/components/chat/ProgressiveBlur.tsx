@@ -46,6 +46,9 @@ function ProgressiveBlur({
         };
     });
 
+    // Boost maxAlpha on Android to compensate for lack of physical blur
+    const effectiveMaxAlpha = isAndroid ? Math.min(1, maxAlpha * 1.1) : maxAlpha;
+
     // High-fidelity gradient mask — 32 stops for seamless blending
     const STOPS = 32;
     const gradColors: string[] = [];
@@ -53,10 +56,11 @@ function ProgressiveBlur({
     for (let i = 0; i <= STOPS; i++) {
         const t = i / STOPS;
         const e = t * t * (3 - 2 * t);
-        const alpha = isBottom ? e * maxAlpha : (1 - e) * maxAlpha;
+        const alpha = isBottom ? e * effectiveMaxAlpha : (1 - e) * effectiveMaxAlpha;
         gradColors.push(`rgba(${base},${alpha.toFixed(3)})`);
         gradLocs.push(t);
     }
+
 
     return (
         <View

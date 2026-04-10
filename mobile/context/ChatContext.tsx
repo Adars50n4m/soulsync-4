@@ -281,7 +281,20 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
               const pId = LEGACY_TO_UUID[p.id] || p.id;
               return pId !== myUuid;
             })
-            .map(normalizeContact);
+            .map(p => {
+              const n = normalizeContact(p);
+              // PRESERVE local state from the already-hydrated contacts
+              const existing = contactsRef.current.find(c => c.id === n.id);
+              if (existing) {
+                return {
+                  ...existing,
+                  ...n,
+                  localAvatarUri: n.localAvatarUri || existing.localAvatarUri,
+                  avatarUpdatedAt: n.avatarUpdatedAt || existing.avatarUpdatedAt,
+                };
+              }
+              return n;
+            });
           contactsRef.current = normalized;
           setContacts(normalized);
           

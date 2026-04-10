@@ -8,7 +8,6 @@ import { FlashList } from '@shopify/flash-list';
 
 import { useRouter, useNavigation } from 'expo-router';
 import GlassView from '../components/ui/GlassView';
-import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, { 
@@ -393,12 +392,13 @@ export default function MusicScreen() {
             if (apiUrl) {
                 fetch(`${apiUrl}/songs/${song.id}/suggestions?limit=10`)
                     .then(r => r.ok ? r.json() : null)
-                    .then(data => {
+                    .then((data: any) => {
                         if (data?.data) {
                             const recs = data.data.map((s: any) => transformSong(s)).filter(Boolean);
                             setRecommendedSongs(recs);
                         }
                     })
+
                     .catch(() => setRecommendedSongs([]));
             }
         } else {
@@ -692,23 +692,10 @@ export default function MusicScreen() {
             
             {/* Combined Backdrop: Glass blur over chat screen — chat visible underneath */}
             <Animated.View style={[StyleSheet.absoluteFill, backdropBlurOpacity, { zIndex: 40 }]}>
-                {Platform.OS === 'android' ? (
-                    <>
-                        <BlurView
-                            intensity={25}
-                            tint="dark"
-                            style={[StyleSheet.absoluteFill, { backgroundColor: 'transparent' }]}
-                            experimentalBlurMethod="dimezisBlurView"
-                        />
-                        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.35)' }]} />
-                    </>
-                ) : (
-                    <>
-                        <GlassView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
-                        <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.3)' }]} />
-                    </>
-                )}
+                <GlassView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
+                <View style={[StyleSheet.absoluteFill, { backgroundColor: Platform.OS === 'android' ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0.3)' }]} />
             </Animated.View>
+
 
             {/* Transparent Pressable to close the overlay with animation */}
             <Pressable style={[StyleSheet.absoluteFill, { zIndex: 41 }]} onPress={handleClose} />

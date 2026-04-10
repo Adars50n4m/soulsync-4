@@ -27,10 +27,17 @@ export const IncomingCallModal = () => {
     
     // Simplified visibility: Incoming and not yet accepted
     // Added safety check for contactId to prevent phantom calls from showing a black overlay
+    // Simplified visibility: Incoming and not yet accepted
+    // Added safety check for contactId to prevent phantom calls from showing a black overlay
     const isVisible = !!activeCall && !!activeCall.contactId && activeCall.isIncoming && !activeCall.isAccepted;
 
     useEffect(() => {
-        console.log(`[IncomingCallModal] Visibility state changed: ${isVisible}. Call type: ${activeCall?.type}, From: ${activeCall?.contactId}`);
+        if (activeCall) {
+            console.log(`[IncomingCallModal] Active call detected: CID=${activeCall.contactId}, In=${activeCall.isIncoming}, Acc=${activeCall.isAccepted}, Type=${activeCall.type}`);
+            if (!isVisible) {
+                console.warn(`[IncomingCallModal] Modal hidden despite active call: reason=${!activeCall.contactId ? 'no-cid' : !activeCall.isIncoming ? 'not-incoming' : 'already-accepted'}`);
+            }
+        }
     }, [isVisible, activeCall]);
 
     const contactId = activeCall ? normalizeId(activeCall.contactId) : null;

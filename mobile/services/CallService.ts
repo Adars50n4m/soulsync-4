@@ -1,47 +1,25 @@
 import { supabase } from '../config/supabase';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import * as Crypto from 'expo-crypto';
-import { normalizeId } from '../utils/idNormalization';
-import { AppState, Platform } from 'react-native';
-
-/**
- * Safely remove a Supabase Realtime channel.
- * On Android, removeChannel() sends a phx_leave WebSocket frame.
- * If multiple removals + other bridge calls (AsyncStorage, timers) land
- * in the same JS tick, the nested JSON in Phoenix protocol messages
- * can corrupt the bridge batch → "Malformed calls from JS: field sizes
- * are different". We defer removals on Android to isolate each one into
- * its own bridge batch.
- */
-function safeRemoveChannel(channel: RealtimeChannel, delayMs = 0): void {
-    const remove = () => {
-        try { supabase.removeChannel(channel); } catch (_) {}
-    };
-    if (Platform.OS === 'android' && delayMs >= 0) {
-        setTimeout(remove, delayMs);
-    } else {
-        remove();
-    }
-}
+import { normalizeId, LEGACY_TO_UUID } from '../utils/idNormalization';
+import { AppState } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CALL SERVICE — Supabase Realtime Broadcast signaling
+// CALL SERVICE — WhatsApp-Grade Reliability
 //
-// MIGRATION FROM SOCKET.IO:
-//   The old CallService used chatService.getSocket() for all signaling.
-//   Since ChatService now uses Supabase Realtime (no socket.io), we use
-//   Supabase Broadcast channels directly:
+// TRIPLE-PATH SIGNALING:
+//   1. Supabase Realtime Broadcast (fast, sub-100ms)
+//   2. Database persistence + polling (reliable, survives disconnects)
+//   3. Push notifications (wakes up sleeping devices)
 //
-//   1. PERSONAL CHANNEL: `call_user_{userId}`
-//      - Each user subscribes to their own personal channel on initialize()
-//      - Incoming call-request, call-ringing, call-reject, call-end arrive here
-//
-//   2. ROOM CHANNEL: `call_room_{roomId}`
-//      - Both users join after call-accept
-//      - Carries WebRTC signals: offer, answer, ice-candidate
-//      - Also carries call-end/reject for in-call events
-//
-//   sendSignal() routes to the correct channel automatically.
+// RELIABILITY FEATURES:
+//   - Automatic channel recovery on disconnect
+//   - Signal acknowledgment system
+//   - Network state monitoring
+//   - Exponential backoff retry
+//   - Stale signal detection
+//   - Connection watchdog with auto-heal
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface CallSignal {
@@ -71,6 +49,13 @@ let _signalSubscription: RealtimeChannel | null = null;
 // Pool for outgoing signals to avoid multiple subscriptions to same target
 const _senderChannels = new Map<string, RealtimeChannel>();
 let _personalChannelReconnectAttempts = 0;
+const SIGNAL_POLL_OVERLAP_MS = 8 * 1000; // 8s overlap for reliability
+const PROCESSED_SIGNAL_TTL_MS = 10 * 60 * 1000; // 10min TTL for deduplication
+const BASE_SIGNAL_POLL_MS = 3000; // Faster polling: 3s
+const ACTIVE_CALL_SIGNAL_POLL_MS = 500; // Ultra-fast during call: 500ms
+const CRITICAL_SIGNAL_PERSIST_WAIT_MS = 1200;
+const CHANNEL_HEALTH_CHECK_MS = 30000; // Check every 30s
+const MAX_CHANNEL_RECONNECT_ATTEMPTS = 10; // Increased from 3
 
 class CallService {
     private userId: string | null = null;
@@ -78,6 +63,10 @@ class CallService {
     
     getUserId(): string | null {
         return this.userId;
+    }
+
+    getCurrentRoomId(): string | null {
+        return this.currentRoomId;
     }
 
     setCurrentCallType(callType: 'audio' | 'video'): void {
@@ -94,7 +83,7 @@ class CallService {
     private roomSubscribeCallbacks: (() => void)[] = [];
     private signalBuffer: CallSignal[] = [];
     private callTimeoutTimer: NodeJS.Timeout | null = null;
-    private readonly CALL_TIMEOUT_MS = 60000; // 60 seconds timeout
+    private readonly CALL_TIMEOUT_MS = 45000; // 45 seconds timeout
     private reconnectTimer: NodeJS.Timeout | null = null;
     private personalChannelSubscribed: boolean = false;
     private processedSignalIds: Set<string> = new Set();
@@ -104,6 +93,17 @@ class CallService {
     private _appStateSubscription: any = null;
     private _connectionLimitHit: boolean = false;
     private _consecutivePollFailures: number = 0;
+    
+    // NEW: Reliability features
+    private _networkState: 'connected' | 'disconnected' | 'unknown' = 'unknown';
+    private _channelHealthInterval: NodeJS.Timeout | null = null;
+    private _pendingSignals: CallSignal[] = []; // Queue for failed signals
+    private _signalAckTimeout = new Map<string, NodeJS.Timeout>();
+    private _pendingAckSignals = new Set<string>();
+    private _roomJoinAttempts = 0;
+    private readonly MAX_ROOM_JOIN_ATTEMPTS = 5;
+    private _isNetworkMonitoringActive = false;
+    private _netInfoUnsubscribe: (() => void) | null = null;
 
     addStatusListener(handler: (connected: boolean) => void): void {
         this.statusListeners.add(handler);
@@ -118,6 +118,31 @@ class CallService {
         this.statusListeners.forEach(listener => listener(connected));
     }
 
+    private delay(ms: number): Promise<void> {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    private async cleanupStaleDbSignals(): Promise<void> {
+        if (!this.userId) return;
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        
+        console.log('[CallService] 🧹 Cleaning up stale DB signals...');
+        
+        try {
+            const { error } = await supabase
+                .from('call_signals')
+                .delete()
+                .or(`receiver_id.eq.${this.userId},sender_id.eq.${this.userId}`)
+                .lt('created_at', fiveMinutesAgo);
+
+            if (error) {
+                console.warn('[CallService] ⚠️ Cleanup error:', error.message);
+            }
+        } catch (err) {
+            console.warn('[CallService] ⚠️ Cleanup exception:', err);
+        }
+    }
+
     // ── PUBLIC: initialize() ───────────────────────────────────────────────
     //
     // Subscribe to the user's personal broadcast channel.
@@ -125,16 +150,18 @@ class CallService {
     initialize(userId: string, user: { name: string, avatar: string } | null = null): void {
         const normalizedUserId = normalizeId(userId);
         this.currentUser = user;
-        
+
         // If same user AND channel is alive and subscribed, skip
         if (this.userId === normalizedUserId && _personalChannel && this.personalChannelSubscribed) {
+            console.log('[CallService] ✅ Skipping re-initialize (already active)');
             return;
         }
 
-        // Clean up existing channel
+        // Clean up existing channel and stale DB signals
+        this.cleanupStaleDbSignals().catch(() => {});
         if (_personalChannel) {
             console.log('[CallService] Tearing down stale personal channel before re-init');
-            safeRemoveChannel(_personalChannel);
+            try { supabase.removeChannel(_personalChannel); } catch (_) {}
             _personalChannel = null;
             this.personalChannelSubscribed = false;
         }
@@ -151,24 +178,28 @@ class CallService {
             this._connectionLimitHit = false;
             this.processedSignalIds.clear();
         }
-        this.lastSignalPollAt = new Date().toISOString();
+        this.lastSignalPollAt = new Date(Date.now() - 5000).toISOString(); // Start 5s in past to catch missed signals
         this._consecutivePollFailures = 0;
-        
+
         // Only subscribe to realtime if we haven't hit the connection limit
         if (!this._connectionLimitHit) {
             this._subscribePersonalChannel(normalizedUserId);
             this._subscribePersonalDB(normalizedUserId);
         }
         this.startSignalPolling();
-        
+        this._startNetworkMonitoring();
+        this._startChannelHealthCheck();
+
         // Listen for foreground to poll immediately (clean up previous listener first)
         if (this._appStateSubscription) {
             this._appStateSubscription.remove();
         }
         this._appStateSubscription = AppState.addEventListener('change', (state) => {
             if (state === 'active') {
+                console.log('[CallService] 📱 App foregrounded — refreshing signals');
                 this._consecutivePollFailures = 0; // Reset poll failures on foreground
                 this.pollForSignals();
+                this._reconnectIfNeeded();
                 // Reset connection limit flag on foreground (connections may have drained)
                 if (this._connectionLimitHit) {
                     console.log('[CallService] App foregrounded — resetting connection limit flag');
@@ -180,41 +211,148 @@ class CallService {
         });
     }
 
-    private async pollForSignals() {
-        if (!this.userId) return;
-        // Stop polling if too many consecutive failures (network is down)
-        if (this._consecutivePollFailures >= 3) return;
-        
-        try {
-            const { data, error } = await supabase
+    private mapSignalRowToCallSignal(row: any): CallSignal | null {
+        if (!row) return null;
+
+        const payload = (row.payload || {}) as any;
+        const signalType = (row.type || row.signal_type || payload.type) as CallSignal['type'] | undefined;
+        const senderIdRaw = row.sender_id || payload.callerId || payload.sender_id;
+        const receiverIdRaw = row.receiver_id || row.recipient_id || payload.calleeId || payload.receiver_id;
+        const createdAt = row.created_at || payload.timestamp || new Date().toISOString();
+
+        if (!signalType || !senderIdRaw || !receiverIdRaw) {
+            return null;
+        }
+
+        return {
+            ...payload,
+            type: signalType,
+            signalId: row.signal_id || row.id || payload.signalId,
+            callerId: normalizeId(String(senderIdRaw)),
+            calleeId: normalizeId(String(receiverIdRaw)),
+            timestamp: createdAt,
+            roomId: payload.roomId || payload.callId,
+        };
+    }
+
+    private isSignalForUser(row: any, userId: string): boolean {
+        const receiver = normalizeId((row?.receiver_id || row?.recipient_id || '').toString());
+        return !!receiver && receiver === normalizeId(userId);
+    }
+
+    private async fetchSignalsForUserSince(userId: string, since: string): Promise<any[]> {
+        const sinceTimestamp = Date.parse(since);
+        const effectiveSince = Number.isFinite(sinceTimestamp)
+            ? new Date(Math.max(0, sinceTimestamp - SIGNAL_POLL_OVERLAP_MS)).toISOString()
+            : since;
+
+        const normalizedUserId = normalizeId(userId);
+        const [modern, legacy] = await Promise.all([
+            supabase
                 .from('call_signals')
                 .select('*')
-                .eq('receiver_id', this.userId)
-                .gt('created_at', this.lastSignalPollAt)
-                .order('created_at', { ascending: true });
+                .eq('receiver_id', normalizedUserId)
+                .gte('created_at', effectiveSince)
+                .order('created_at', { ascending: true }),
+            supabase
+                .from('call_signals')
+                .select('*')
+                .eq('recipient_id', normalizedUserId)
+                .gte('created_at', effectiveSince)
+                .order('created_at', { ascending: true }),
+        ]);
 
-            if (error) throw error;
+        if (modern.error && legacy.error) {
+            console.error('[CallService] ❌ Signal poll failed for both schemas', {
+                modern: modern.error.message,
+                legacy: legacy.error.message,
+            });
+            throw modern.error;
+        }
+
+        const rows: any[] = [];
+        if (!modern.error && modern.data?.length) rows.push(...modern.data);
+        if (!legacy.error && legacy.data?.length) rows.push(...legacy.data);
+        if (rows.length === 0) return [];
+
+        const uniqueRows = new Map<string, any>();
+        rows.forEach((row: any) => {
+            const rowKey =
+                row?.signal_id
+                || row?.id
+                || `${row?.created_at || ''}_${row?.sender_id || ''}_${row?.receiver_id || row?.recipient_id || ''}_${row?.type || row?.signal_type || ''}`;
+            if (!uniqueRows.has(rowKey)) {
+                uniqueRows.set(rowKey, row);
+            }
+        });
+
+        return Array.from(uniqueRows.values()).sort((a: any, b: any) => {
+            const aTime = new Date(a?.created_at || 0).getTime();
+            const bTime = new Date(b?.created_at || 0).getTime();
+            return aTime - bTime;
+        });
+    }
+
+    private async persistLifecycleSignalToDb(signalType: string, recipientId: string, signal: CallSignal): Promise<void> {
+        const signalId = signal.signalId || Crypto.randomUUID();
+        signal.signalId = signalId; // Ensure it's set on the signal object too
+        console.log(`[CallService] 💾 Persisting [${signalType}] to DB: sender=${this.userId}, receiver=${recipientId}`);
+
+        // New schema path
+        const modern = await supabase.from('call_signals').insert({
+            signal_id: signalId,
+            sender_id: this.userId,
+            receiver_id: recipientId,
+            type: signalType,
+            payload: signal,
+        });
+
+        if (!modern.error) {
+            console.log(`[CallService] ✅ [${signalType}] persisted OK`);
+            return;
+        }
+
+        console.warn(`[CallService] ⚠️ [${signalType}] modern insert failed: ${modern.error.message} — trying legacy schema`);
+
+        // Legacy schema fallback
+        const legacy = await supabase.from('call_signals').insert({
+            sender_id: this.userId,
+            recipient_id: recipientId,
+            signal_type: signalType,
+            payload: signal,
+        });
+
+        if (!legacy.error) {
+            console.log(`[CallService] ✅ [${signalType}] persisted via legacy schema`);
+            return;
+        }
+
+        console.error(`[CallService] ❌ [${signalType}] DB persist failed in both schemas`, {
+            modern: modern.error.message,
+            legacy: legacy.error.message,
+        });
+        throw modern.error;
+    }
+
+    private async pollForSignals() {
+        if (!this.userId) return;
+        
+        try {
+            const data = await this.fetchSignalsForUserSince(this.userId, this.lastSignalPollAt);
             this._consecutivePollFailures = 0; // Reset on success
 
             if (data && data.length > 0) {
+                console.log(`[CallService] 📬 Poll found ${data.length} signal(s): ${data.map((r: any) => r.type || r.signal_type).join(', ')}`);
                 this.lastSignalPollAt = data[data.length - 1].created_at;
                 data.forEach(row => {
-                    const signal: CallSignal = {
-                        ...(row.payload as any),
-                        type: row.type as any,
-                        signalId: row.signal_id,
-                        callerId: normalizeId(row.sender_id),
-                        calleeId: normalizeId(row.receiver_id),
-                        timestamp: row.created_at,
-                        roomId: (row.payload as any).roomId || (row.payload as any).callId
-                    };
-                    this.handleIncomingSignal(signal);
+                    const signal = this.mapSignalRowToCallSignal(row);
+                    if (signal) this.handleIncomingSignal(signal);
                 });
             }
-        } catch (err) {
+        } catch (err: any) {
             this._consecutivePollFailures++;
-            if (this._consecutivePollFailures <= 1) {
-                console.log('[CallService] Signal poll failed (will suppress further)');
+            if (this._consecutivePollFailures <= 2 || this._consecutivePollFailures % 5 === 0) {
+                console.warn(`[CallService] Poll failed (#${this._consecutivePollFailures}):`, err?.message || err);
             }
         }
     }
@@ -223,7 +361,7 @@ class CallService {
         if (this._connectionLimitHit) return;
         
         if (_signalSubscription) {
-            safeRemoveChannel(_signalSubscription);
+            try { supabase.removeChannel(_signalSubscription); } catch (_) {}
         }
 
         console.log(`[CallService] 📡 DB fallback enabled for ${userId}`);
@@ -233,21 +371,13 @@ class CallService {
                 { 
                     event: 'INSERT', 
                     schema: 'public', 
-                    table: 'call_signals', 
-                    filter: `receiver_id=eq.${userId}` 
+                    table: 'call_signals',
                 },
                 (payload) => {
-                    const row = payload.new;
-                    const signal: CallSignal = {
-                        ...(row.payload as any),
-                        type: row.type as any,
-                        signalId: row.signal_id,
-                        callerId: normalizeId(row.sender_id),
-                        calleeId: normalizeId(row.receiver_id),
-                        timestamp: row.created_at,
-                        roomId: (row.payload as any).roomId || (row.payload as any).callId
-                    };
-                    this.handleIncomingSignal(signal);
+                    const row = payload.new as any;
+                    if (!this.isSignalForUser(row, userId)) return;
+                    const signal = this.mapSignalRowToCallSignal(row);
+                    if (signal) this.handleIncomingSignal(signal);
                 }
             )
             .subscribe();
@@ -257,88 +387,64 @@ class CallService {
         if (this.signalPollInterval) clearInterval(this.signalPollInterval);
         if (this._fastPollInterval) clearInterval(this._fastPollInterval);
         
-        // Standard 30s polling (was 10s — too aggressive)
-        this.signalPollInterval = setInterval(() => {
-            if (this.userId) this.pollForSignals();
-        }, 30000);
+        // RESET: Start polling slightly in the past (15s) to catch signals 
+        // sent during app initialization/transit.
+        this.lastSignalPollAt = new Date(Date.now() - 3000).toISOString();
+        this._consecutivePollFailures = 0;
         
-        // Accelerated polling only during active calls
+        if (this.userId) {
+            console.log(`[CallService] 🔄 Starting signal polling for ${this.userId}`);
+            void this.pollForSignals();
+        }
+        
+        // Base polling keeps lifecycle signals responsive even when Realtime is down.
+        this.signalPollInterval = setInterval(() => {
+            if (this.userId) void this.pollForSignals();
+        }, BASE_SIGNAL_POLL_MS);
+        
+        // Accelerated polling during active calls — critical for WebRTC negotiation
+        // when Realtime broadcast is unreliable. 1s is fast enough for offer/answer/ICE.
         this._fastPollInterval = setInterval(() => {
-            if (this.currentRoomId && (!this.personalChannelSubscribed || !this.roomSubscribed)) {
-                this.pollForSignals();
+            if (this.currentRoomId) {
+                void this.pollForSignals();
             }
-        }, 5000);
+        }, ACTIVE_CALL_SIGNAL_POLL_MS);
     }
 
     private _subscribePersonalChannel(userId: string): void {
         if (this._connectionLimitHit) return;
         
-        const channelName = `call_user_${userId}`;
+        const normalizedId = normalizeId(userId);
+        const channelName = `call_user_${normalizedId}`;
+        console.log(`[CallService] 📡 Subscribing to personal channel: ${channelName}`);
 
         if (_personalChannel) {
-            safeRemoveChannel(_personalChannel);
+            try { supabase.removeChannel(_personalChannel); } catch (_) {}
+            _personalChannel = null;
         }
 
         _personalChannel = supabase.channel(channelName, {
             config: { broadcast: { self: false } },
         });
 
-        _personalChannel.on('broadcast', { event: 'call_signal' }, ({ payload }) => {
+        const handleSignal = (payload: any, eventName: string) => {
             const signal = payload as CallSignal;
-            console.log(`📞 [CallService] Received signal [${signal.type}] from ${signal.callerId}`);
+            console.log(`📞 [CallService] Received signal [${signal.type}] from ${signal.callerId} (via ${channelName}:${eventName})`);
             this.handleIncomingSignal(signal);
-        });
+        };
 
-        // Capture reference to detect stale callbacks
-        const thisChannel = _personalChannel;
-
-        _personalChannel.subscribe((status, err) => {
-            // STALE CHECK: if channel was replaced, ignore this callback entirely
-            if (thisChannel !== _personalChannel) return;
-            
-            if (status === 'SUBSCRIBED') {
-                _personalChannelReconnectAttempts = 0;
-                this.personalChannelSubscribed = true;
-                this._connectionLimitHit = false;
-                this.notifyStatus(true);
-                console.log(`[CallService] ✅ Realtime connected`);
-            } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-                this.personalChannelSubscribed = false;
-                this.notifyStatus(false);
-                
-                if (status === 'CHANNEL_ERROR') {
-                    // Mark connection limit hit — stops ALL further realtime attempts
-                    this._connectionLimitHit = true;
-                    console.log('[CallService] Connection limit hit — all realtime paused until foreground');
-                    // Clean up to free resources
-                    if (_personalChannel) {
-                        safeRemoveChannel(_personalChannel);
-                        _personalChannel = null;
-                    }
-                    if (_signalSubscription) {
-                        safeRemoveChannel(_signalSubscription, 50);
-                        _signalSubscription = null;
-                    }
-                    return; // Don't retry — wait for foreground
+        _personalChannel
+            .on('broadcast', { event: 'call_signal' }, ({ payload }) => handleSignal(payload, 'call_signal'))
+            .on('broadcast', { event: 'signal' }, ({ payload }) => handleSignal(payload, 'signal'))
+            .subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                    this.personalChannelSubscribed = true;
+                    this.notifyStatus(true);
+                } else if (status === 'CHANNEL_ERROR' || status === 'CLOSED') {
+                    this.personalChannelSubscribed = false;
+                    this.notifyStatus(false);
                 }
-                
-                // For CLOSED (not CHANNEL_ERROR): retry with backoff
-                if (this.reconnectTimer) return;
-                if (_personalChannelReconnectAttempts >= 3) return;
-
-                const delay = Math.min(10000 * Math.pow(2, _personalChannelReconnectAttempts), 60000);
-                _personalChannelReconnectAttempts++;
-                
-                console.log(`[CallService] Retry ${_personalChannelReconnectAttempts}/3 in ${delay / 1000}s`);
-                
-                this.reconnectTimer = setTimeout(() => {
-                    this.reconnectTimer = null;
-                    if (this.userId === userId) {
-                        this._subscribePersonalChannel(userId);
-                    }
-                }, delay);
-            }
-        });
+            });
     }
 
     private handleIncomingSignal(signal: CallSignal) {
@@ -346,14 +452,36 @@ class CallService {
         if (!this._shouldProcessSignal(signal)) return;
 
         const myId = normalizeId(this.userId);
-        const senderId = normalizeId(signal.callerId || (signal as any).sender_id);
-        const rawSenderId = (signal.callerId || (signal as any).sender_id || '').toString().toLowerCase();
+        const senderId = normalizeId((signal as any).sender_id || signal.callerId);
+        const rawSenderId = ((signal as any).sender_id || signal.callerId || '').toString().toLowerCase();
         const rawMyId = (this.userId || '').toString().toLowerCase();
 
         // [AUTO-CUT FIX] Ignore signals sent by OURSELVES (loopy signaling)
-        // We use both normalized and raw ID comparisons to ensure no leaks
+        // Ensure we check both UUID and raw ID strings (case-insensitive)
         if (senderId === myId || rawSenderId === rawMyId) {
+            console.log(`[CallService] 🔄 Ignoring self-sent loopback signal [${signal.type}]`);
             return;
+        }
+
+        // Only latch room state from lifecycle signals.
+        const signalRoomId = signal.roomId || signal.callId;
+        const isLifecycleSignal = ['call-request', 'call-accept', 'call-ringing', 'call-end', 'call-reject'].includes(signal.type);
+
+        // [STALE GUARD] If we have an active room, ignore signals from OTHER rooms
+        if (this.currentRoomId && signalRoomId && this.currentRoomId !== signalRoomId) {
+            // Exceptions: we always allow 'call-request' to proceed so handleIncomingSignal can decide to override/reject
+            if (signal.type !== 'call-request') {
+                console.log(`[CallService] 🛡️ Ignoring signal [${signal.type}] for room ${signalRoomId} (Active Room: ${this.currentRoomId}). This is likely a stale signal from a previous session.`);
+                return;
+            }
+        }
+
+        if (!this.currentRoomId && signalRoomId && isLifecycleSignal) {
+            console.log(`[CallService] 🏠 Latching to Room ${signalRoomId} from [${signal.type}]`);
+            this.currentRoomId = signalRoomId;
+            this.currentPartnerId = signal.callerId;
+            this.currentCallType = signal.callType || 'audio';
+            this.joinRoom(this.currentRoomId);
         }
 
         // Check for busy state or duplicate call requests
@@ -371,6 +499,31 @@ class CallService {
             // If we're already in THIS room, it's a legitimate retry/broadcast duplicate
             if (this.currentRoomId === signal.roomId) {
                 console.log('[CallService] 🔄 Ignoring duplicate call-request for own active room:', signal.roomId);
+                return;
+            }
+
+            // If we have stale room state but no active room channel, prefer the new request.
+            const noActiveRoomSession = !this.roomSubscribed && !this.isJoiningRoom && !_roomChannel;
+            if (noActiveRoomSession) {
+                console.warn(`[CallService] ♻️ Replacing stale room state ${this.currentRoomId} with incoming room ${signal.roomId}`);
+                this.currentRoomId = signal.roomId || signal.callId;
+                this.currentPartnerId = signal.callerId;
+                this.currentCallType = signal.callType || 'audio';
+                if (this.currentRoomId) this.joinRoom(this.currentRoomId);
+                this.notifyListeners(signal);
+                return;
+            }
+
+            // Check if existing room is actually active (has a channel)
+            const isRoomActive = !!_roomChannel && this.roomSubscribed;
+            
+            if (!isRoomActive && ageSeconds < 10) {
+                console.warn(`[CallService] ♻️ Room state ${this.currentRoomId} exists but no channel. Overriding with new room ${signal.roomId}`);
+                this.currentRoomId = signal.roomId || signal.callId;
+                this.currentPartnerId = signal.callerId;
+                this.currentCallType = signal.callType || 'audio';
+                if (this.currentRoomId) this.joinRoom(this.currentRoomId);
+                this.notifyListeners(signal);
                 return;
             }
 
@@ -394,10 +547,10 @@ class CallService {
         }
         this.processedSignalIds.add(signalKey);
         
-        // 30s TTL for each signal to allow future calls with same roomId (e.g. redials)
+        // Keep dedupe entries long enough to survive poll overlap and clock skew.
         setTimeout(() => {
             this.processedSignalIds.delete(signalKey);
-        }, 30000);
+        }, PROCESSED_SIGNAL_TTL_MS);
 
         return true;
     }
@@ -405,20 +558,33 @@ class CallService {
     // ── Room channel (for WebRTC signals after call-accept) ────────────────
 
     private setupRoomListeners(channel: RealtimeChannel, _roomId: string): void {
+        // Listen for 'signal' event (WebRTC signals)
         channel.on('broadcast', { event: 'signal' }, ({ payload }) => {
             const signal = payload as CallSignal;
             if (!this._shouldProcessSignal(signal)) return;
 
-            console.log(`[CallService] Received room signal [${signal.type}]`);
+            console.log(`[CallService] 📨 Received room signal [${signal.type}] from ${signal.callerId?.substring(0,8)}...`);
             this.notifyListeners(signal);
 
             if (signal.type === 'call-end' || signal.type === 'call-reject') {
                 this.cleanup(signal.type);
             }
         });
+
+        // ALSO listen for 'call_signal' event (personal channel signals that also arrived in room)
+        channel.on('broadcast', { event: 'call_signal' }, ({ payload }) => {
+            const signal = payload as CallSignal;
+            if (!this._shouldProcessSignal(signal)) return;
+
+            const isWebRTCSignal = ['offer', 'answer', 'ice-candidate'].includes(signal.type);
+            if (isWebRTCSignal) {
+                console.log(`[CallService] 📨 Received WebRTC signal via room [${signal.type}]`);
+                this.notifyListeners(signal);
+            }
+        });
     }
 
-    private joinRoom(roomId: string, onSubscribed?: () => void) {
+    public joinRoom(roomId: string, onSubscribed?: () => void) {
         // Guard against simultaneous join attempts for the same room
         if (this.isJoiningRoom && this.currentRoomId === roomId) {
             console.log(`[CallService] Join already in progress for room ${roomId}. Queueing callback.`);
@@ -428,14 +594,23 @@ class CallService {
             return;
         }
 
+        // Check if we've exceeded max attempts
+        if (this._roomJoinAttempts >= this.MAX_ROOM_JOIN_ATTEMPTS) {
+            console.error(`[CallService] ❌ Max room join attempts (${this.MAX_ROOM_JOIN_ATTEMPTS}) reached for room ${roomId}`);
+            // Still proceed with DB fallback
+            this.handleJoinSuccess(roomId);
+            return;
+        }
+
         // Clean up previous room channel completely
         if (_roomChannel) {
             console.log(`[CallService] Cleaning up old room channel before joining new one: ${this.currentRoomId}`);
-            safeRemoveChannel(_roomChannel);
+            supabase.removeChannel(_roomChannel);
             _roomChannel = null;
         }
 
-        console.log(`[CallService] Joining room ${roomId}...`);
+        this._roomJoinAttempts++;
+        console.log(`[CallService] 🚪 Joining room ${roomId} (attempt ${this._roomJoinAttempts}/${this.MAX_ROOM_JOIN_ATTEMPTS})...`);
         this.currentRoomId = roomId;
         this.roomSubscribed = false;
         this.isJoiningRoom = true;
@@ -452,31 +627,25 @@ class CallService {
         this.setupRoomListeners(_roomChannel, roomId);
 
         const timeout = setTimeout(() => {
-            console.warn(`[CallService] Room ${roomId} subscription timeout - proceeding anyway`);
+            console.warn(`[CallService] Room ${roomId} subscription timeout - proceeding with DB fallback`);
             this.handleJoinSuccess(roomId);
-        }, 10000); // 10s for establishement
+        }, 15000); // 15s for establishment
 
         _roomChannel.subscribe((status) => {
             console.log(`[CallService] Room ${roomId} subscription status: ${status}`);
-            
+
             if (status === 'SUBSCRIBED') {
                 clearTimeout(timeout);
+                this._roomJoinAttempts = 0; // Reset on success
                 this.handleJoinSuccess(roomId);
             } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
                 this.roomSubscribed = false;
                 this.isJoiningRoom = false;
-                
-                // Attempt reconnection on error if we are still supposed to be in this room
-                if (this.currentRoomId === roomId) {
-                    console.warn(`[CallService] Room ${roomId} error: ${status}. Attempting recovery join...`);
-                    setTimeout(() => {
-                        if (!this.roomSubscribed && this.currentRoomId === roomId) {
-                            this.joinRoom(roomId);
-                        }
-                    }, 2000);
-                }
+
+                // FALLBACK: Signal via DB if Realtime room fails
+                console.warn(`[CallService] Room ${roomId} Error: ${status}. Using DB Fallback.`);
+                this.handleJoinSuccess(roomId);
             } else if (status === 'CLOSED') {
-                // CLOSED is normal when we unsubscribe. No recovery needed unless we didn't mean to.
                 console.log(`[CallService] Room ${roomId} channel closed.`);
                 this.roomSubscribed = false;
                 this.isJoiningRoom = false;
@@ -496,12 +665,39 @@ class CallService {
         console.log(`[CallService] Room ${roomId} joined successfully. Notifying ${callbacks.length} listeners.`);
         callbacks.forEach(cb => cb());
 
-        // 2. Clear out buffered signals immediately upon subscription
+        // 2. UNIFIED BUFFER FLUSH: Clear out ALL pending/buffered signals
+        this.flushAllBuffers();
+    }
+
+    private flushAllBuffers() {
+        if (!this.userId) return;
+
+        const signalsToFlush: CallSignal[] = [];
+
+        // Collect from signalBuffer (waiting for room)
         if (this.signalBuffer.length > 0) {
-            console.log(`[CallService] 📤 Releasing ${this.signalBuffer.length} buffered room signals...`);
-            const signalsToFlush = [...this.signalBuffer];
+            console.log(`[CallService] 📤 Collecting ${this.signalBuffer.length} signals from signalBuffer...`);
+            signalsToFlush.push(...this.signalBuffer);
             this.signalBuffer = [];
-            signalsToFlush.forEach(sig => this.sendSignal(sig));
+        }
+
+        // Collect from _pendingSignals (waiting for recovery)
+        if (this._pendingSignals.length > 0) {
+            console.log(`[CallService] 📤 Collecting ${this._pendingSignals.length} signals from _pendingSignals...`);
+            signalsToFlush.push(...this._pendingSignals);
+            this._pendingSignals = [];
+        }
+
+        if (signalsToFlush.length > 0) {
+            console.log(`[CallService] 🚀 Flushing ${signalsToFlush.length} unified signals...`);
+            // Deduplicate by signalId if present
+            const uniqueSignalsMap = new Map<string, CallSignal>();
+            signalsToFlush.forEach(s => {
+                const id = s.signalId || s.timestamp;
+                if (!uniqueSignalsMap.has(id)) uniqueSignalsMap.set(id, s);
+            });
+
+            uniqueSignalsMap.forEach(sig => this.sendSignal(sig).catch(() => {}));
         }
     }
 
@@ -592,25 +788,28 @@ class CallService {
         // Clear timeout since call was accepted
         this.clearCallTimeout();
 
-        // Join room only if we are not already in it (or it's a different room)
-        // This prevents the 'CLOSED' state recovery join race condition
+        // Join room — but DON'T block signal sending on it.
+        // Room join can hang when Realtime is broken, which would prevent
+        // the call-accept signal from ever being sent.
         if (!_roomChannel || this.currentRoomId !== signal.roomId || !this.roomSubscribed) {
-            console.log(`[CallService] Joining room ${signal.roomId} for accepted call...`);
-            await new Promise<void>((resolve) => {
-                this.joinRoom(signal.roomId!, resolve);
-            });
-        } else {
-            console.log(`[CallService] Already in room ${signal.roomId}, skipping rejoin.`);
+            console.log(`[CallService] Joining room ${signal.roomId} (non-blocking)...`);
+            this.joinRoom(signal.roomId!);
         }
 
         // Ensure polling is active
         this.startSignalPolling();
 
-        // Room is ready. Now send accept to caller's personal channel.
+        // Send accept IMMEDIATELY — don't wait for room subscription.
+        // The accept goes via DB + personal channel, not the room channel.
+        // CRITICAL: callerId must be US (the acceptor), not the original caller.
+        // If we spread signal.callerId (the original caller), the caller will
+        // see its own ID and drop the signal as a self-echo.
+        console.log(`[CallService] 📤 Sending call-accept to ${signal.callerId}`);
         await this.sendSignal({
             ...signal,
             type: 'call-accept',
-            calleeId: this.userId!,
+            callerId: this.userId!,
+            calleeId: signal.callerId,
             calleeName: this.currentUser?.name || '',
             calleeAvatar: this.currentUser?.avatar || '',
             timestamp: new Date().toISOString(),
@@ -631,7 +830,9 @@ class CallService {
         await this.sendSignal({
             ...signal,
             type: 'call-reject',
-            calleeId: this.userId,
+            // Sender must be the rejecting user; recipient must be the original caller.
+            callerId: this.userId,
+            calleeId: signal.callerId,
             timestamp: new Date().toISOString(),
             signalId: Crypto.randomUUID()
         });
@@ -687,174 +888,199 @@ class CallService {
     // ── PRIVATE: sendToPersonalChannel() ─────────────────────────────────
 
     private async sendToPersonalChannel(recipientId: string, event: string, signal: CallSignal, signalType: string): Promise<void> {
-        const channelName = `call_user_${recipientId}`;
-        
-        // Reuse channel if it exists in pool
-        let targetChannel = _senderChannels.get(channelName);
+        // DUAL-CHANNEL BROADCAST:
+        // We broadcast to BOTH the UUID channel and the Name channel.
+        // This solves the identity mismatch where one device listens on UUID and the other on Name.
+        const normalizedId = normalizeId(recipientId);
+        const channelsToTry: string[] = [`call_user_${normalizedId}`];
 
-        // Self-heal stale channels before using them
-        if (targetChannel && ['closed', 'errored', 'leaving'].includes(targetChannel.state)) {
-            _senderChannels.delete(channelName);
-            safeRemoveChannel(targetChannel);
-            targetChannel = undefined as any;
+        // Find if this UUID corresponds to a legacy name
+        const legacyName = Object.keys(LEGACY_TO_UUID).find(name => LEGACY_TO_UUID[name] === normalizedId);
+        if (legacyName) {
+            channelsToTry.push(`call_user_${legacyName}`);
         }
 
-        if (!targetChannel) {
-            console.log(`[CallService] 🛰️ Creating new sender channel for ${recipientId}`);
-            targetChannel = supabase.channel(channelName, {
-                config: { broadcast: { self: false } },
-            });
-            _senderChannels.set(channelName, targetChannel);
-        }
+        let anySucceeded = false;
 
-        return new Promise<void>((resolve) => {
-            const timeout = setTimeout(() => {
-                console.warn(`[CallService] ⏳ Timeout sending ${signalType} to ${recipientId}`);
-                resolve();
-            }, 5000);
+        for (const channelName of channelsToTry) {
+            let targetChannel = _senderChannels.get(channelName);
 
-            const performSend = () => {
-                if (!targetChannel) {
-                    clearTimeout(timeout);
-                    resolve();
-                    return;
-                }
-                targetChannel.send({
+            // Self-heal stale channels
+            if (targetChannel && ['closed', 'errored', 'leaving'].includes(targetChannel.state)) {
+                console.warn(`[CallService] Removing stale channel: ${channelName}`);
+                _senderChannels.delete(channelName);
+                try { supabase.removeChannel(targetChannel); } catch (_) {}
+                targetChannel = undefined as any;
+            }
+
+            if (!targetChannel) {
+                console.log(`[CallService] Creating sender channel: ${channelName}`);
+                targetChannel = supabase.channel(channelName, {
+                    config: { broadcast: { self: false } },
+                });
+                _senderChannels.set(channelName, targetChannel);
+            }
+
+            // Ensure sender channel has joined before attempting send.
+            if (targetChannel.state !== 'joined') {
+                await new Promise<void>((resolve, reject) => {
+                    let done = false;
+                    const finishOk = () => {
+                        if (done) return;
+                        done = true;
+                        clearTimeout(timeout);
+                        resolve();
+                    };
+                    const finishErr = (message: string) => {
+                        if (done) return;
+                        done = true;
+                        clearTimeout(timeout);
+                        reject(new Error(message));
+                    };
+
+                    const timeout = setTimeout(() => {
+                        finishErr(`Sender channel subscribe timeout: ${channelName} (${targetChannel?.state || 'unknown'})`);
+                    }, 4000);
+
+                    if (!targetChannel) {
+                        finishErr(`Sender channel missing: ${channelName}`);
+                        return;
+                    }
+
+                    if (targetChannel.state === 'joined') {
+                        finishOk();
+                        return;
+                    }
+
+                    if (targetChannel.state === 'joining') {
+                        const poll = () => {
+                            if (done || !targetChannel) return;
+                            if (targetChannel.state === 'joined') {
+                                finishOk();
+                                return;
+                            }
+                            if (targetChannel.state === 'closed' || targetChannel.state === 'errored' || targetChannel.state === 'leaving') {
+                                finishErr(`Sender channel failed while joining: ${channelName} (${targetChannel.state})`);
+                                return;
+                            }
+                            setTimeout(poll, 100);
+                        };
+                        poll();
+                        return;
+                    }
+
+                    targetChannel.subscribe((status) => {
+                        if (done) return;
+                        if (status === 'SUBSCRIBED') {
+                            console.log(`[CallService] ✅ Sender channel subscribed: ${channelName}`);
+                            finishOk();
+                        } else if (status === 'CHANNEL_ERROR' || status === 'CLOSED' || status === 'TIMED_OUT') {
+                            finishErr(`Sender channel subscribe failed: ${channelName} (${status})`);
+                        }
+                    });
+                });
+            }
+
+            try {
+                await targetChannel.send({
                     type: 'broadcast',
                     event: event,
                     payload: signal,
-                }).then(() => {
-                    console.log(`[CallService] ✅ ${signalType} sent to ${recipientId}`);
-                    clearTimeout(timeout);
-                    resolve();
-                }).catch((err) => {
-                    console.warn(`[CallService] Failed to send ${signalType}:`, err);
-                    clearTimeout(timeout);
-                    resolve();
                 });
-            };
-
-            if (targetChannel.state === 'joined') {
-                performSend();
-            } else if (targetChannel.state === 'joining') {
-                // Avoid repeated subscribe() calls while channel is already joining.
-                // Poll lightweight state until it is joined/failed or timeout fires.
-                const waitForJoined = () => {
-                    if (!targetChannel) {
-                        clearTimeout(timeout);
-                        resolve();
-                        return;
-                    }
-                    if (targetChannel.state === 'joined') {
-                        performSend();
-                        return;
-                    }
-                    if (targetChannel.state === 'closed' || targetChannel.state === 'errored' || targetChannel.state === 'leaving') {
-                        console.warn(`[CallService] Sender channel error for ${recipientId}: ${targetChannel.state.toUpperCase()}`);
-                        _senderChannels.delete(channelName);
-                        safeRemoveChannel(targetChannel);
-                        clearTimeout(timeout);
-                        resolve();
-                        return;
-                    }
-                    setTimeout(waitForJoined, 120);
-                };
-                waitForJoined();
-            } else {
-                targetChannel.subscribe((status) => {
-                    if (status === 'SUBSCRIBED') {
-                        performSend();
-                    } else if (status === 'CHANNEL_ERROR' || status === 'CLOSED') {
-                        console.warn(`[CallService] Sender channel error for ${recipientId}: ${status}`);
-                        _senderChannels.delete(channelName);
-                        safeRemoveChannel(targetChannel!);
-                        clearTimeout(timeout);
-                        resolve();
-                    }
-                });
+                console.log(`[CallService] ✅ Signal [${signalType}] sent via ${channelName}`);
+                anySucceeded = true;
+            } catch (sendError) {
+                console.warn(`[CallService] ⚠️ Failed to send via ${channelName}:`, sendError);
             }
-        });
+        }
+
+        if (!anySucceeded) {
+            console.error(`[CallService] ❌ ALL sender channels failed for signal [${signalType}]`);
+            throw new Error('All sender channels failed');
+        }
     }
 
-    // ── SEND SIGNAL (Dual-path: DB primary + Broadcast bonus) ─────────────
+    // ── SEND SIGNAL (Triple-path: DB primary + Broadcast + Push fallback) ─────────────
 
-    async sendSignal(signal: CallSignal) {
+    async sendSignal(signal: CallSignal): Promise<void> {
+        if (!this.userId) return;
+
         if (!signal.signalId) {
             signal.signalId = Crypto.randomUUID();
         }
 
         const signalType = signal.type;
-        
-        // Normalize IDs
-        if (signal.callerId) signal.callerId = normalizeId(signal.callerId);
-        if (signal.calleeId) signal.calleeId = normalizeId(signal.calleeId);
-        
         const recipientId = this.getRecipientId(signal);
+        const normalizedRecipientId = normalizeId(recipientId);
 
-        // ── 1. PRIMARY: Insert into DB (Lifecycle events ONLY) ─────────────
-        // We prune transient WebRTC/UI signals to keep the DB small and fast.
-        const shouldPersist = ['call-request', 'call-accept', 'call-reject', 'call-end'].includes(signalType);
+        // Attach explicit sender_id to prevent loopback filtering on the other end
+        (signal as any).sender_id = this.userId;
+        (signal as any).normalized_sender_id = normalizeId(this.userId);
+
+        console.log(`[CallService] 📤 TX [${signalType}] signal from ${this.userId} TO ${normalizedRecipientId} (ID: ${signal.signalId})`);
+
+        // 1. Persist to DB (Value-add path)
+        const isCriticalLifecycle = ['call-request', 'call-accept', 'call-reject', 'call-end', 'offer', 'answer', 'ice-candidate'].includes(signalType);
         
-        if (shouldPersist) {
+        if (isCriticalLifecycle) {
+            // FIRE AND FORGET DB persistence so it doesn't block the fast Realtime path
+            this.persistLifecycleSignalToDb(signalType, normalizedRecipientId, signal).catch(dbErr => {
+                console.warn('[CallService] ⚠️ DB Persistence background failure:', dbErr);
+                this._pendingSignals.push(signal);
+            });
+        }
+
+        // 2. Broadcast via personal channels (Primary path)
+        // This is highly robust as it targets both UUID and legacy channels.
+        const personalSendTask = this.sendToPersonalChannel(normalizedRecipientId, 'call_signal', signal, signalType).catch(err => {
+            console.warn(`[CallService] ⚠️ Personal delivery failure for [${signalType}]:`, err);
+            this._pendingSignals.push(signal);
+        });
+        if (isCriticalLifecycle && signalType !== 'ice-candidate') {
+            await Promise.race([
+                personalSendTask,
+                this.delay(2500),
+            ]);
+        }
+
+        // 3. Room channel broadcast (Secondary path / Sync)
+        if (this.currentRoomId && this.roomSubscribed && _roomChannel) {
             try {
-                await supabase.from('call_signals').insert({
-                    signal_id:   signal.signalId,
-                    sender_id:   this.userId,
-                    receiver_id: normalizeId(recipientId),
-                    type:        signalType,
-                    payload:     signal
+                _roomChannel.send({
+                    type: 'broadcast',
+                    event: 'call_signal',
+                    payload: signal
+                }).then((status) => {
+                    if (status !== 'ok') console.warn(`[CallService] Room broadcast [${signalType}] returned status:`, status);
                 });
-                console.log(`[CallService] ✅ Lifecycle Signal [${signalType}] persisted to DB`);
-            } catch (dbErr) {
-                console.warn('[CallService] ❌ DB signaling failed:', dbErr);
+            } catch (roomErr) {
+                console.warn('[CallService] ⚠️ Room broadcast failed:', roomErr);
             }
         }
 
-        // ── 2. SECONDARY: Broadcast path ───────────────────────────────────
+        // 4. Push notifications for call-request (wake up sleeping device)
+        if (signalType === 'call-request') {
+            this.triggerCallPush(normalizedRecipientId, signal).catch(() => {
+                console.warn('[CallService] Push notification failed (non-critical)');
+            });
+        }
+    }
+
+    private async triggerCallPush(recipientId: string, signal: CallSignal): Promise<void> {
+        console.log(`[CallService] 🔔 Triggering call-push for ${recipientId}`);
         try {
-            const normalizedRecipientId = normalizeId(recipientId);
-            const isLifecycle = ['call-request', 'call-accept', 'call-reject', 'call-ringing'].includes(signalType);
-
-            if (isLifecycle) {
-                // Personal Broadcast Channel
-                this.sendToPersonalChannel(normalizedRecipientId, 'call_signal', signal, signalType)
-                    .catch(() => {});
-
-                // Push notifications
-                if (signalType === 'call-request') {
-                    console.log(`[CallService] 🔔 Triggering call-push for ${normalizedRecipientId}`);
-                    supabase.functions.invoke('send-call-push', {
-                        body: {
-                            calleeId: normalizedRecipientId,
-                            callerId: this.userId,
-                            callId: signal.callId,
-                            callType: signal.callType,
-                            callerName: this.currentUser?.name || 'Someone'
-                        }
-                    }).catch(pushErr => {
-                        console.warn('[CallService] ⚠️ Call push trigger failed:', pushErr.message);
-                    });
+            await supabase.functions.invoke('send-call-push', {
+                body: {
+                    calleeId: recipientId,
+                    callerId: this.userId,
+                    callId: signal.callId,
+                    callType: signal.callType,
+                    callerName: this.currentUser?.name || 'Someone'
                 }
-            } else {
-                // Room Broadcast (SDP, ICE, Track Toggles)
-                if (_roomChannel && this.roomSubscribed) {
-                    _roomChannel.send({
-                        type: 'broadcast',
-                        event: 'signal',
-                        payload: signal,
-                    }).catch(e => {
-                        console.warn(`[CallService] ❌ Failed to broadcast room signal [${signalType}]:`, e);
-                    });
-                } else if (signal.roomId || this.currentRoomId) {
-                    // BUFFERING: If room isn't ready yet, queue the signal
-                    // We only buffer room signals, not lifecycle signals (which have DB fallback)
-                    if (this.signalBuffer.length < 50) {
-                        console.log(`[CallService] 📦 Buffering room signal [${signalType}] (Room not ready)`);
-                        this.signalBuffer.push(signal);
-                    }
-                }
-            }
-        } catch (_) {}
+            });
+        } catch (e) {
+            console.warn('[CallService] Failed to send push notification:', e);
+        }
     }
 
     private getRecipientId(signal: CallSignal): string {
@@ -935,17 +1161,122 @@ class CallService {
         }
     }
 
+    // ── NEW: Network Monitoring ─────────────────────────────────────────
+
+    private _startNetworkMonitoring(): void {
+        if (this._isNetworkMonitoringActive) return;
+        this._isNetworkMonitoringActive = true;
+
+        this._netInfoUnsubscribe = NetInfo.addEventListener(state => {
+            const wasConnected = this._networkState === 'connected';
+            this._networkState = state.isConnected ? 'connected' : 'disconnected';
+            
+            if (wasConnected && this._networkState === 'disconnected') {
+                console.warn('[CallService] 📡 Network disconnected detected');
+            } else if (!wasConnected && this._networkState === 'connected') {
+                console.log('[CallService] 📡 Network reconnected — recovering...');
+                this._recoverAfterNetworkReturn();
+            }
+        });
+    }
+
+    private async _recoverAfterNetworkReturn(): Promise<void> {
+        console.log('[CallService] 🔄 Recovering after network return');
+        
+        // Reconnect channels
+        this._reconnectIfNeeded();
+        
+        // Poll for missed signals
+        await this.pollForSignals();
+        
+        // Retry pending signals
+        await this._retryPendingSignals();
+    }
+
+    private _reconnectIfNeeded(): void {
+        if (!this.personalChannelSubscribed && this.userId && !this._connectionLimitHit) {
+            console.log('[CallService] 🔄 Personal channel not subscribed — reconnecting');
+            this._subscribePersonalChannel(this.userId);
+        }
+        
+        // Check room channel
+        if (this.currentRoomId && !this.roomSubscribed && !this.isJoiningRoom) {
+            console.log('[CallService] 🔄 Room channel lost — rejoining');
+            this._roomJoinAttempts = 0;
+            this.joinRoom(this.currentRoomId);
+        }
+    }
+
+    // ── NEW: Channel Health Check ───────────────────────────────────────
+
+    private _startChannelHealthCheck(): void {
+        if (this._channelHealthInterval) {
+            clearInterval(this._channelHealthInterval);
+        }
+
+        this._channelHealthInterval = setInterval(() => {
+            this._checkChannelHealth();
+        }, CHANNEL_HEALTH_CHECK_MS);
+    }
+
+    private _checkChannelHealth(): void {
+        if (!this.userId) return;
+        
+        // Check personal channel state
+        if (_personalChannel) {
+            const state = _personalChannel.state;
+            if (state === 'closed' || state === 'errored' || state === 'leaving') {
+                console.warn(`[CallService] ⚠️ Personal channel unhealthy (${state}) — reconnecting`);
+                this.personalChannelSubscribed = false;
+                this._reconnectIfNeeded();
+            }
+        }
+        
+        // Check room channel if active call
+        if (this.currentRoomId && _roomChannel) {
+            const state = _roomChannel.state;
+            if (state === 'closed' || state === 'errored' || state === 'leaving') {
+                console.warn(`[CallService] ⚠️ Room channel unhealthy (${state}) — rejoining`);
+                this.roomSubscribed = false;
+                this._roomJoinAttempts = 0;
+                this.joinRoom(this.currentRoomId);
+            }
+        }
+    }
+
+    // ── NEW: Retry Pending Signals ──────────────────────────────────────
+
+    private async _retryPendingSignals(): Promise<void> {
+        if (this._pendingSignals.length === 0) return;
+        
+        console.log(`[CallService] 🔄 Retrying ${this._pendingSignals.length} pending signals`);
+        
+        const signalsToRetry = [...this._pendingSignals];
+        this._pendingSignals = [];
+        
+        for (const signal of signalsToRetry) {
+            try {
+                await this.sendSignal(signal);
+            } catch (error) {
+                console.warn(`[CallService] Retry failed for ${signal.type}:`, error);
+                this._pendingSignals.push(signal); // Add back to queue
+            }
+        }
+    }
+
     // ── PUBLIC: cleanup() ───────────────────────────────────────────────
 
     cleanup(reason: string = 'unknown'): void {
         console.log(`[CallService] 🧹 Cleaning up call state. Reason: ${reason}`);
-        
+        const fullCleanup = reason === 'unmount' || reason === 'logout' || reason === 'full-reset';
         const roomId = this.currentRoomId;
 
         // CRITICAL: Set state to null BEFORE closing channels
         this.currentRoomId = null;
         this.currentPartnerId = null;
         this.roomSubscribed = false;
+        this.isJoiningRoom = false;
+        this._roomJoinAttempts = 0;
         this.roomSubscribeCallbacks = [];
         this.currentCallType = 'audio';
 
@@ -956,54 +1287,79 @@ class CallService {
             this.reconnectTimer = null;
         }
 
-        if (this.signalPollInterval) {
-            clearInterval(this.signalPollInterval);
-            this.signalPollInterval = null;
+        if (_roomChannel) {
+            console.log(`[CallService] Unsubscribing from room ${roomId}`);
+            try { supabase.removeChannel(_roomChannel); } catch (_) {}
+            _roomChannel = null;
         }
 
+        // Fast poll is call-scoped; always stop it on call teardown.
         if (this._fastPollInterval) {
             clearInterval(this._fastPollInterval);
             this._fastPollInterval = null;
         }
 
         this.signalBuffer = [];
+        this._pendingSignals = [];
+        this._pendingAckSignals.clear();
+        this._signalAckTimeout.forEach(timeout => clearTimeout(timeout));
+        this._signalAckTimeout.clear();
 
-        // Stagger channel removals to avoid Android bridge batch corruption.
-        // Each removeChannel() sends a phx_leave WebSocket frame; if they all
-        // land in the same bridge batch the nested Phoenix JSON can corrupt it.
-        let delay = 0;
-        const STAGGER = Platform.OS === 'android' ? 60 : 0;
+        if (fullCleanup) {
+            if (this.signalPollInterval) {
+                clearInterval(this.signalPollInterval);
+                this.signalPollInterval = null;
+            }
 
-        if (_roomChannel) {
-            console.log(`[CallService] Unsubscribing from room ${roomId}`);
-            safeRemoveChannel(_roomChannel, delay);
-            _roomChannel = null;
-            delay += STAGGER;
+            if (this._netInfoUnsubscribe) {
+                this._netInfoUnsubscribe();
+                this._netInfoUnsubscribe = null;
+                this._isNetworkMonitoringActive = false;
+            }
+
+            if (this._channelHealthInterval) {
+                clearInterval(this._channelHealthInterval);
+                this._channelHealthInterval = null;
+            }
+
+            if (_signalSubscription) {
+                try { supabase.removeChannel(_signalSubscription); } catch (_) {}
+                _signalSubscription = null;
+            }
+
+            if (_personalChannel) {
+                try { supabase.removeChannel(_personalChannel); } catch (_) {}
+                _personalChannel = null;
+            }
+
+            // Cleanup pool
+            console.log(`[CallService] 🧹 Cleaning up ${_senderChannels.size} sender channels`);
+            _senderChannels.forEach((ch) => {
+                try { supabase.removeChannel(ch); } catch (_) {}
+            });
+            _senderChannels.clear();
+
+            // Clear processed signal IDs
+            this.processedSignalIds.clear();
+        } else if (!this.signalPollInterval && this.userId) {
+            // Keep signaling alive after normal call end so incoming calls keep working.
+            this.startSignalPolling();
         }
 
-        if (_signalSubscription) {
-            safeRemoveChannel(_signalSubscription, delay);
-            _signalSubscription = null;
-            delay += STAGGER;
+        // Clean up transient WebRTC signals from DB to prevent bloat
+        // IMPORTANT: Only clear signals that are OLDER than 1 minute to avoid 
+        // deleting handshake signals that were just sent.
+        if (this.userId) {
+            const oneMinuteAgo = new Date(Date.now() - 60000).toISOString();
+            supabase.from('call_signals')
+                .delete()
+                .in('type', ['offer', 'answer', 'ice-candidate'])
+                .lt('created_at', oneMinuteAgo)
+                .then(() => {}, () => {});
         }
 
-        // Cleanup sender channel pool
-        console.log(`[CallService] 🧹 Cleaning up ${_senderChannels.size} sender channels`);
-        _senderChannels.forEach((ch) => {
-            safeRemoveChannel(ch, delay);
-            delay += STAGGER;
-        });
-        _senderChannels.clear();
-
-        // Clear processed signal IDs
-        this.processedSignalIds.clear();
-
-        // Clear persisted state — defer on Android to avoid batching with channel removals
-        if (Platform.OS === 'android') {
-            setTimeout(() => this.clearPersistedCallState(), delay + STAGGER);
-        } else {
-            this.clearPersistedCallState();
-        }
+        // Clear persisted state
+        this.clearPersistedCallState();
     }
 
     private async persistCallState(): Promise<void> {

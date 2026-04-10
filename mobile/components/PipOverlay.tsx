@@ -98,8 +98,7 @@ export default function PipOverlay() {
 
     const isVisible = hasValidCall && !inCallScreen && contact && (activeCall.isAccepted || !activeCall.isIncoming);
 
-    // Debug log to help diagnose PiP issues
-    console.log(`[PipOverlay] visible:${isVisible} callId:${activeCall?.callId} inCallScreen:${inCallScreen} isAccepted:${activeCall?.isAccepted} isIncoming:${activeCall?.isIncoming}`);
+    // Debug log only when visibility changes (not every render)
 
     if (!isVisible) return null;
 

@@ -15,20 +15,22 @@ const IS_ANDROID = Platform.OS === 'android';
 
 // Tint applied as a separate View layer (NOT through expo-blur's tint prop)
 // This avoids the glow/additive blending artifact on Android
-const TINT_BG: Record<string, string> = {
-    dark: 'rgba(10, 10, 16, 0.55)',
-    light: 'rgba(255, 255, 255, 0.12)',
-    default: 'rgba(15, 15, 22, 0.45)',
+// Premium solid backgrounds for Android (instead of blur)
+const ANDROID_SOLID_BG: Record<string, string> = {
+    dark: '#0A0A0A',
+    light: '#2A2A2A',
+    default: '#121212',
 };
 
-// Fallback if blur crashes
+
+// Fallback if blur crashes (iOS)
 const FALLBACK_BG: Record<string, string> = {
     dark: 'rgba(18, 18, 26, 0.72)',
     light: 'rgba(255, 255, 255, 0.18)',
     default: 'rgba(25, 25, 35, 0.65)',
 };
 
-// Global kill switch — one crash disables blur for ALL instances
+// Global kill switch — one crash disables blur for ALL instances (iOS)
 let blurDisabled = false;
 
 class BlurGuard extends Component<
@@ -56,48 +58,37 @@ export const GlassView = ({
     children,
     ...rest
 }: GlassViewProps) => {
-    const tintBg = TINT_BG[tint] || TINT_BG.dark;
+    const androidBg = ANDROID_SOLID_BG[tint] || ANDROID_SOLID_BG.dark;
     const fallbackBg = FALLBACK_BG[tint] || FALLBACK_BG.dark;
-
-    // Android: minimal intensity to prevent blue tint/glow artifacts
-    // Max 15 — keeps blur subtle, no color artifacts
-    const androidBlur = Math.min(15, Math.round(intensity * 0.2));
 
     return (
         <View style={[styles.container, style]} {...rest}>
             {/* iOS: native blur — works perfectly */}
-            {!IS_ANDROID && (
-                <BlurView
-                    intensity={intensity}
-                    tint={tint}
-                    style={StyleSheet.absoluteFill}
-                />
-            )}
-
-            {/* Android: real blur (low intensity, no tint) + separate color overlay */}
-            {IS_ANDROID && !blurDisabled && (
+            {!IS_ANDROID && !blurDisabled && (
                 <BlurGuard fallback={fallbackBg}>
                     <BlurView
-                        intensity={androidBlur}
-                        tint="dark"
-                        style={[StyleSheet.absoluteFill, { backgroundColor: 'transparent' }]}
-                        experimentalBlurMethod="dimezisBlurView"
-                        blurReductionFactor={10}
+                        intensity={intensity}
+                        tint={tint}
+                        style={StyleSheet.absoluteFill}
                     />
-                    {/* Color tint as separate layer — avoids additive blending glow */}
-                    <View style={[StyleSheet.absoluteFill, { backgroundColor: tintBg }]} />
                 </BlurGuard>
             )}
 
-            {/* Android fallback if blur globally disabled */}
-            {IS_ANDROID && blurDisabled && (
+            {/* iOS Fallback */}
+            {!IS_ANDROID && blurDisabled && (
                 <View style={[StyleSheet.absoluteFill, { backgroundColor: fallbackBg }]} />
+            )}
+
+            {/* Android: Premium Solid Background — ZERO performance cost */}
+            {IS_ANDROID && (
+                <View style={[StyleSheet.absoluteFill, { backgroundColor: androidBg }]} />
             )}
 
             {children}
         </View>
     );
 };
+
 
 const styles = StyleSheet.create({
     container: {

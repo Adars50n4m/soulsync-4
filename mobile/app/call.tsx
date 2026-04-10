@@ -1,19 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
     View, Text, Image, Pressable, StyleSheet, StatusBar,
-    useWindowDimensions, Platform, Alert, AppState, ActivityIndicator
+    useWindowDimensions, Platform, Alert, AppState
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Camera } from 'expo-camera';
-import { Audio as ExpoAudio } from 'expo-av';
+import { Audio as ExpoAudio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useNavigation } from 'expo-router';
 import GlassView from '../components/ui/GlassView';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import ExpoPip from 'expo-pip';
-import Constants from 'expo-constants';
+
 import { useApp } from '../context/AppContext';
-import { callService, CallSignal } from '../services/CallService';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
@@ -29,8 +27,7 @@ import { useKeepAwake } from 'expo-keep-awake';
 import { SoulAvatar } from '../components/SoulAvatar';
 import { normalizeId } from '../utils/idNormalization';
 
-// Load video renderers separately from the signaling/media service so audio
-// calls can still work even if the RTC view manager is unavailable.
+// Load video renderers separately
 const getVideoRenderModules = () => {
     try {
         const RTCViewModule = require('react-native-webrtc/lib/commonjs/RTCView');
@@ -59,28 +56,21 @@ const getWebRTCService = () => {
 const videoRenderModules = getVideoRenderModules();
 const RTCView = videoRenderModules.RTCView;
 const RTCPIPView = videoRenderModules.RTCPIPView;
-const RemoteVideoComponent = RTCPIPView || RTCView; // Use PIP-enhanced view if available
+const RemoteVideoComponent = RTCPIPView || RTCView; 
 const startIOSPIP = videoRenderModules.startIOSPIP;
 const stopIOSPIP = videoRenderModules.stopIOSPIP;
 const webRTCService = getWebRTCService();
 
-
-
-// CallState type
 type CallState = 'idle' | 'ringing' | 'connecting' | 'connected' | 'ended';
+const IOS_CALL_INTERRUPTION_MODE = (InterruptionModeIOS as any)?.DoNotMix ?? 1;
+const ANDROID_CALL_INTERRUPTION_MODE = (InterruptionModeAndroid as any)?.DoNotMix ?? 1;
 
 const hexToRgba = (color: string, alpha: number): string => {
-    if (!color || !color.startsWith('#')) {
-        return `rgba(255, 106, 136, ${alpha})`;
-    }
+    if (!color || !color.startsWith('#')) return `rgba(255, 106, 136, ${alpha})`;
     let hex = color.replace('#', '');
-    if (hex.length === 3) {
-        hex = hex.split('').map((c) => `${c}${c}`).join('');
-    }
+    if (hex.length === 3) hex = hex.split('').map((c) => `${c}${c}`).join('');
     const int = Number.parseInt(hex, 16);
-    if (Number.isNaN(int)) {
-        return `rgba(255, 106, 136, ${alpha})`;
-    }
+    if (Number.isNaN(int)) return `rgba(255, 106, 136, ${alpha})`;
     const r = (int >> 16) & 255;
     const g = (int >> 8) & 255;
     const b = int & 255;
@@ -92,14 +82,16 @@ export default function CallScreen() {
     const { width, height } = useWindowDimensions();
     const router = useRouter();
     const navigation = useNavigation();
-    const { activeCall, contacts, currentUser, otherUser, activeTheme, endCall: endAppCall, acceptCall: acceptAppCall, toggleMute: toggleAppMute, toggleVideo, toggleMinimizeCall } = useApp();
-    useKeepAwake(); // Prevents screen from sleeping during call
+    const { activeCall, contacts, currentUser, activeTheme, endCall: endAppCall, acceptCall: acceptAppCall, toggleMute: toggleAppMute, toggleVideo, toggleMinimizeCall } = useApp();
+    useKeepAwake();
 
     const [callDuration, setCallDuration] = useState(0);
     const [localStream, setLocalStream] = useState<any>(null);
     const [remoteStream, setRemoteStream] = useState<any>(null);
     const [remoteStreamUpdate, setRemoteStreamUpdate] = useState(0);
-    const webrtcListenerRef = useRef<any>(null);
+    const isMinimizing = useRef(false);
+    const rtcPipRef = useRef(null);
+    const isMounted = useRef(false);
 
     const isVideo = activeCall?.type === 'video';
     const [callState, setCallState] = useState<CallState>(() => {
@@ -109,63 +101,47 @@ export default function CallScreen() {
         return 'ringing';
     });
     const [isSlowConnection, setIsSlowConnection] = useState(false);
+    const [wasConnected, setWasConnected] = useState(false);
+    const [isSpeaker, setIsSpeaker] = useState(() => activeCall?.type === 'video');
+    const [isEdgeGlowEnabled, setIsEdgeGlowEnabled] = useState(false);
+    const [androidIsInPipMode, setAndroidIsInPipMode] = useState(false);
+    const [iosIsInPipMode, setIosIsInPipMode] = useState(false);
+    const [showDiagnostics, setShowDiagnostics] = useState(false);
+    const [stats, setStats] = useState({ bytesReceived: 0 });
+
+    const hasRemoteTracks = useMemo(() => {
+        if (!remoteStream) return false;
+        try {
+            const audioTracks = remoteStream.getAudioTracks?.() || [];
+            const videoTracks = remoteStream.getVideoTracks?.() || [];
+            const genericTracks = remoteStream.getTracks?.() || [];
+            return audioTracks.length > 0 || videoTracks.length > 0 || genericTracks.length > 0;
+        } catch {
+            return false;
+        }
+    }, [remoteStream, remoteStreamUpdate]);
+
+    const uiConnected = wasConnected || callState === 'connected' || hasRemoteTracks || stats.bytesReceived > 0;
 
     useEffect(() => {
         if (callState === 'connecting') {
             const timer = setTimeout(() => setIsSlowConnection(true), 12000);
-            return () => {
-                clearTimeout(timer);
-                setIsSlowConnection(false);
-            };
+            return () => { clearTimeout(timer); setIsSlowConnection(false); };
         } else {
             setIsSlowConnection(false);
         }
     }, [callState]);
 
-    const hasRemoteTracks = useMemo(() => {
-        if (!remoteStream) return false;
-        try {
-            const audio = remoteStream.getAudioTracks?.() || [];
-            const video = remoteStream.getVideoTracks?.() || [];
-            const generic = remoteStream.getTracks?.() || [];
-            const legacy = remoteStream._tracks || [];
-            return audio.length > 0 || video.length > 0 || generic.length > 0 || legacy.length > 0;
-        } catch (e) {
-            return !!remoteStream._tracks?.length;
-        }
-    }, [remoteStream, remoteStreamUpdate]);
-
-    const [wasConnected, setWasConnected] = useState(false);
-    
-    // isActuallyConnected: Either the protocol says 'connected' OR we have media flowing
-    const isActuallyConnected = callState === 'connected' || (hasRemoteTracks && activeCall?.isAccepted);
-    
-    // Aggressive Sync: If service is connected or we have tracks, we ARE connected.
-    useEffect(() => {
-        if (isActuallyConnected && !wasConnected) {
-            console.log('[CallScreen] 🎯 Connection confirmed (Aggressive)');
-            setWasConnected(true);
-        }
-    }, [isActuallyConnected]);
-
-    // Safety Sync: Periodically poll service state and streams to ensure React didn't miss a beat
     useEffect(() => {
         const interval = setInterval(() => {
             if (!webRTCService) return;
-            
             const svcState = webRTCService.getState();
             const svcRemote = webRTCService.getRemoteStream();
-            
-            // Sync state
             if (svcState === 'connected' && !wasConnected) {
-                console.log('[CallScreen] 🔄 Safety Sync: Forcing connected state');
                 setWasConnected(true);
                 setCallState('connected');
             }
-            
-            // Sync remote stream (Critical for video visibility)
             if (svcRemote && !remoteStream) {
-                console.log('[CallScreen] 🔄 Safety Sync: Recovered missing remote stream');
                 setRemoteStream(svcRemote);
                 setRemoteStreamUpdate(prev => prev + 1);
             }
@@ -173,145 +149,73 @@ export default function CallScreen() {
         return () => clearInterval(interval);
     }, [wasConnected, remoteStream]);
 
-    const uiConnected = wasConnected || isActuallyConnected || (!!hasRemoteTracks && activeCall?.isAccepted);
-    // const [isMuted, setIsMuted] = useState(false); // Managed by activeCall
-    const [isSpeaker, setIsSpeaker] = useState(false);
-    const [isEdgeGlowEnabled, setIsEdgeGlowEnabled] = useState(false);
-
-    // Picture-in-Picture (Android) State
-    // NOTE: We intentionally avoid ExpoPip.useIsInPip() because some builds where
-    // expo-pip is unavailable throw "addListener of null" from its internal hook.
-    const [androidIsInPipMode, setAndroidIsInPipMode] = useState(false);
-    const [iosIsInPipMode, setIosIsInPipMode] = useState(false);
-    const [showDiagnostics, setShowDiagnostics] = useState(false); // For user verification
     const canRenderVideo = !!RTCView && !!RemoteVideoComponent;
     const edgeGlowPulse = useSharedValue(0);
     const edgeGlowStrong = useMemo(() => hexToRgba(activeTheme?.accent || '#FF6A88', 0.65), [activeTheme?.accent]);
     const edgeGlowSoft = useMemo(() => hexToRgba(activeTheme?.accent || '#FF6A88', 0), [activeTheme?.accent]);
-    const canUseExpoPip = useMemo(() => {
-        const pip: any = ExpoPip;
-        return !!pip
-            && typeof pip.enterPipMode === 'function'
-            && typeof pip.setPictureInPictureParams === 'function';
-    }, []);
 
     useEffect(() => {
         if (isEdgeGlowEnabled && isVideo && uiConnected) {
             edgeGlowPulse.value = withRepeat(
                 withTiming(1, { duration: 1400, easing: Easing.inOut(Easing.quad) }),
-                -1,
-                true
+                -1, true
             );
         } else {
-            edgeGlowPulse.value = withTiming(0, { duration: 220, easing: Easing.out(Easing.quad) });
+            edgeGlowPulse.value = withTiming(0, { duration: 220 });
         }
-    }, [edgeGlowPulse, isEdgeGlowEnabled, isVideo, uiConnected]);
+    }, [isEdgeGlowEnabled, isVideo, uiConnected]);
 
-    useEffect(() => {
-        if (!isVideo && isEdgeGlowEnabled) {
-            setIsEdgeGlowEnabled(false);
-        }
-    }, [isVideo, isEdgeGlowEnabled]);
-
-    // Track if we are in PiP manually via AppState for iOS UI treatment
     useEffect(() => {
         let timeout: NodeJS.Timeout;
         const subscription = AppState.addEventListener('change', nextAppState => {
-            const isActiveCall = activeCall?.isAccepted && !isMinimizing.current;
-            const isVideoCall = activeCall?.type === 'video';
-
+            const isVideoCall = activeCall?.type === 'video' && activeCall?.isAccepted && !isMinimizing.current;
+            
             if (nextAppState.match(/inactive|background/)) {
-                if (isActiveCall) {
-                    if (Platform.OS === 'ios' && isVideoCall) {
-                        // iOS native PiP only supports video via RTCPIPView
+                if (isVideoCall) {
+                    if (Platform.OS === 'ios') {
                         if (startIOSPIP && rtcPipRef.current) {
                             try { startIOSPIP(rtcPipRef); } catch (e) { console.warn('startIOSPIP error:', e); }
                         }
                         timeout = setTimeout(() => setIosIsInPipMode(true), 150);
                     } else if (Platform.OS === 'android') {
-                        // Android PiP for both audio and video calls
-                        if (!canUseExpoPip) {
+                        if (typeof ExpoPip?.enterPipMode !== 'function') {
                             console.log('[CallScreen] Android PiP unavailable in this build.');
                         } else {
                             try {
                                 ExpoPip.enterPipMode({
-                                    width: isVideoCall ? Math.floor(width) : 200,
-                                    height: isVideoCall ? Math.floor(height) : 200,
+                                    width: Math.floor(width),
+                                    height: Math.floor(height),
                                     autoEnterEnabled: true
                                 });
                                 setAndroidIsInPipMode(true);
-                            } catch (e) {
-                                console.warn('ExpoPip error:', e);
-                                setAndroidIsInPipMode(false);
-                            }
+                            } catch (e) { setAndroidIsInPipMode(false); }
                         }
                     }
                 }
             } else if (nextAppState === 'active') {
                 if (Platform.OS === 'ios') {
                     setIosIsInPipMode(false);
-                    if (stopIOSPIP) try { stopIOSPIP(); } catch (e) {}
-                } else if (Platform.OS === 'android') {
+                    if (stopIOSPIP) {
+                        try { stopIOSPIP(rtcPipRef); } catch (e) { console.warn('stopIOSPIP error:', e); }
+                    }
+                } else {
                     setAndroidIsInPipMode(false);
                 }
             }
         });
-        return () => {
-            if (timeout) clearTimeout(timeout);
-            subscription.remove();
-        };
-    }, [activeCall?.type, activeCall?.isAccepted, width, height, canUseExpoPip]);
+        return () => subscription.remove();
+    }, [activeCall?.isAccepted, activeCall?.type, width, height]);
 
     const isInPipMode = Platform.OS === 'android' ? androidIsInPipMode : iosIsInPipMode;
 
-    // Track if we are minimizing to prevent ending call on unmount
-    const isMinimizing = useRef(false);
-    const rtcPipRef = useRef(null);
-
-    // Reset isMinimizing when call screen re-mounts (user returned from PiP/overlay)
-    useEffect(() => {
-        isMinimizing.current = false;
-    }, []);
-
-    // Keep a ref to the latest endAppCall to avoid stale closures in listeners
-    const endAppCallRef = useRef(endAppCall);
-    useEffect(() => { endAppCallRef.current = endAppCall; }, [endAppCall]);
-
-    // FIX: When callee accepts (activeCall.isAccepted becomes true on caller side),
-    // upgrade callState from 'ringing' → 'connecting' so UI shows "Connecting..."
-    // instead of being stuck on "Ringing..." until WebRTC completes.
-    useEffect(() => {
-        if (activeCall?.isAccepted && callState === 'ringing') {
-            console.log(`[CallScreen] Call accepted (Role=${activeCall.isIncoming?'Rx':'Tx'}) — upgrading callState: ringing → connecting`);
-            setCallState('connecting');
-        }
-    }, [activeCall?.isAccepted, callState]);
-
-    // Animations
-    const pulseScale = useSharedValue(1);
-    const pulseOpacity = useSharedValue(0.5);
-
-    // Draggable self-video
-    const selfVideoX = useSharedValue(width - 130);
-    const selfVideoY = useSharedValue(120);
-    const contextX = useSharedValue(0);
-    const contextY = useSharedValue(0);
-    const screenTranslateY = useSharedValue(0);
-
     const contact = useMemo(() => {
         const normalizedId = normalizeId(activeCall?.contactId);
-        const found = contacts.find(c => normalizeId(c.id) === normalizedId);
-        if (found) return found;
-        // Fallback to activeCall metadata if contact not in list (e.g. recent add)
-        return {
+        return contacts.find(c => normalizeId(c.id) === normalizedId) || {
             id: activeCall?.contactId || '',
             name: activeCall?.contactName || 'User',
-            avatar: activeCall?.avatar || activeCall?.contactAvatar || '',
-        } as any;
+            avatar: activeCall?.avatar || '',
+        };
     }, [contacts, activeCall]);
-
-    // isVideo moved up to solve TDZ
-
 
     const handleMinimize = useCallback(() => {
         isMinimizing.current = true;
@@ -319,413 +223,123 @@ export default function CallScreen() {
         if (navigation.canGoBack()) navigation.goBack();
     }, [navigation, toggleMinimizeCall]);
 
-    const handleToggleMute = useCallback(() => {
-        toggleAppMute();
-    }, [toggleAppMute]);
-
-    const handleToggleVideo = useCallback(() => {
-        if (toggleVideo) {
-            toggleVideo();
-        }
-    }, [toggleVideo]);
-
-    const handleToggleEdgeGlow = useCallback(() => {
-        if (!isVideo) return;
-        setIsEdgeGlowEnabled((prev) => !prev);
-    }, [isVideo]);
-
-    const handleToggleSpeaker = useCallback(async () => {
-        const next = !isSpeaker;
-        setIsSpeaker(next);
+    const ensureMicrophoneAccess = useCallback(async (): Promise<boolean> => {
         try {
-            console.log(`[CallScreen] 🔊 Toggling speaker: ${next ? 'ON' : 'OFF'}`);
-            await ExpoAudio.setAudioModeAsync({
-                allowsRecordingIOS: true,
-                playsInSilentModeIOS: true,
-                staysActiveInBackground: true,
-                interruptionModeIOS: 1, // DoNotMix
-                shouldDuckAndroid: true,
-                interruptionModeAndroid: 1, // DoNotMix
-                // Android: false = speaker out, true = earpiece
-                playThroughEarpieceAndroid: !next,
-            });
-        } catch (e) {
-            console.warn('[CallScreen] Failed to toggle speaker:', e);
-        }
-    }, [isSpeaker]);
+            if (webRTCService?.ensureMicrophonePermission) {
+                const granted = await webRTCService.ensureMicrophonePermission(true);
+                if (!granted) {
+                    Alert.alert(
+                        'Microphone Permission Needed',
+                        'Voice call ke liye microphone permission allow karna zaroori hai.'
+                    );
+                }
+                return granted;
+            }
 
-    const handleSwitchCamera = useCallback(() => {
-        if (webRTCService) {
-            try { webRTCService.switchCamera(); } catch (e) { }
+            const permission = await ExpoAudio.requestPermissionsAsync();
+            if (!permission.granted) {
+                Alert.alert(
+                    'Microphone Permission Needed',
+                    'Voice call ke liye microphone permission allow karna zaroori hai.'
+                );
+                return false;
+            }
+            return true;
+        } catch (error) {
+            console.warn('[CallScreen] Failed to request microphone permission:', error);
+            return false;
         }
     }, []);
 
-    const handleAcceptCall = useCallback(async () => {
+    const applySpeakerOutput = useCallback(async (useSpeaker: boolean, manualOverride: boolean = true): Promise<boolean> => {
         try {
-            await acceptAppCall();
-        } catch (e) {
-            console.error('[CallScreen] handleAcceptCall failed:', e);
-        }
-    }, [acceptAppCall]);
-
-    // Gesture for draggable video
-    const panGesture = Gesture.Pan()
-        .onStart(() => {
-            contextX.value = selfVideoX.value;
-            contextY.value = selfVideoY.value;
-        })
-        .onUpdate((event) => {
-            selfVideoX.value = contextX.value + event.translationX;
-            selfVideoY.value = contextY.value + event.translationY;
-        })
-        .onEnd(() => {
-            // Snap to corners
-            const midX = width / 2;
-            const destX = selfVideoX.value < midX ? 20 : width - 130;
-            const destY = Math.max(100, Math.min(height - 250, selfVideoY.value));
-
-            selfVideoX.value = withSpring(destX);
-            selfVideoY.value = withSpring(destY);
-        });
-
-    const selfVideoStyle = useAnimatedStyle(() => ({
-        transform: [
-            { translateX: selfVideoX.value },
-            { translateY: selfVideoY.value }
-        ] as any
-    }));
-
-    // Swipe down to minimize gesture (Signal style)
-    const screenPanGesture = Gesture.Pan()
-        .onUpdate((event) => {
-            if (event.translationY > 0) {
-                screenTranslateY.value = event.translationY;
-            }
-        })
-        .onEnd((event) => {
-            if (event.translationY > 150) {
-                runOnJS(handleMinimize)();
+            if (webRTCService?.setAudioOutput) {
+                await webRTCService.setAudioOutput(useSpeaker, manualOverride);
             } else {
-                screenTranslateY.value = withSpring(0);
-            }
-        });
-
-    const screenStyle = useAnimatedStyle(() => ({
-        transform: [{ translateY: screenTranslateY.value }],
-        borderRadius: interpolate(screenTranslateY.value, [0, 200], [0, 40]),
-        overflow: 'hidden',
-        flex: 1,
-    }));
-
-    const edgeGlowStyle = useAnimatedStyle(() => ({
-        opacity: edgeGlowPulse.value,
-    }));
-
-    // Request Permissions on Mount
-    useEffect(() => {
-        (async () => {
-            if (activeCall?.type === 'video') {
-                // Check if camera is available (e.g. might be missing on Simulator)
-                // We'll proceed but might not get a stream
-            }
-
-            const { status: microphoneStatus } = await ExpoAudio.requestPermissionsAsync();
-            const needsCamera = activeCall?.type === 'video';
-            let cameraStatus = 'granted';
-            
-            if (needsCamera) {
-                try {
-                     const req = await Camera.requestCameraPermissionsAsync();
-                     cameraStatus = req.status;
-                } catch (e) {
-                    console.warn('Camera permission request failed (simular?)', e);
-                }
-            }
-
-            if ((needsCamera && cameraStatus !== 'granted') || microphoneStatus !== 'granted') {
-                Alert.alert('Permission Required', 'Microphone (and Camera for video) access are needed.');
-                // Don't auto-back immediately, let them know.
-            }
-
-            // Set Audio Mode for Calling
-            try {
                 await ExpoAudio.setAudioModeAsync({
                     allowsRecordingIOS: true,
                     playsInSilentModeIOS: true,
                     staysActiveInBackground: true,
-                    // Use iOS interruption mode 0 (MixWithOthers) or 1 (DoNotMix). 
-                    // For PiP, it's safer to ensure we don't block the background video rendering
-                    interruptionModeIOS: Constants?.platform?.ios ? 1 : 1, 
-                    shouldDuckAndroid: true,
-                    interruptionModeAndroid: 1, // DoNotMix
-                    playThroughEarpieceAndroid: false
+                    interruptionModeIOS: IOS_CALL_INTERRUPTION_MODE,
+                    shouldDuckAndroid: false,
+                    interruptionModeAndroid: ANDROID_CALL_INTERRUPTION_MODE,
+                    playThroughEarpieceAndroid: !useSpeaker,
                 });
-            } catch (e) {
-                console.warn('Failed to set audio mode:', e);
+                const InCallManager = require('react-native-incall-manager').default;
+                InCallManager.setSpeakerphoneOn(useSpeaker);
+                if (Platform.OS === 'ios') InCallManager.setForceSpeakerphoneOn(useSpeaker);
             }
-        })();
-    }, [activeCall?.type, router]);
 
-    const hasInitiated = useRef(false);
-
-    // Initialize WebRTC
-    useEffect(() => {
-        if (!activeCall || !currentUser || !otherUser) return;
-
-        console.log('Initializing WebRTC for call screen...');
-
-        const initCall = async () => {
-            try {
-                if (!webRTCService?.isAvailable?.()) {
-                    throw new Error(webRTCService?.getAvailabilityError?.() || 'WebRTC service is unavailable in this build.');
-                }
-
-                // 1. Setup multi-listener callbacks
-                const callbacks = {
-                    onStateChange: (state: CallState) => {
-                        console.log('[CallScreen] WebRTC state changed callback:', state);
-                        setCallState(prev => {
-                            if (state === 'connecting' && prev === 'connected') return prev;
-                            return state;
-                        });
-
-                        if (state === 'ended') {
-                            console.log('[CallScreen] WebRTC ended internally — triggering app-level endCall');
-                            if (endAppCallRef.current) endAppCallRef.current();
-                        }
-                    },
-                    onLocalStream: (stream: any) => {
-                        console.log('[CallScreen] Local stream updated');
-                        setLocalStream(stream);
-                    },
-                    onRemoteStream: (stream: any) => {
-                        console.log('[CallScreen] Remote stream updated, version:', remoteStreamUpdate + 1);
-                        setRemoteStream(stream);
-                        setRemoteStreamUpdate(prev => prev + 1);
-                    },
-                    onError: (error: string) => {
-                        console.error('[CallScreen] WebRTC error:', error);
-                    },
-                };
-
-                // Store for cleanup
-                webrtcListenerRef.current = callbacks;
-                webRTCService.addListener(callbacks);
-
-                // 2. Immediate State Sync: 
-                // Pick up whatever the service already has (critical for re-mounts/PiP)
-                const currentLocal = webRTCService.getLocalStream();
-                const currentRemote = webRTCService.getRemoteStream();
-                const currentState = webRTCService.getState();
-                
-                if (currentLocal) setLocalStream(currentLocal);
-                if (currentRemote) {
-                    setRemoteStream(currentRemote);
-                    setRemoteStreamUpdate(prev => prev + 1);
-                }
-                
-                if (currentState !== 'idle') {
-                    console.log('[CallScreen] 🔄 Syncing existing service state:', currentState);
-                    setCallState(currentState);
-                }
-
-                webRTCService.setInitiator(!activeCall.isIncoming);
-
-                // 2. PROTOCOL ENGINE: Only start or answer ONCE per session
-                // This prevents re-running logic if UI re-renders (e.g. state change to ringing)
-                if (hasInitiated.current) {
-                    console.log('[CallScreen] Protocol already initiated, skipping re-init.');
-                    return;
-                }
-                
-                // If it's a completely existing call (PiP return), just sync state
-                if (webRTCService.isCallActive()) {
-                    console.log('Restoring active call view...');
-                    hasInitiated.current = true;
-                    const currentLocal = webRTCService.getLocalStream();
-                    const currentRemote = webRTCService.getRemoteStream();
-                    if (currentLocal) setLocalStream(currentLocal);
-                    if (currentRemote) setRemoteStream(currentRemote);
-                    setCallState(webRTCService.getState());
-                    return;
-                }
-
-                hasInitiated.current = true;
-
-                // 1. Set Audio Mode for VOIP (Communication)
-                // This is CRITICAL for echo cancellation and microphone access on iOS/Android
-                try {
-                    console.log('[CallScreen] Setting audio mode for VOIP...');
-                    await ExpoAudio.setAudioModeAsync({
-                        allowsRecordingIOS: true, // Vital for mic
-                        playsInSilentModeIOS: true,
-                        staysActiveInBackground: true,
-                        interruptionModeIOS: 1, // InterruptionModeIOS.DoNotMix
-                        shouldDuckAndroid: true,
-                        interruptionModeAndroid: 1, // InterruptionModeAndroid.DoNotMix
-                        playThroughEarpieceAndroid: false, // Default to speaker for now
-                    });
-                } catch (audioError) {
-                    console.warn('[CallScreen] Failed to set VOIP audio mode:', audioError);
-                }
-
-                // 2. Prepare media and start signaling protocol
-                await webRTCService.prepareCall(activeCall.type);
-
-                if (activeCall.isIncoming) {
-                    // Receiver: wait for Offer signal from Caller (handled by webRTCService internally)
-                    console.log('[CallScreen] Waiting for offer as Receiver...');
-                } else {
-                    // Caller: Start signaling protocol (Create and Send Offer)
-                    console.log('[CallScreen] Starting signaling as Caller...');
-                    await webRTCService.startCall();
-                }
-
-            } catch (e: any) {
-                console.warn('WebRTC initialization failed:', e);
-                console.warn('Error Stack:', e?.stack);
-                const message = String(e?.message || e || 'unknown');
-                const isOptionalNativeListenerIssue =
-                    message.toLowerCase().includes('addlistener')
-                    && message.toLowerCase().includes('null');
-
-                if (isOptionalNativeListenerIssue) {
-                    // Do not hard-end the call for optional native listener glitches
-                    // (for example when PiP module is missing in this build).
-                    console.warn('[CallScreen] Non-fatal native listener issue during init. Skipping forced end.');
-                    return;
-                }
-
-                Alert.alert("Call Failed", "Could not initialize WebRTC connection.");
-                handleEndCall(`init-failed: ${message}`);
-            }
-        };
-
-        initCall();
-
-        return () => {
-            console.log('[CallScreen] ⚠️ WebRTC useEffect CLEANUP triggered. isMinimizing:', isMinimizing.current);
-            if (webRTCService) {
-                // Always detach callbacks to prevent stale state updates
-                if (webrtcListenerRef.current) {
-                    try { webRTCService.removeListener(webrtcListenerRef.current); } catch (e) { }
-                    webrtcListenerRef.current = null;
-                }
-
-                if (isMinimizing.current) {
-                    // Minimizing: keep call alive, just detach the UI callbacks (done above)
-                    console.log('[CallScreen] Minimizing — keeping call alive, callbacks detached');
-                } else {
-                    // Not minimizing: AppContext.endCall() already handled full teardown.
-                    // Just reset the audio mode. Do NOT call webRTCService.cleanup/endCall again.
-                    console.log('[CallScreen] Unmounting after call end — restoring audio mode only');
-                    restoreMusicAudioMode();
-                }
-            }
-        };
+            setIsSpeaker(useSpeaker);
+            return true;
+        } catch (error) {
+            console.warn('[CallScreen] Failed to apply speaker output:', error);
+            return false;
+        }
     }, []);
 
-    // Sync PiP parameters with activeCall
-    useEffect(() => {
-        if (!activeCall) {
-            console.log('[CallScreen] ⚠️ activeCall became null — navigating back');
-            // FIX: Navigate back or to tabs when call ends to prevent white screen
-            if (navigation.canGoBack()) {
-                navigation.goBack();
-            } else {
-                // Fallback: navigate to home/tabs if no back stack
-                router.replace('/(tabs)');
-            }
-            return;
-        }
+    const handleToggleMute = useCallback(() => toggleAppMute(), [toggleAppMute]);
+    const handleToggleVideo = useCallback(() => toggleVideo?.(), [toggleVideo]);
+    const handleToggleEdgeGlow = useCallback(() => isVideo && setIsEdgeGlowEnabled(prev => !prev), [isVideo]);
+    const handleToggleSpeaker = useCallback(async () => {
+        await applySpeakerOutput(!isSpeaker, true);
+    }, [isSpeaker, applySpeakerOutput]);
+    const handleSwitchCamera = useCallback(() => webRTCService?.switchCamera(), []);
 
-        // Enable PIP Auto-Enter for ALL Calls (Android)
-        // This ensures that moving to home screen during a call triggers native PiP
-        if (activeCall.isAccepted && Platform.OS === 'android' && canUseExpoPip) {
-            try {
-                const isVideoCall = activeCall.type === 'video';
-                ExpoPip.setPictureInPictureParams({
-                    autoEnterEnabled: true,
-                    width: isVideoCall ? Math.floor(width) : 200,
-                    height: isVideoCall ? Math.floor(width * 1.5) : 200,
-                });
-            } catch (e) {
-                console.log('Failed to set PIP params:', e);
-            }
-        }
-    }, [activeCall, navigation, router, width, canUseExpoPip]);
+    const handleAcceptCall = useCallback(async () => {
+        try { await acceptAppCall(); } catch (e) { console.error(e); }
+    }, [acceptAppCall]);
 
-    // Timer - only start if call is connected AND accepted
-    useEffect(() => {
-        if (!uiConnected) return;
-        
-        // Android Fix: Re-apply communication mode once connected to ensure audio routing is consistent
-        if (Platform.OS === 'android') {
-            // Wait 500ms (increased) to allow hardware to stabilize
-            setTimeout(async () => {
-                console.log('[CallScreen] 🔄 Connected! Refreshing VOIP audio session...');
-                try {
-                    await ExpoAudio.setAudioModeAsync({
-                        allowsRecordingIOS: true,
-                        playsInSilentModeIOS: true,
-                        staysActiveInBackground: true,
-                        interruptionModeIOS: 1, 
-                        shouldDuckAndroid: true,
-                        interruptionModeAndroid: 1, 
-                        playThroughEarpieceAndroid: !isSpeaker // Sync with UI state
-                    });
-                } catch (e) {
-                    console.warn('[CallScreen] Post-connect audio sync failed:', e);
-                }
-            }, 500);
-        }
+    const selfVideoX = useSharedValue(width - 130);
+    const selfVideoY = useSharedValue(120);
+    const screenTranslateY = useSharedValue(0);
 
-        console.log('[CallScreen] ⏱️ Starting call timer');
-        const interval = setInterval(() => {
-            setCallDuration(prev => prev + 1);
-        }, 1000);
-        return () => clearInterval(interval);
-    }, [uiConnected]);
+    const panGesture = Gesture.Pan()
+        .onUpdate((event) => {
+            selfVideoX.value = event.translationX + (width - 130);
+            selfVideoY.value = event.translationY + 120;
+        })
+        .onEnd(() => {
+            selfVideoX.value = withSpring(selfVideoX.value < width / 2 ? 20 : width - 130);
+            selfVideoY.value = withSpring(Math.max(100, Math.min(height - 250, selfVideoY.value)));
+        });
 
-    // Pulse Animation
-    useEffect(() => {
-        if (callState === 'ringing' || callState === 'connecting') {
-            pulseScale.value = withRepeat(
-                withTiming(1.5, { duration: 1500, easing: Easing.out(Easing.ease) }),
-                -1,
-                false
-            );
-            pulseOpacity.value = withRepeat(
-                withTiming(0, { duration: 1500, easing: Easing.out(Easing.ease) }),
-                -1,
-                false
-            );
-        } else {
-            pulseScale.value = withTiming(1);
-            pulseOpacity.value = withTiming(0);
-        }
-    }, [callState]);
-
-    const pulseStyle = useAnimatedStyle(() => ({
-        transform: [{ scale: pulseScale.value }],
-        opacity: pulseOpacity.value,
+    const selfVideoStyle = useAnimatedStyle(() => ({
+        transform: [
+            { translateX: selfVideoX.value } as any,
+            { translateY: selfVideoY.value } as any
+        ]
     }));
 
-    const restoreMusicAudioMode = useCallback(async () => {
-        try {
-            await ExpoAudio.setAudioModeAsync({
-                allowsRecordingIOS: false,
-                playsInSilentModeIOS: true,
-                staysActiveInBackground: true,
-                interruptionModeIOS: 1,
-                shouldDuckAndroid: true,
-                interruptionModeAndroid: 1,
-                playThroughEarpieceAndroid: false,
-            });
-        } catch (e) {
-            console.warn('Failed to restore music audio mode:', e);
-        }
+    const screenPanGesture = Gesture.Pan()
+        .onUpdate((event) => { if (event.translationY > 0) screenTranslateY.value = event.translationY; })
+        .onEnd((event) => {
+            if (event.translationY > 150) runOnJS(handleMinimize)();
+            else screenTranslateY.value = withSpring(0);
+        });
+
+    const screenStyle = useAnimatedStyle(() => ({
+        transform: [{ translateY: screenTranslateY.value }],
+        borderRadius: Platform.OS === 'android' ? (screenTranslateY.value > 10 ? 30 : 0) : interpolate(screenTranslateY.value, [0, 200], [0, 40]),
+        overflow: 'hidden',
+        flex: 1,
+    }));
+
+    const edgeGlowStyle = useAnimatedStyle(() => ({ opacity: edgeGlowPulse.value }));
+
+    // Mount guard: set isMounted after the first render to prevent navigating
+    // before the Root Layout navigator is ready (causes "navigate before mount" crash).
+    useEffect(() => {
+        isMounted.current = true;
+        return () => { isMounted.current = false; };
     }, []);
+
+    useEffect(() => {
+        if (!isMounted.current) return;
+        if (!activeCall && !isMinimizing.current) {
+            router.replace('/(tabs)');
+        }
+    }, [activeCall, router]);
 
     const formatDuration = (seconds: number) => {
         const mins = Math.floor(seconds / 60);
@@ -733,245 +347,258 @@ export default function CallScreen() {
         return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     };
 
-    const handleEndCall = useCallback((reason: any = 'manual') => {
-        const reasonStr = (typeof reason === 'string') ? reason : 'user-action';
-        console.log(`[CallScreen] 📴 handleEndCall() called with reason: ${reasonStr}`);
-        // 1. Clear streams immediately to prevent black screen/crash on unmount
+    const handleEndCall = useCallback(() => {
+        setLocalStream(null);
+        setRemoteStream(null);
+        endAppCall();
+    }, [endAppCall]);
+
+    const pulseScale = useSharedValue(1);
+    const pulseOpacity = useSharedValue(0.5);
+
+    useEffect(() => {
+        if (callState === 'ringing' || callState === 'connecting') {
+            pulseScale.value = withRepeat(withTiming(1.5, { duration: 1500 }), -1, false);
+            pulseOpacity.value = withRepeat(withTiming(0, { duration: 1500 }), -1, false);
+        } else {
+            pulseScale.value = 1; pulseOpacity.value = 0;
+        }
+    }, [callState]);
+
+    const pulseStyle = useAnimatedStyle(() => ({ transform: [{ scale: pulseScale.value }], opacity: pulseOpacity.value }));
+
+    const restoreMusicAudioMode = useCallback(async () => {
+        try {
+            await ExpoAudio.setAudioModeAsync({
+                allowsRecordingIOS: false,
+                playsInSilentModeIOS: true,
+                staysActiveInBackground: true,
+                interruptionModeIOS: IOS_CALL_INTERRUPTION_MODE,
+                shouldDuckAndroid: true,
+                interruptionModeAndroid: ANDROID_CALL_INTERRUPTION_MODE,
+                playThroughEarpieceAndroid: false,
+            });
+        } catch (e) { console.warn(e); }
+    }, []);
+
+    // Audio session management is now handled centrally by WebRTCService
+    // to prevent hardware conflicts during transition from music to call.
+
+    // PIP params — separate effect that CAN re-run on activeCall changes
+    useEffect(() => {
+        if (activeCall?.isAccepted && Platform.OS === 'android' && typeof ExpoPip?.setPictureInPictureParams === 'function') {
+            try {
+                ExpoPip.setPictureInPictureParams({
+                    autoEnterEnabled: true,
+                    width: Math.floor(width),
+                    height: Math.floor(width * 1.5)
+                });
+            } catch (e) {}
+        }
+    }, [activeCall?.isAccepted, width]);
+
+    useEffect(() => {
+        if (!activeCall) return;
+        const audioOutput = webRTCService?.getAudioOutput?.();
+        if (audioOutput === 'speaker' || audioOutput === 'earpiece') {
+            setIsSpeaker(audioOutput === 'speaker');
+            return;
+        }
+        setIsSpeaker(activeCall.type === 'video');
+    }, [activeCall, callState]);
+
+    // WebRTC init — runs once per call session (callId/roomId)
+    const initializedCallSessionRef = useRef<string | null>(null);
+    useEffect(() => {
+        if (!activeCall) {
+            initializedCallSessionRef.current = null;
+            return;
+        }
+
+        const sessionKey = activeCall.callId || activeCall.roomId;
+        if (!sessionKey || initializedCallSessionRef.current === sessionKey) return;
+        initializedCallSessionRef.current = sessionKey;
+
+        setWasConnected(false);
+        setCallDuration(0);
+        setStats({ bytesReceived: 0 });
+        setCallState(activeCall.isAccepted ? 'connecting' : 'ringing');
         setLocalStream(null);
         setRemoteStream(null);
 
-        // 2. Trigger app-level end call (which handles WebRTC cleanup + signaling + logging)
-        // Do NOT call webRTCService.cleanup() here separately — AppContext.endCall() does it
-        if (endAppCallRef.current) endAppCallRef.current();
-        restoreMusicAudioMode();
-        // Do not call navigation.goBack() here. Let the useEffect that watches `!activeCall` handle it.
-    }, [restoreMusicAudioMode]);
+        // Capture values at init time so we don't depend on activeCall object
+        const callType = activeCall.type;
+        const isIncoming = activeCall.isIncoming;
+        const callId = activeCall.callId || activeCall.roomId || sessionKey;
 
+        const listener = {
+            onStateChange: (s: any) => {
+                setCallState(s);
+                const output = webRTCService?.getAudioOutput?.();
+                if (output === 'speaker' || output === 'earpiece') {
+                    setIsSpeaker(output === 'speaker');
+                }
+                if (s === 'connected') {
+                    try {
+                        const { nativeCallBridge } = require('../services/NativeCallBridge');
+                        nativeCallBridge.reportWebRTCConnected(callId, callType);
+                    } catch (_) {}
+                }
+            },
+            onLocalStream: (s: any) => setLocalStream(s),
+            onRemoteStream: (s: any) => { setRemoteStream(s); setRemoteStreamUpdate(v => v+1); },
+            onStats: (st: any) => setStats(prev => ({ ...prev, ...st })),
+        };
 
+        webRTCService?.addListener(listener);
+        let cancelled = false;
 
-    // FIX: Prevent white screen by navigating away when call ends before rendering
-    if (!activeCall || !contact) {
-        return (
-            <View style={[styles.container, { backgroundColor: '#08080A', justifyContent: 'center', alignItems: 'center' }]}>
-                <StatusBar hidden />
-                <ActivityIndicator size="large" color="#BC002A" />
-                <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 18, fontWeight: '700', marginTop: 24, letterSpacing: 1 }}>SOULSYNC</Text>
-                <Text style={{ color: 'rgba(255,255,255,0.4)', fontSize: 13, marginTop: 8 }}>{activeCall ? 'Initializing Secure Connection...' : 'Reconnecting to Call...'}</Text>
-            </View>
-        );
-    }
+        const init = async () => {
+            try {
+                const hasMicPermission = await ensureMicrophoneAccess();
+                if (cancelled) return;
+                if (!hasMicPermission) {
+                    if (!isIncoming) {
+                        handleEndCall();
+                    }
+                    return;
+                }
+
+                const defaultSpeaker = callType === 'video';
+                await applySpeakerOutput(defaultSpeaker, false);
+
+                await ExpoAudio.setAudioModeAsync({
+                    allowsRecordingIOS: true,
+                    playsInSilentModeIOS: true,
+                    staysActiveInBackground: true,
+                    interruptionModeIOS: IOS_CALL_INTERRUPTION_MODE,
+                    shouldDuckAndroid: false,
+                    interruptionModeAndroid: ANDROID_CALL_INTERRUPTION_MODE,
+                    playThroughEarpieceAndroid: !defaultSpeaker,
+                }).catch(() => {});
+
+                // For incoming calls, answerCall() may have already initialized
+                // WebRTC (offer arrived before CallScreen mounted). Skip if active.
+                if (isIncoming && webRTCService?.isCallActive()) {
+                    console.log('[CallScreen] WebRTC already active for incoming call, skipping init');
+                } else {
+                    await webRTCService?.prepareCall(callType);
+                    if (cancelled) return;
+                    if (!isIncoming) {
+                        await webRTCService?.startCall();
+                    }
+                }
+            } catch (e: any) {
+                console.warn('[CallScreen] WebRTC init failed:', e?.message);
+            }
+        };
+        void init();
+
+        return () => {
+            cancelled = true;
+            webRTCService?.removeListener(listener);
+            if (!isMinimizing.current) void restoreMusicAudioMode();
+        };
+    }, [activeCall?.callId, activeCall?.roomId, ensureMicrophoneAccess, applySpeakerOutput, handleEndCall, restoreMusicAudioMode]);
+
+    useEffect(() => {
+        if (uiConnected) {
+            const interval = setInterval(() => setCallDuration(p => p + 1), 1000);
+            return () => clearInterval(interval);
+        }
+    }, [uiConnected]);
+
+    // If no active call, show nothing while navigation redirects to tabs
+    if (!activeCall) return null;
 
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>
             <GestureDetector gesture={screenPanGesture}>
-                <Animated.View style={[
-                    styles.container, 
-                    { 
-                        backgroundColor: '#000', 
-                        width, 
-                        // Fix Android black gap by using 100% height for translucent mode
-                        height: Platform.OS === 'android' ? '100%' : height 
-                    }, 
-                    screenStyle
-                ]}>
-                    <StatusBar 
-                        translucent={Platform.OS === 'android'} 
-                        backgroundColor="transparent" 
-                        barStyle="light-content" 
-                    />
+                <Animated.View style={[styles.container, { backgroundColor: '#0F0F14', width, height }, screenStyle]}>
+                    <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
 
-                        {/* 1. Background Media Layer */}
-                        <View style={[StyleSheet.absoluteFill, { backgroundColor: '#111' }]}>
-                            {/* PRIORITY A: Remote Video Stream */}
-                            {(isVideo && canRenderVideo && remoteStream && activeCall.isAccepted && !activeCall.remoteVideoOff) ? (
-                                <RemoteVideoComponent
-                                    key={`remote-video-v${remoteStreamUpdate}`}
-                                    ref={rtcPipRef}
-                                    streamURL={typeof remoteStream.toURL === 'function' ? remoteStream.toURL() : remoteStream}
-                                    style={[StyleSheet.absoluteFill, { zIndex: 0 }]}
-                                    objectFit="cover"
-                                    mirror={false}
-                                    zOrder={0}
-                                />
-                            ) : (
-                                // PRIORITY B: Blurred avatar background (Fallback only)
-                                !!contact.avatar && (
-                                    <Image
-                                        source={{ uri: contact.avatar }}
-                                        style={[styles.backgroundImage, { width, height }]}
-                                        blurRadius={isVideo ? 60 : 50}
-                                    />
-                                )
-                            )}
-                            <View style={[styles.overlay, { zIndex: 1 }]} />
-                        </View>
-
-                        {isEdgeGlowEnabled && isVideo && (
-                            <Animated.View pointerEvents="none" style={[styles.edgeGlowContainer, edgeGlowStyle]}>
-                                <LinearGradient
-                                    colors={[edgeGlowStrong, edgeGlowSoft]}
-                                    start={{ x: 0.5, y: 0 }}
-                                    end={{ x: 0.5, y: 1 }}
-                                    style={[styles.edgeGlowStrip, styles.edgeGlowTop]}
-                                />
-                                <LinearGradient
-                                    colors={[edgeGlowStrong, edgeGlowSoft]}
-                                    start={{ x: 0.5, y: 1 }}
-                                    end={{ x: 0.5, y: 0 }}
-                                    style={[styles.edgeGlowStrip, styles.edgeGlowBottom]}
-                                />
-                                <LinearGradient
-                                    colors={[edgeGlowStrong, edgeGlowSoft]}
-                                    start={{ x: 0, y: 0.5 }}
-                                    end={{ x: 1, y: 0.5 }}
-                                    style={[styles.edgeGlowStrip, styles.edgeGlowLeft]}
-                                />
-                                <LinearGradient
-                                    colors={[edgeGlowStrong, edgeGlowSoft]}
-                                    start={{ x: 1, y: 0.5 }}
-                                    end={{ x: 0, y: 0.5 }}
-                                    style={[styles.edgeGlowStrip, styles.edgeGlowRight]}
-                                />
-                            </Animated.View>
+                    {/* 1. Background Media Layer */}
+                    <View style={[StyleSheet.absoluteFill, { backgroundColor: '#111' }]}>
+                        {(isVideo && canRenderVideo && remoteStream && activeCall?.isAccepted && !activeCall?.remoteVideoOff) ? (
+                            <RemoteVideoComponent
+                                key={`v-${remoteStreamUpdate}`}
+                                ref={rtcPipRef}
+                                streamURL={typeof remoteStream.toURL === 'function' ? remoteStream.toURL() : remoteStream}
+                                style={StyleSheet.absoluteFill}
+                                objectFit="cover"
+                                zOrder={0}
+                            />
+                        ) : (
+                            !!contact.avatar && (
+                                <Image source={{ uri: contact.avatar }} style={[styles.backgroundImage, { width, height }]} blurRadius={isVideo ? 60 : 50} />
+                            )
                         )}
 
-                        {/* Video Toggled Off Overlay (Remote Side) */}
-                        {isVideo && activeCall.remoteVideoOff && (
-                            <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.3)' }]}>
-                                <SoulAvatar uri={contact.avatar || ''} size={150} />
-                                <View style={{ marginTop: 20, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 }}>
-                                    <Text style={{ color: 'white', fontWeight: '600' }}>{contact.name}'s Video is Off</Text>
-                                </View>
+                        {remoteStream && activeCall?.isAccepted && (!isVideo || activeCall?.remoteVideoOff) && RTCView && (
+                            <View style={{ position: 'absolute', opacity: 0.01, width: 1, height: 1, top: 0, left: 0 }}>
+                                <RTCView 
+                                    streamURL={typeof remoteStream.toURL === 'function' ? remoteStream.toURL() : remoteStream} 
+                                    style={{ width: 1, height: 1 }} 
+                                    zOrder={-1} 
+                                />
                             </View>
                         )}
-                        
-                        {/* 🚫 Connecting Overlay for Video Removed per User Request 🚫 */}
+                        <View style={[styles.overlay, { zIndex: 1 }]} />
+                    </View>
 
-                    {/* 2. Main Content (Visible ONLY when NOT in PiP) */}
+                    {/* 2. Edge Glow */}
+                    {isEdgeGlowEnabled && isVideo && (
+                        <Animated.View pointerEvents="none" style={[styles.edgeGlowContainer, edgeGlowStyle]}>
+                            {Platform.OS === 'ios' ? (
+                                <LinearGradient colors={[edgeGlowStrong, edgeGlowSoft]} style={StyleSheet.absoluteFill} />
+                            ) : (
+                                <View style={[StyleSheet.absoluteFill, { borderWidth: 8, borderColor: edgeGlowStrong, opacity: 0.4 }]} />
+                            )}
+                        </Animated.View>
+                    )}
+
                     {!isInPipMode ? (
                         <View style={styles.content}>
-                            {/* Diagnostics Overlay (Toggled via long press on status) */}
-                            {showDiagnostics && (
-                                <View style={styles.diagnosticsContainer}>
-                                    <GlassView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
-                                    <Text style={styles.diagnosticTitle}>Soul Diagnostics</Text>
-                                    
-                                    <View style={styles.diagnosticRow}>
-                                        <Text style={styles.diagnosticLabel}>Connection:</Text>
-                                        <Text style={[styles.diagnosticValue, { color: callState === 'connected' ? '#22c55e' : '#eab308' }]}>
-                                            {callState.toUpperCase()}
-                                        </Text>
-                                    </View>
-
-                                    <View style={styles.diagnosticRow}>
-                                        <Text style={styles.diagnosticLabel}>ICE State:</Text>
-                                        <Text style={styles.diagnosticValue}>
-                                            {webRTCService?.getIceConnectionState()?.toUpperCase()}
-                                        </Text>
-                                    </View>
-
-                                    <View style={styles.diagnosticRow}>
-                                        <Text style={styles.diagnosticLabel}>Signaling:</Text>
-                                        <Text style={styles.diagnosticValue}>
-                                            {webRTCService?.getSignalingState()?.toUpperCase()}
-                                        </Text>
-                                    </View>
-
-                                    <View style={styles.diagnosticRow}>
-                                        <Text style={styles.diagnosticLabel}>Local Audio:</Text>
-                                        <View style={{alignItems: 'flex-end'}}>
-                                            <Text style={styles.diagnosticValue}>{localStream?.getAudioTracks().length || 0} tracks</Text>
-                                            {localStream?.getAudioTracks().map((t: any, i: number) => (
-                                                <Text key={i} style={{fontSize: 10, color: t.enabled ? '#22c55e' : '#ef4444'}}>
-                                                    {t.readyState} {t.enabled ? 'Enabled' : 'Disabled'}
-                                                </Text>
-                                            ))}
-                                        </View>
-                                    </View>
-
-                                    <View style={styles.diagnosticRow}>
-                                        <Text style={styles.diagnosticLabel}>Remote Audio:</Text>
-                                        <View style={{alignItems: 'flex-end'}}>
-                                            <Text style={styles.diagnosticValue}>{remoteStream?.getAudioTracks().length || 0} tracks</Text>
-                                            {remoteStream?.getAudioTracks().map((t: any, i: number) => (
-                                                <Text key={i} style={{fontSize: 10, color: t.enabled ? '#22c55e' : '#ef4444'}}>
-                                                    {t.readyState} {t.enabled ? 'Enabled' : 'Disabled'}
-                                                </Text>
-                                            ))}
-                                        </View>
-                                    </View>
-
-                                    <View style={styles.diagnosticRow}>
-                                        <Text style={styles.diagnosticLabel}>Remote Video:</Text>
-                                        <Text style={[styles.diagnosticValue, { color: remoteStream?.getVideoTracks().length ? '#22c55e' : '#ef4444' }]}>
-                                            {remoteStream?.getVideoTracks().length || 0} tracks
-                                        </Text>
-                                    </View>
-
-                                    <Pressable onPress={() => setShowDiagnostics(false)} style={styles.closeDiagnostics}>
-                                        <Text style={{color: '#fff', fontWeight: 'bold'}}>CLOSE</Text>
-                                    </Pressable>
-                                </View>
-                            )}
-
                             {/* Header */}
                             <View style={[styles.header, { marginTop: Math.max(insets.top, 20) }]}>
                                 <Pressable onPress={handleMinimize} style={styles.iconButton}>
                                     <MaterialIcons name="keyboard-arrow-down" size={32} color="white" />
                                 </Pressable>
-                                
                                 <View style={styles.securityBadge}>
                                     <MaterialIcons name="lock" size={12} color="rgba(255,255,255,0.6)" />
                                     <Text style={styles.securityText}>Soul End-to-End Encrypted</Text>
                                 </View>
-                                
                                 <View style={{ width: 44 }} />
                             </View>
 
-                            {/* Center Info (Avatar/Name) - Only show if not connected video or no uiConnection */}
-                            {(!isVideo || !uiConnected) && (
+                            {/* Center Info */}
+                            {(!isVideo || !uiConnected || activeCall?.remoteVideoOff) && (
                                 <View style={styles.mainInfo}>
                                     <View style={styles.avatarWrapper}>
                                         <Animated.View style={[styles.pulseRing, pulseStyle]} />
                                         <SoulAvatar uri={contact.avatar} size={170} />
                                     </View>
-
-                                    <View style={styles.textContainer}>
-                                        <Text style={styles.contactName}>{contact.name}</Text>
-                                        <Pressable 
-                                            onLongPress={() => setShowDiagnostics(true)}
-                                            delayLongPress={2000}
-                                        >
-                                            <Text style={styles.callStatus}>
-                                                {uiConnected ? formatDuration(callDuration) : 
-                                                callState === 'ended' ? 'Ending...' :
-                                                (activeCall.isIncoming && !activeCall.isAccepted) ? 'Incoming Soul Call...' : 
-                                                (callState === 'ringing' && !activeCall.isIncoming) ? 'Ringing...' : 
-                                                isSlowConnection ? 'Connection logic delayed...' : 'Connecting...'}
-                                            </Text>
-                                        </Pressable>
-                                    </View>
+                                    <Text style={styles.contactName}>{contact.name}</Text>
+                                    <Text style={styles.callStatus}>
+                                        {uiConnected ? formatDuration(callDuration) : 'Connecting...'}
+                                    </Text>
+                                    {uiConnected && (
+                                        <Text style={[styles.callStatus, { fontSize: 10, opacity: 0.8 }]}>
+                                            Data Rx: {(stats.bytesReceived / 1024).toFixed(1)} KB
+                                        </Text>
+                                    )}
                                 </View>
                             )}
 
-                            {/* Self Video (Draggable) - Replaces the conditional check to ensure PiP stability */}
+                            {/* Self Video */}
                             {isVideo && (
                                 <GestureDetector gesture={panGesture}>
                                     <Animated.View style={[styles.selfVideoContainer, selfVideoStyle]}>
-                                        {localStream && !activeCall.isVideoOff && RTCView ? (
-                                            <RTCView
-                                                streamURL={typeof localStream.toURL === 'function' ? localStream.toURL() : localStream}
-                                                style={styles.selfVideo}
-                                                objectFit="cover"
-                                                mirror={true}
-                                                zOrder={2}
-                                            />
+                                        {localStream && !activeCall?.isVideoOff && RTCView ? (
+                                            <RTCView streamURL={typeof localStream.toURL === 'function' ? localStream.toURL() : localStream} style={styles.selfVideo} objectFit="cover" mirror zOrder={2} />
                                         ) : (
                                             <View style={styles.selfVideoPlaceholder}>
                                                 <SoulAvatar uri={currentUser?.avatar} size={50} />
-                                                <View style={styles.videoOffIndicator}>
-                                                    <MaterialIcons name="videocam-off" size={14} color="white" />
-                                                </View>
                                             </View>
                                         )}
                                     </Animated.View>
@@ -980,73 +607,47 @@ export default function CallScreen() {
 
                             {/* Footer Controls */}
                             <GlassView intensity={35} tint="dark" style={[styles.controlsBar, { marginBottom: Math.max(insets.bottom, 40) }]}>
-                                {callState !== 'connected' && activeCall.isIncoming && !activeCall.isAccepted ? (
+                                {callState !== 'connected' && activeCall?.isIncoming && !activeCall?.isAccepted ? (
                                     <View style={styles.incomingActionsRow}>
-                                        <View style={styles.incomingAction}>
-                                            <Pressable style={[styles.actionButton, { backgroundColor: '#ef4444' }]} onPress={handleEndCall}>
-                                                <MaterialIcons name="call-end" size={32} color="white" />
-                                            </Pressable>
-                                            <Text style={styles.actionText}>Decline</Text>
-                                        </View>
-                                        <View style={styles.incomingAction}>
-                                            <Pressable style={[styles.actionButton, { backgroundColor: '#22c55e' }]} onPress={handleAcceptCall}>
-                                                <MaterialIcons name={isVideo ? "videocam" : "call"} size={32} color="white" />
-                                            </Pressable>
-                                            <Text style={styles.actionText}>Accept</Text>
-                                        </View>
+                                        <Pressable onPress={handleEndCall} style={[styles.controlBtn, {backgroundColor: '#ef4444'}]}><MaterialIcons name="call-end" size={28} color="white" /></Pressable>
+                                        <Pressable onPress={handleAcceptCall} style={[styles.controlBtn, {backgroundColor: '#22c55e'}]}><MaterialIcons name="call" size={28} color="white" /></Pressable>
                                     </View>
                                 ) : (
-                                    <>
-                                        <View style={styles.controlsRow}>
-                                            <Pressable style={[styles.controlBtn, isVideo && styles.controlBtnActive]} onPress={handleToggleVideo}>
-                                                <MaterialIcons name={isVideo ? "videocam" : "videocam-off"} size={22} color={isVideo ? "#000" : "white"} />
-                                            </Pressable>
-
-                                            <Pressable
-                                                style={[
-                                                    styles.controlBtn,
-                                                    isEdgeGlowEnabled && styles.controlBtnActive,
-                                                    !isVideo && styles.controlBtnDisabled,
-                                                ]}
-                                                onPress={handleToggleEdgeGlow}
-                                                disabled={!isVideo}
-                                            >
-                                                <Ionicons name="sparkles" size={20} color={isEdgeGlowEnabled ? "#000" : "white"} />
-                                            </Pressable>
-
-                                            <Pressable style={[styles.controlBtn, activeCall.isMuted && styles.controlBtnActive]} onPress={handleToggleMute}>
-                                                <MaterialIcons name={activeCall.isMuted ? "mic-off" : "mic"} size={24} color={activeCall.isMuted ? "#000" : "white"} />
-                                            </Pressable>
-
-                                            <Pressable style={[styles.controlBtn, isSpeaker && styles.controlBtnActive]} onPress={handleToggleSpeaker}>
-                                                <MaterialIcons name={isSpeaker ? "volume-up" : "volume-down"} size={24} color={isSpeaker ? "#000" : "white"} />
-                                            </Pressable>
-
-                                            {isVideo && (
-                                                <Pressable style={styles.controlBtn} onPress={handleSwitchCamera}>
-                                                    <Ionicons name="camera-reverse" size={24} color="white" />
-                                                </Pressable>
-                                            )}
-
-                                            <Pressable style={[styles.controlBtn, styles.endCallBtn]} onPress={handleEndCall}>
-                                                <MaterialIcons name="call-end" size={30} color="white" />
-                                            </Pressable>
-                                        </View>
-                                    </>
+                                    <View style={styles.controlsRow}>
+                                        <Pressable style={[styles.controlBtn, activeCall?.isMuted && styles.controlBtnActive]} onPress={handleToggleMute}><Ionicons name={activeCall?.isMuted ? "mic-off" : "mic"} size={24} color={activeCall?.isMuted ? "#000" : "white"} /></Pressable>
+                                        <Pressable style={[styles.controlBtn, isSpeaker && styles.controlBtnActive]} onPress={handleToggleSpeaker}><Ionicons name={isSpeaker ? "volume-high" : "volume-low"} size={24} color={isSpeaker ? "#000" : "white"} /></Pressable>
+                                        {isVideo && <Pressable style={[styles.controlBtn, activeCall?.isVideoOff && styles.controlBtnActive]} onPress={handleToggleVideo}><MaterialIcons name={activeCall?.isVideoOff ? "videocam-off" : "videocam"} size={24} color={activeCall?.isVideoOff ? "#000" : "white"} /></Pressable>}
+                                        <Pressable style={styles.controlBtn} onPress={handleMinimize}><MaterialIcons name="picture-in-picture" size={24} color="white" /></Pressable>
+                                        <Pressable style={[styles.controlBtn, styles.endCallBtn]} onPress={handleEndCall}><MaterialIcons name="call-end" size={28} color="white" /></Pressable>
+                                    </View>
                                 )}
                             </GlassView>
+
+                            {/* Diagnostics Toggle */}
+                            <Pressable style={{position: 'absolute', top: 10, right: 10, opacity: 0.1}} onLongPress={() => setShowDiagnostics(true)} delayLongPress={5000}>
+                                <View style={{width: 20, height: 20}} />
+                            </Pressable>
+
+                            {showDiagnostics && (
+                                <View style={styles.diagnosticsContainer}>
+                                    <GlassView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+                                    <View style={{ padding: 20 }}>
+                                        <Text style={styles.diagnosticTitle}>Soul Diagnostics</Text>
+                                        <Text style={styles.diagnosticValue}>State: {callState}</Text>
+                                        <Text style={styles.diagnosticValue}>ICE: {webRTCService?.getIceConnectionState()}</Text>
+                                        <Text style={styles.diagnosticValue}>Rx Data: {(stats.bytesReceived / 1024).toFixed(1)} KB</Text>
+                                        <Pressable onPress={() => setShowDiagnostics(false)} style={styles.closeDiagnostics}>
+                                            <Text style={{color: '#fff', fontWeight: 'bold' }}>CLOSE</Text>
+                                        </Pressable>
+                                    </View>
+                                </View>
+                            )}
                         </View>
                     ) : (
-                        // 3. PiP Overlay (Visible ONLY in Native PiP window)
-                        // If it's a video call, the RTCView (background) stays visible.
-                        // For audio call, we show this branding/info overlay.
                         !isVideo && (
                             <View style={styles.pipOverlay}>
-                                <SoulAvatar uri={contact.avatar} size={width * 0.4} />
-                                <View style={[styles.pipTitleBar, { marginTop: 15 }]}>
-                                    <Text style={styles.pipName}>{contact.name}</Text>
-                                    <Text style={styles.pipStatus}>{formatDuration(callDuration)}</Text>
-                                </View>
+                                <SoulAvatar uri={contact.avatar} size={width * 0.3} />
+                                <Text style={styles.pipName}>{contact.name}</Text>
                             </View>
                         )
                     )}
@@ -1056,313 +657,35 @@ export default function CallScreen() {
     );
 }
 
-const callContactNameShadow = Platform.select({
-  ios: {
-    textShadowColor: 'rgba(0,0,0,0.5)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 4,
-  },
-  default: undefined,
-});
-
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#000',
-    },
-    diagnosticsContainer: {
-        position: 'absolute',
-        top: 100,
-        left: 20,
-        right: 20,
-        padding: 20,
-        borderRadius: 20,
-        backgroundColor: 'rgba(0,0,0,0.8)',
-        zIndex: 1000,
-        overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
-    },
-    diagnosticTitle: {
-        color: '#fff',
-        fontSize: 18,
-        fontWeight: 'bold',
-        marginBottom: 15,
-        textAlign: 'center',
-    },
-    diagnosticRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 10,
-    },
-    diagnosticLabel: {
-        color: 'rgba(255,255,255,0.6)',
-        fontSize: 14,
-    },
-    diagnosticValue: {
-        color: '#fff',
-        fontSize: 14,
-        fontWeight: '600',
-    },
-    closeDiagnostics: {
-        marginTop: 15,
-        backgroundColor: '#BC002A',
-        padding: 10,
-        borderRadius: 10,
-        alignItems: 'center',
-    },
-    backgroundImage: {
-        resizeMode: 'cover',
-        opacity: 0.6,
-    },
-    overlay: {
-        ...StyleSheet.absoluteFillObject,
-        backgroundColor: 'rgba(0,0,0,0.3)',
-    },
-    edgeGlowContainer: {
-        ...StyleSheet.absoluteFillObject,
-        zIndex: 4,
-    },
-    edgeGlowStrip: {
-        position: 'absolute',
-    },
-    edgeGlowTop: {
-        top: 0,
-        left: 0,
-        right: 0,
-        height: 60,
-    },
-    edgeGlowBottom: {
-        bottom: 0,
-        left: 0,
-        right: 0,
-        height: 70,
-    },
-    edgeGlowLeft: {
-        top: 0,
-        bottom: 0,
-        left: 0,
-        width: 36,
-    },
-    edgeGlowRight: {
-        top: 0,
-        bottom: 0,
-        right: 0,
-        width: 36,
-    },
-    remoteVideo: {
-        flex: 1,
-        backgroundColor: '#1a1a1a',
-    },
-    selfVideoContainer: {
-        position: 'absolute',
-        width: 110,
-        height: 160,
-        borderRadius: 16,
-        overflow: 'hidden',
-        backgroundColor: '#333',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.2)',
-        zIndex: 50,
-        elevation: 10,
-        shadowColor: 'black',
-        shadowOpacity: 0.3,
-        shadowRadius: 10,
-    },
-    selfVideo: {
-        flex: 1,
-    },
-    selfVideoPlaceholder: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: '#1f1f1f',
-    },
-    videoOffIndicator: {
-        position: 'absolute',
-        bottom: 8,
-        right: 8,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        padding: 4,
-        borderRadius: 10,
-    },
-    content: {
-        flex: 1,
-        justifyContent: 'space-between',
-        zIndex: 20,
-    },
-    header: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginTop: 60,
-        paddingHorizontal: 20,
-    },
-    headerTitle: {
-        color: 'rgba(255,255,255,0.7)',
-        fontSize: 14,
-        fontWeight: '600',
-        letterSpacing: 1,
-        textTransform: 'uppercase',
-    },
-    mainInfo: {
-        alignItems: 'center',
-        marginBottom: 40,
-    },
-    avatarWrapper: {
-        width: 180,
-        height: 180,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: 30,
-    },
-    avatarContainer: {
-        width: 170,
-        height: 170,
-        borderRadius: 85,
-        overflow: 'hidden',
-        backgroundColor: '#000',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    avatar: {
-        width: '100%',
-        height: '100%',
-    },
-    avatarShadow: {
-        shadowColor: 'black',
-        shadowOpacity: 0.5,
-        shadowRadius: 20,
-        shadowOffset: { width: 0, height: 10 },
-        elevation: 15,
-    },
-    pulseRing: {
-        position: 'absolute',
-        width: 170,
-        height: 170,
-        borderRadius: 85,
-        borderWidth: 2,
-        borderColor: 'rgba(255,255,255,0.5)',
-        backgroundColor: 'rgba(255,255,255,0.05)',
-    },
-    textContainer: {
-        alignItems: 'center',
-    },
-    contactName: {
-        color: 'white',
-        fontSize: 32,
-        fontWeight: 'bold',
-        ...callContactNameShadow,
-    },
-    callStatus: {
-        color: 'rgba(255,255,255,0.7)',
-        fontSize: 18,
-        marginTop: 8,
-    },
-    controlsBar: {
-        marginHorizontal: 20,
-        borderRadius: 35,
-        paddingVertical: 15,
-        paddingHorizontal: 10,
-        overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
-    },
-    controlsRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    controlBtn: {
-        width: 46,
-        height: 46,
-        borderRadius: 23,
-        backgroundColor: 'rgba(255,255,255,0.1)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    controlBtnDisabled: {
-        opacity: 0.45,
-    },
-    controlBtnActive: {
-        backgroundColor: 'rgba(255,255,255,0.9)',
-    },
-    iconButton: {
-        padding: 8,
-        borderRadius: 20,
-        backgroundColor: 'rgba(255,255,255,0.1)',
-    },
-    securityBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: 'rgba(255,255,255,0.1)',
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 12,
-        gap: 6,
-    },
-    securityText: {
-        color: 'rgba(255,255,255,0.6)',
-        fontSize: 10,
-        fontWeight: '600',
-    },
-    incomingActionsRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-        width: '100%',
-        paddingHorizontal: 20,
-    },
-    endCallBtn: {
-        backgroundColor: '#ef4444',
-        width: 58,
-        height: 58,
-        borderRadius: 29,
-    },
-    incomingAction: {
-        alignItems: 'center',
-        gap: 10,
-    },
-    actionButton: {
-        width: 70,
-        height: 70,
-        borderRadius: 35,
-        justifyContent: 'center',
-        alignItems: 'center',
-        elevation: 5,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 5,
-    },
-    actionText: {
-        color: 'white',
-        fontSize: 14,
-        fontWeight: '600',
-    },
-    // PiP Specific Styles
-    pipOverlay: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: '#000',
-    },
-    pipAvatarContainer: {
-        marginBottom: 10,
-    },
-    pipTitleBar: {
-        alignItems: 'center',
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        borderRadius: 15,
-    },
-    pipName: {
-        color: 'white',
-        fontSize: 12,
-        fontWeight: 'bold',
-    },
-    pipStatus: {
-        color: 'rgba(255,255,255,0.8)',
-        fontSize: 10,
-    },
+    container: { flex: 1, backgroundColor: '#000' },
+    backgroundImage: { position: 'absolute', opacity: 0.4 },
+    overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.3)' },
+    content: { flex: 1, justifyContent: 'space-between', zIndex: 10 },
+    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20 },
+    securityBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.1)', padding: 6, borderRadius: 12 },
+    securityText: { color: 'rgba(255,255,255,0.6)', fontSize: 10 },
+    mainInfo: { alignItems: 'center', marginTop: 40 },
+    avatarWrapper: { width: 180, height: 180, justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
+    pulseRing: { position: 'absolute', width: 170, height: 170, borderRadius: 85, borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
+    contactName: { color: '#fff', fontSize: 28, fontWeight: 'bold' },
+    callStatus: { color: 'rgba(255,255,255,0.6)', marginTop: 8 },
+    controlsBar: { marginHorizontal: 20, borderRadius: 30, padding: 15 },
+    controlsRow: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center' },
+    controlBtn: { width: 50, height: 50, borderRadius: 25, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' },
+    controlBtnActive: { backgroundColor: '#fff' },
+    controlBtnDisabled: { opacity: 0.3 },
+    endCallBtn: { backgroundColor: '#ef4444' },
+    selfVideoContainer: { position: 'absolute', width: 110, height: 160, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)', backgroundColor: '#000', zIndex: 100 },
+    selfVideo: { flex: 1 },
+    selfVideoPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    edgeGlowContainer: { ...StyleSheet.absoluteFillObject, zIndex: 5 },
+    pipOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    pipName: { color: '#fff', marginTop: 10, fontSize: 16 },
+    incomingActionsRow: { flexDirection: 'row', justifyContent: 'space-around', width: '100%' },
+    iconButton: { padding: 8 },
+    diagnosticsContainer: { ...StyleSheet.absoluteFillObject, zIndex: 1000, justifyContent: 'center', alignItems: 'center' },
+    diagnosticTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 10 },
+    diagnosticValue: { color: 'rgba(255,255,255,0.8)', fontSize: 14, marginBottom: 5 },
+    closeDiagnostics: { marginTop: 20, backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20 },
 });

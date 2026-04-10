@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { Tabs } from 'expo-router';
-import { View, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
+import { View, Pressable, StyleSheet, useWindowDimensions, Platform } from 'react-native';
 import GlassView from '../../components/ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -141,7 +141,9 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
         <Animated.View 
           style={[
             styles.indicatorPill, 
-            { width: tabWidth }, 
+            { 
+              width: tabWidth,
+            }, 
             indicatorStyle
           ]} 
         />
@@ -233,10 +235,11 @@ const styles = StyleSheet.create({
     width: '100%',
     borderRadius: 40,
     overflow: 'hidden',
-    borderWidth: 1.2,
-    borderColor: 'rgba(255,255,255,0.22)',
-    backgroundColor: 'transparent',
+    borderWidth: Platform.OS === 'android' ? 1 : 1.2,
+    borderColor: Platform.OS === 'android' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.22)',
+    backgroundColor: Platform.OS === 'android' ? '#0A0A0A' : 'transparent',
   },
+
   tabBarOverlay: {
     ...StyleSheet.absoluteFillObject,
   },

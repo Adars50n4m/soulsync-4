@@ -6,7 +6,15 @@ import {
 import { useRouter } from 'expo-router';
 import GlassView from '../components/ui/GlassView';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
-import * as FileSystem from 'expo-file-system';
+import { 
+    getFreeDiskStorageAsync, 
+    getTotalDiskCapacityAsync, 
+    documentDirectory, 
+    getInfoAsync, 
+    cacheDirectory, 
+    readDirectoryAsync, 
+    deleteAsync 
+} from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useApp } from '../context/AppContext';
 import BreakdownItem from '../components/storage/BreakdownItem';
@@ -91,8 +99,8 @@ export default function StorageManagementScreen() {
     // Fetch device + app storage info
     const fetchStorageInfo = useCallback(async () => {
         try {
-            const freeDiskInfo = await FileSystem.getFreeDiskStorageAsync();
-            const totalDiskInfo = await FileSystem.getTotalDiskCapacityAsync();
+            const freeDiskInfo = await getFreeDiskStorageAsync();
+            const totalDiskInfo = await getTotalDiskCapacityAsync();
             const totalBytes = totalDiskInfo;
             const freeBytes = freeDiskInfo;
 
@@ -100,9 +108,9 @@ export default function StorageManagementScreen() {
             let appCacheSize = 0;
 
             // SQLite DB size
-            const dbPath = `${FileSystem.documentDirectory}SQLite/soulsync.db`;
+            const dbPath = `${documentDirectory}SQLite/soulsync.db`;
             try {
-                const dbInfo = await FileSystem.getInfoAsync(dbPath);
+                const dbInfo = await getInfoAsync(dbPath);
                 if (dbInfo.exists && 'size' in dbInfo) {
                     dbSize = dbInfo.size || 0;
                 }
@@ -110,13 +118,13 @@ export default function StorageManagementScreen() {
 
             // Cache directory size
             try {
-                if (FileSystem.cacheDirectory) {
-                    const files = await FileSystem.readDirectoryAsync(FileSystem.cacheDirectory);
+                if (cacheDirectory) {
+                    const files = await readDirectoryAsync(cacheDirectory);
                     const sizes = await Promise.all(
                         files.map(async (file) => {
                             try {
-                                const info = await FileSystem.getInfoAsync(
-                                    `${FileSystem.cacheDirectory}${file}`
+                                const info = await getInfoAsync(
+                                    `${cacheDirectory}${file}`
                                 );
                                 return info.exists && 'size' in info ? (info.size || 0) : 0;
                             } catch { return 0; }
@@ -249,12 +257,12 @@ export default function StorageManagementScreen() {
                     onPress: async () => {
                         setClearingCache(true);
                         try {
-                            if (FileSystem.cacheDirectory) {
-                                const files = await FileSystem.readDirectoryAsync(FileSystem.cacheDirectory);
+                            if (cacheDirectory) {
+                                const files = await readDirectoryAsync(cacheDirectory);
                                 await Promise.all(
                                     files.map(file =>
-                                        FileSystem.deleteAsync(
-                                            `${FileSystem.cacheDirectory}${file}`,
+                                        deleteAsync(
+                                            `${cacheDirectory}${file}`,
                                             { idempotent: true }
                                         )
                                     )
@@ -286,16 +294,16 @@ export default function StorageManagementScreen() {
                     onPress: async () => {
                         try {
                             await AsyncStorage.clear();
-                            if (FileSystem.cacheDirectory) {
-                                const files = await FileSystem.readDirectoryAsync(FileSystem.cacheDirectory);
+                            if (cacheDirectory) {
+                                const files = await readDirectoryAsync(cacheDirectory);
                                 await Promise.all(
                                     files.map(f =>
-                                        FileSystem.deleteAsync(`${FileSystem.cacheDirectory}${f}`, { idempotent: true })
+                                        deleteAsync(`${cacheDirectory}${f}`, { idempotent: true })
                                     )
                                 );
                             }
-                            const dbPath = `${FileSystem.documentDirectory}SQLite/soulsync.db`;
-                            await FileSystem.deleteAsync(dbPath, { idempotent: true });
+                            const dbPath = `${documentDirectory}SQLite/soulsync.db`;
+                            await deleteAsync(dbPath, { idempotent: true });
                             Alert.alert('Done', 'All data cleared. Please restart the app.');
                         } catch {
                             Alert.alert('Error', 'Failed to clear data');

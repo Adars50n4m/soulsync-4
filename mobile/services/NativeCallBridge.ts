@@ -16,7 +16,6 @@
  * (e.g., when the remote user ends the call).
  */
 
-import { Platform } from 'react-native';
 import { nativeCallService, NativeCallAction, IncomingCallPayload } from './NativeCallService';
 import { callService, CallSignal } from './CallService';
 import { voipPushService, VoIPPushToken } from './VoIPPushService';
@@ -53,6 +52,18 @@ class NativeCallBridge {
   private initialized = false;
   private callbacks: BridgeCallbacks | null = null;
   private currentUserId: string | null = null;
+  private lastAnswerTimestamp: number = 0;
+
+  private isSignalForCurrentRoom(signal: CallSignal): boolean {
+    const signalRoom = signal.roomId || signal.callId || null;
+    const currentRoom = callService.getCurrentRoomId();
+
+    if (!signalRoom || !currentRoom) return true;
+    if (signalRoom === currentRoom) return true;
+
+    console.log(`[NativeCallBridge] Ignoring stale ${signal.type} for room ${signalRoom} (current: ${currentRoom})`);
+    return false;
+  }
 
   /**
    * Initialize the bridge. Call this after the user is authenticated.
@@ -110,6 +121,7 @@ class NativeCallBridge {
         }
 
         console.log(`[NativeCallBridge] ✅ Answering call from ${pendingCall.callerName}`);
+        this.lastAnswerTimestamp = Date.now();
 
         // Build the CallSignal to accept via CallService
         const acceptSignal: CallSignal = {
@@ -158,13 +170,23 @@ class NativeCallBridge {
           // This was an end of an active call
           console.log(`[NativeCallBridge] 📴 Ending active call: ${callId}`);
 
-          // Guard: CallKeep can fire spontaneous 'end' events (audio session deactivation,
-          // provider reset, telecom framework issues). Ignore if call just started (<3s ago)
-          // or if there's no active WebRTC connection to actually end.
+          // GUARD: Android ConnectionService fires spurious 'end' events immediately
+          // after setCurrentCallActive() or during audio session transitions.
           const webRTCService = getWebRTCService();
-          const callState = webRTCService?.getCallState?.();
-          if (callState === 'idle' || callState === 'ended') {
-            console.log('[NativeCallBridge] 🛡️ Ignoring native "end" — no active WebRTC call');
+          const callState = webRTCService?.getState?.();
+          const secondsSinceAnswer = (Date.now() - this.lastAnswerTimestamp) / 1000;
+
+          // 1) Ignore if no WebRTC session at all
+          if (callState === 'idle' || callState === 'ended' || !callState) {
+            console.log(`[NativeCallBridge] 🛡️ Ignoring native "end" — no active WebRTC (state: ${callState || 'none'})`);
+            return;
+          }
+
+          // 2) Pre-connect "end" events are often phantom events while native
+          // call UI/audio routing is settling. Ignore very early end events
+          // unless WebRTC has reached connected state.
+          if ((callState === 'ringing' || callState === 'connecting') && secondsSinceAnswer < 8) {
+            console.log(`[NativeCallBridge] 🛡️ Ignoring native "end" during pre-connect (${callState}, ${secondsSinceAnswer.toFixed(1)}s since answer)`);
             return;
           }
 
@@ -227,12 +249,14 @@ class NativeCallBridge {
         break;
 
       case 'call-reject':
+        if (!this.isSignalForCurrentRoom(signal)) return;
         // Remote user rejected our outgoing call
         nativeCallService.endNativeCall(signal.callId);
         this.callbacks?.onCallEnded(signal.callId);
         break;
 
       case 'call-end':
+        if (!this.isSignalForCurrentRoom(signal)) return;
         // Remote user ended the call
         nativeCallService.endNativeCall(signal.callId);
         this.callbacks?.onCallEnded(signal.callId);
@@ -317,6 +341,7 @@ class NativeCallBridge {
       console.warn('[NativeCallBridge] Cannot report outgoing call: Bridge not initialized');
       return;
     }
+    this.lastAnswerTimestamp = Date.now();
     nativeCallService.startOutgoingCall(callId, contactName, callType);
   }
 
@@ -326,6 +351,16 @@ class NativeCallBridge {
   reportCallConnected(callId?: string): void {
     if (!this.initialized) return;
     nativeCallService.reportCallConnected(callId);
+  }
+
+  /**
+   * Report that WebRTC media is confirmed connected.
+   * Used by CallScreen once remote media is flowing.
+   */
+  reportWebRTCConnected(callId?: string, callType?: 'audio' | 'video'): void {
+    if (!this.initialized) return;
+    nativeCallService.reportCallConnected(callId, callType);
+    if (callId) this.callbacks?.onCallConnected(callId);
   }
 
   /**

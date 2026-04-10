@@ -23,10 +23,10 @@
 
 import { Platform } from 'react-native';
 import type { IncomingCallPayload } from './NativeCallService';
+import { VOIP_PUSH_ENABLED } from '../config/env';
 
 // ─── Feature Flag ────────────────────────────────────────────────────────────
-// Set to true AFTER installing the native modules and uncommenting the requires.
-const VOIP_PUSH_ENABLED = false;
+// Controlled by EXPO_PUBLIC_VOIP_PUSH_ENABLED in .env (default false).
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

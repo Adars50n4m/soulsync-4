@@ -2,8 +2,8 @@ console.log('[LayoutLoad] Entry point loading...');
 import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useContext, Component, ReactNode, useState } from 'react';
-import { View, ActivityIndicator, Platform, AppState, Text, Pressable } from 'react-native';
+import { useEffect, useContext, Component, ReactNode, useState, useRef, useCallback } from 'react';
+import { View, ActivityIndicator, Platform, AppState, Text, Pressable, StyleSheet as ViewStyle } from 'react-native';
 
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -60,8 +60,9 @@ export const unstable_settings = {
   initialRouteName: 'index',
 };
 
+const SPLASH_FAILSAFE_MS = 4500;
+
 function RootContent() {
-  console.log('[RootContent] Rendering...');
   const context = useContext(AppContext);
   const router = useRouter();
   const segments = useSegments();
@@ -70,6 +71,15 @@ function RootContent() {
   // but since we need isReady, we must handle it carefully.
   const { activeCall, currentUser, isReady } = context || { activeCall: null, currentUser: null, isReady: false };
   const [showSkip, setShowSkip] = useState(false);
+  const splashHiddenRef = useRef(false);
+  const hideSplashSafely = useCallback((reason: string) => {
+    if (splashHiddenRef.current) return;
+    splashHiddenRef.current = true;
+    console.log(`[RootContent] Hiding splash screen (${reason})...`);
+    SplashScreen.hideAsync().catch((err) => {
+      console.warn('[RootContent] Error hiding splash screen:', err);
+    });
+  }, []);
 
   // Handle Splash Screen hiding
   useEffect(() => {
@@ -83,13 +93,23 @@ function RootContent() {
     };
   }, []); // This useEffect runs once on mount for background sync setup
 
+  // Absolute fail-safe: never allow splash to block app forever on slow/hung init.
+  useEffect(() => {
+    const splashFailsafe = setTimeout(() => {
+      if (!splashHiddenRef.current) {
+        console.warn(`[RootLayout] Splash failsafe fired after ${SPLASH_FAILSAFE_MS}ms`);
+        hideSplashSafely('failsafe-timeout');
+        setShowSkip(true);
+      }
+    }, SPLASH_FAILSAFE_MS);
+
+    return () => clearTimeout(splashFailsafe);
+  }, [hideSplashSafely]);
+
   useEffect(() => {
     console.log(`[RootContent] isReady impact check: ${isReady}, Segments: ${segments.join('/')}`);
     if (isReady) {
-      console.log('[RootContent] Hiding splash screen...');
-      SplashScreen.hideAsync().catch((err) => {
-        console.warn('[RootContent] Error hiding splash screen:', err);
-      });
+      hideSplashSafely('auth-ready');
     }
     
     // Safety timeout: if isReady is still false after 3 seconds, show skip button
@@ -100,7 +120,7 @@ function RootContent() {
         }
     }, 3000);
     return () => clearTimeout(timer);
-  }, [isReady, showSkip]); // Added showSkip to deps to ensure visibility updates
+  }, [isReady, segments, hideSplashSafely]);
 
     useEffect(() => {
         if (!currentUser?.id) return;
@@ -114,14 +134,11 @@ function RootContent() {
         if (isCallActive) return;
 
         const inAuthGroup = ['login', 'otp', 'username-setup', 'profile-setup', 'forgot-password'].includes(segments[0] as string);
-        const timer = setTimeout(() => {
-            if (!currentUser && !inAuthGroup) {
-                router.replace('/login');
-            } else if (currentUser && inAuthGroup) {
-                router.replace('/(tabs)');
-            }
-        }, 100);
-        return () => clearTimeout(timer);
+        if (!currentUser && !inAuthGroup) {
+            router.replace('/login');
+        } else if (currentUser && inAuthGroup) {
+            router.replace('/(tabs)');
+        }
     }, [currentUser, isReady, segments, router, !!activeCall]);
 
     // --- TRAFFIC CONTROLLER FOR CALLS ---
@@ -129,12 +146,15 @@ function RootContent() {
         if (!activeCall || !segments || !isReady) return;
         const handleNavigation = () => {
             const path = segments.join('/');
-            const inCallScreen = path.includes('call');
+            const inCallScreen = path.includes('call') || path.includes('IncomingCallModal');
             const shouldBeInCallScreen = !activeCall.isIncoming || activeCall.isAccepted;
+
             if (shouldBeInCallScreen && !activeCall.isMinimized && !inCallScreen) {
-                const delay = Platform.OS === 'android' ? 250 : 100;
+                console.log(`[RootLayout] 🚀 Navigating to /call (Accepted=${activeCall.isAccepted}, Incoming=${activeCall.isIncoming})`);
+                const delay = Platform.OS === 'android' ? 300 : 100;
                 setTimeout(() => {
-                    if (!activeCall.isMinimized) {
+                    // Re-check state inside timeout to ensure we still need to navigate
+                    if (context?.activeCall && (!context.activeCall.isIncoming || context.activeCall.isAccepted) && !context.activeCall.isMinimized) {
                         router.push('/call');
                     }
                 }, delay);
@@ -145,60 +165,10 @@ function RootContent() {
             if (nextAppState === 'active') handleNavigation();
         });
         return () => subscription.remove();
-    }, [activeCall?.isAccepted, activeCall?.isIncoming, activeCall?.isMinimized, segments, isReady]);
+    }, [activeCall?.isAccepted, activeCall?.isIncoming, activeCall?.isMinimized, segments, isReady, !!context]);
 
-  // Show loading indicator while waiting for context to initialize
-  if (!context) {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="#BC002A" />
-        <Text style={{ color: '#666', marginTop: 20, fontSize: 12 }}>Initializing Soul...</Text>
-      </View>
-    );
-  }
-
-  // If we are stuck on Splash Screen but want to offer a way out
-  if (!isReady && showSkip) {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center', padding: 40 }}>
-        <ActivityIndicator size="large" color="#BC002A" />
-        <Text style={{ color: '#fff', fontSize: 18, fontWeight: '600', marginTop: 30, textAlign: 'center' }}>Taking longer than usual...</Text>
-        <Text style={{ color: '#999', fontSize: 14, marginTop: 10, textAlign: 'center', marginBottom: 40 }}>
-          We're having trouble connecting to the local database or sync server.
-        </Text>
-        
-        <Pressable 
-          onPress={() => {
-            console.log('[RootLayout] User triggered emergency skip');
-            SplashScreen.hideAsync().catch(() => {});
-            // We can't easily force isReady because it's in context, 
-            // but we can try to proceed if most things are loaded.
-          }}
-          style={({ pressed }) => ({
-            backgroundColor: pressed ? '#444' : '#222',
-            paddingVertical: 12,
-            paddingHorizontal: 24,
-            borderRadius: 12,
-            borderWidth: 1,
-            borderColor: '#333'
-          })}
-        >
-          <Text style={{ color: '#fff', fontWeight: 'bold' }}>Emergency Skip Splash</Text>
-        </Pressable>
-
-        <Pressable 
-          onPress={() => {
-            // Force a reload if possible or just log intent
-            console.log('[RootLayout] User requested retry');
-            setShowSkip(false);
-          }}
-          style={{ marginTop: 20 }}
-        >
-          <Text style={{ color: '#BC002A', fontSize: 14 }}>Try Again</Text>
-        </Pressable>
-      </View>
-    );
-  }
+  // Note: We always render the Stack navigator below to satisfy Expo Router's requirement.
+  // We use absolute-positioned overlays for loading/stuck states.
 
   return (
     <View style={{ flex: 1, backgroundColor: '#000' }}>
@@ -268,6 +238,63 @@ function RootContent() {
           headerShown: false,
         }} />
       </Stack>
+
+      {/* Persistence / Loading Overlay: Always sits on top until isReady is true */}
+      {!isReady && (
+        <View 
+          style={{ 
+            ...ViewStyle.absoluteFillObject, 
+            backgroundColor: '#000', 
+            justifyContent: 'center', 
+            alignItems: 'center',
+            zIndex: 99999 
+          }}
+        >
+          {(!showSkip) ? (
+            <>
+              <ActivityIndicator size="large" color="#BC002A" />
+              <Text style={{ color: '#666', marginTop: 20, fontSize: 12 }}>Initializing Soul...</Text>
+            </>
+          ) : (
+            <View style={{ padding: 40, alignItems: 'center' }}>
+              <ActivityIndicator size="large" color="#BC002A" />
+              <Text style={{ color: '#fff', fontSize: 18, fontWeight: '600', marginTop: 30, textAlign: 'center' }}>Taking longer than usual...</Text>
+              <Text style={{ color: '#999', fontSize: 14, marginTop: 10, textAlign: 'center', marginBottom: 40 }}>
+                We're having trouble connecting to the local database or sync server.
+              </Text>
+              
+              <Pressable 
+                onPress={() => {
+                  console.log('[RootLayout] User triggered emergency skip');
+                  hideSplashSafely('manual-skip');
+                  // Forcing isReady is handled at the context level if needed, 
+                  // but for UI layout, we just hide the splash.
+                }}
+                style={({ pressed }) => ({
+                  backgroundColor: pressed ? '#444' : '#222',
+                  paddingVertical: 12,
+                  paddingHorizontal: 24,
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: '#333'
+                })}
+              >
+                <Text style={{ color: '#fff', fontWeight: 'bold' }}>Emergency Skip Splash</Text>
+              </Pressable>
+
+              <Pressable 
+                onPress={() => {
+                  console.log('[RootLayout] User requested retry');
+                  setShowSkip(false);
+                }}
+                style={{ marginTop: 20 }}
+              >
+                <Text style={{ color: '#BC002A', fontSize: 14 }}>Try Again</Text>
+              </Pressable>
+            </View>
+          )}
+        </View>
+      )}
 
       {/* Global Overlays */}
       {isReady && (

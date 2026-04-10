@@ -72,6 +72,16 @@ export const getMessageMediaItems = (msg: Message | any): ChatMediaItem[] => {
     return [];
 };
 
+/**
+ * Returns true if a message has no meaningful content (no text and no media).
+ */
+export const isMessageEmpty = (msg: Message | any): boolean => {
+    if (!msg) return true;
+    const hasText = !!(msg.text && msg.text.trim().length > 0);
+    const hasMedia = !!(msg.media?.url || msg.media?.type);
+    return !hasText && !hasMedia;
+};
+
 export const sanitizeSongTitle = (title: string): string => {
     if (!title) return '';
     return title

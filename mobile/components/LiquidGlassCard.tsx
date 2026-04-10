@@ -3,8 +3,6 @@ import { View, StyleSheet, ViewStyle, StyleProp, Platform } from 'react-native';
 import GlassView from './ui/GlassView';
 import { LinearGradient } from 'expo-linear-gradient';
 
-const isAndroid = Platform.OS === 'android';
-
 interface LiquidGlassCardProps {
     children: React.ReactNode;
     style?: StyleProp<ViewStyle>;
@@ -15,12 +13,6 @@ interface LiquidGlassCardProps {
     interactive?: boolean;
 }
 
-/**
- * LiquidGlassCard - iOS-style glassmorphism card component
- * Creates a frosted glass effect with subtle glow and depth.
- * On Android, adds a dark translucent backing layer so the blur
- * has visible depth instead of appearing as a plain transparent shade.
- */
 export const LiquidGlassCard: React.FC<LiquidGlassCardProps> = ({
     children,
     style,
@@ -51,8 +43,6 @@ export const LiquidGlassCard: React.FC<LiquidGlassCardProps> = ({
     };
 
     const variantStyles = getVariantStyles();
-    // Android dimezisBlurView needs higher intensity to look comparable to iOS
-    const blurIntensity = isAndroid ? Math.min(intensity + 40, 100) : intensity;
 
     return (
         <View
@@ -69,7 +59,7 @@ export const LiquidGlassCard: React.FC<LiquidGlassCardProps> = ({
 
             {/* Glass Background */}
             <GlassView
-                intensity={blurIntensity}
+                intensity={intensity}
                 tint="dark"
                 style={[styles.blur, { borderRadius }]}
                 
@@ -106,11 +96,10 @@ export const LiquidGlassView: React.FC<{
     style?: StyleProp<ViewStyle>;
     intensity?: number;
 }> = ({ children, style, intensity = 80 }) => {
-    const blurIntensity = isAndroid ? Math.min(intensity + 20, 100) : intensity;
     return (
         <View style={[styles.glassViewWrapper, style]}>
             <GlassView
-                intensity={blurIntensity}
+                intensity={intensity}
                 tint="dark"
                 style={[styles.glassView, style]}
                 
@@ -120,6 +109,7 @@ export const LiquidGlassView: React.FC<{
         </View>
     );
 };
+
 
 /**
  * GlassButton - Glass-styled pressable button

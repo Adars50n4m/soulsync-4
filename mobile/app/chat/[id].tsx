@@ -19,7 +19,16 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import * as MediaLibrary from 'expo-media-library';
-import * as FileSystem from 'expo-file-system';
+import { 
+    documentDirectory, 
+    getInfoAsync, 
+    makeDirectoryAsync, 
+    deleteAsync, 
+    readDirectoryAsync, 
+    copyAsync, 
+    cacheDirectory, 
+    downloadAsync 
+} from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Crypto from 'expo-crypto';
@@ -29,9 +38,8 @@ import ProgressiveBlur from '../../components/chat/ProgressiveBlur';
 import MessageBubble from '../../components/chat/MessageBubble';
 import MessageContextMenu from '../../components/chat/MessageContextMenu';
 import { ChatStyles, SCREEN_WIDTH, SCREEN_HEIGHT, HEADER_PILL_HEIGHT, HEADER_PILL_RADIUS } from '../../components/chat/ChatStyles';
-import FlyingBubbleLayer, { FlyingBubbleData } from '../../components/chat/FlyingBubbleLayer';
 import { formatDuration } from '../../utils/formatters';
-import { getMessageMediaItems, sanitizeSongTitle } from '../../utils/chatUtils';
+import { getMessageMediaItems, sanitizeSongTitle, isMessageEmpty } from '../../utils/chatUtils';
 
 
 
@@ -49,6 +57,7 @@ import Animated, {
     FadeInDown,
     FadeOutDown,
     runOnJS,
+    useAnimatedProps,
 } from 'react-native-reanimated';
 import 'react-native-gesture-handler';
 
@@ -84,7 +93,7 @@ const LIST_PILL_RADIUS = 36;
 const MORPH_IN_OUT_DURATION = 520;
 const MORPH_OUT_HANDOFF = Math.round(MORPH_IN_OUT_DURATION * 0.82);
 const BACK_BTN_SIZE = 54;
-const BACK_BTN_GAP = 8;
+const BACK_BTN_GAP = 10;
 const MAIN_PILL_LEFT = 16 + BACK_BTN_SIZE + BACK_BTN_GAP;
 
 type ChatMediaItem = {
@@ -103,6 +112,7 @@ interface SingleChatScreenProps {
 
 
 const AnyFlashList = FlashList as any;
+const AnimatedPath = Animated.createAnimatedComponent(Path);
 
 // Format "last seen" relative time (e.g. "today at 2:30 PM", "yesterday at 11:00 AM")
 const formatLastSeen = (isoString: string): string => {
@@ -191,37 +201,48 @@ const TypingDots = () => {
 };
 
 const SiriWaveform = ({ level, active }: { level: number; active: boolean }) => {
-    const [phase, setPhase] = useState(0);
+    const phase = useSharedValue(0);
     const width = 200;
     const height = 40;
     const centerY = height / 2;
 
     useEffect(() => {
-        if (!active) return;
-        const id = setInterval(() => {
-            setPhase((prev) => prev + 0.28);
-        }, 40);
-        return () => clearInterval(id);
+        if (!active) {
+            phase.value = 0;
+            return;
+        }
+        phase.value = withRepeat(
+            withTiming(20, { duration: 2500, easing: Easing.linear }),
+            -1,
+            false
+        );
     }, [active]);
 
     const clampedLevel = Math.max(0, Math.min(1, level));
     const amplitude = 4 + clampedLevel * 14;
 
-    const buildWavePath = (phaseOffset: number, ampFactor: number, freq: number) => {
-        const step = 5;
+    const buildWavePath = (p: number, phaseOffset: number, ampFactor: number, freq: number) => {
+        'worklet';
+        const step = 6;
         let path = `M 0 ${centerY}`;
         for (let x = 0; x <= width; x += step) {
-            const theta = (x / width) * Math.PI * 2 * freq + phase + phaseOffset;
-            const theta2 = (x / width) * Math.PI * 2 * (freq * 1.7) + phase * 0.7 + phaseOffset;
+            const theta = (x / width) * Math.PI * 2 * freq + p + phaseOffset;
+            const theta2 = (x / width) * Math.PI * 2 * (freq * 1.7) + p * 0.7 + phaseOffset;
             const y = centerY + Math.sin(theta) * amplitude * ampFactor + Math.sin(theta2) * amplitude * 0.2;
             path += ` L ${x} ${y}`;
         }
         return path;
     };
 
-    const mainPath = buildWavePath(0, 1, 1.4);
-    const secondPath = buildWavePath(1.2, 0.72, 1.1);
-    const thirdPath = buildWavePath(2.1, 0.48, 0.85);
+    const animatedProps1 = useAnimatedProps(() => ({
+        d: buildWavePath(phase.value, 2.1, 0.48, 0.85)
+    }));
+    const animatedProps2 = useAnimatedProps(() => ({
+        d: buildWavePath(phase.value, 1.2, 0.72, 1.1)
+    }));
+    const animatedProps3 = useAnimatedProps(() => ({
+        d: buildWavePath(phase.value, 0, 1, 1.4)
+    }));
 
     return (
         <View style={styles.siriWaveWrap}>
@@ -235,9 +256,9 @@ const SiriWaveform = ({ level, active }: { level: number; active: boolean }) => 
                         <Stop offset="100%" stopColor="#BC002A" stopOpacity="0" />
                     </SvgLinearGradient>
                 </Defs>
-                <Path d={thirdPath} fill="none" stroke="url(#siriGradient)" strokeWidth={3} opacity={0.28} />
-                <Path d={secondPath} fill="none" stroke="url(#siriGradient)" strokeWidth={4} opacity={0.5} />
-                <Path d={mainPath} fill="none" stroke="url(#siriGradient)" strokeWidth={5} opacity={0.95} />
+                <AnimatedPath animatedProps={animatedProps1} fill="none" stroke="url(#siriGradient)" strokeWidth={3} opacity={0.28} />
+                <AnimatedPath animatedProps={animatedProps2} fill="none" stroke="url(#siriGradient)" strokeWidth={4} opacity={0.5} />
+                <AnimatedPath animatedProps={animatedProps3} fill="none" stroke="url(#siriGradient)" strokeWidth={5} opacity={0.95} />
             </Svg>
         </View>
     );
@@ -248,11 +269,13 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
     // Support both direct routing (params) and inline rendering (props)
     const rawId = propsUser?.id || (Array.isArray(paramsId) ? paramsId[0] : paramsId);
-    // Standardize to UUID if legacy ID is used
-    const sourceY = propsSourceY ?? (paramsSourceY ? Number(Array.isArray(paramsSourceY) ? paramsSourceY[0] : paramsSourceY) : undefined);
+    // Robust parameter parsing to prevent NaN-induced black screens or native crashes
+    const parsedSourceY = paramsSourceY ? Number(Array.isArray(paramsSourceY) ? paramsSourceY[0] : paramsSourceY) : undefined;
+    const sourceYValue = propsSourceY ?? (typeof parsedSourceY === 'number' && !isNaN(parsedSourceY) ? parsedSourceY : undefined);
+    const sourceY = (typeof sourceYValue === 'number' && !isNaN(sourceYValue)) ? sourceYValue : undefined;
     const id = (rawId && LEGACY_TO_UUID[rawId as string]) || rawId;
     const stringId = Array.isArray(paramsId) ? paramsId[0] : paramsId;
-    const isMorphEntry = sourceY !== undefined;
+    const isMorphEntry = typeof sourceY === 'number' && !isNaN(sourceY);
     
     const router = useRouter();
     const isFocused = useIsFocused();
@@ -264,11 +287,13 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
 
 
-    // Defer heavy rendering until transition completes
+    // Defer heavy rendering (FlatList) until transition completes, but show basic UI immediately
     useEffect(() => {
+        // Fast-path: Set ready status after a short delay on Android to avoid total black screens
+        // during heavy initialization.
         const timeout = setTimeout(() => {
             setIsReady(true);
-        }, 400); // Slightly longer for stability
+        }, Platform.OS === 'android' ? 250 : 400); 
         
         const task = InteractionManager.runAfterInteractions(() => {
             setIsReady(true);
@@ -279,6 +304,22 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
              clearTimeout(timeout);
         };
     }, []);
+
+    // Safety Fallback: Ensure screen becomes visible even if animations fail on Android
+    useEffect(() => {
+        if (isMorphEntry) {
+            const fallback = setTimeout(() => {
+                if (backgroundMorphProgress.value === 0) {
+                    console.log('[Chat] ⚠️ Animation fallback triggered to fix black screen');
+                    backgroundMorphProgress.value = withTiming(1, { duration: 300 });
+                    headerAccessoryOpacity.value = withTiming(1, { duration: 300 });
+                    headerPillProgress.value = withTiming(1, { duration: 300 });
+                    headerPillOffsetY.value = withTiming(0, { duration: 300 });
+                }
+            }, 800); 
+            return () => clearTimeout(fallback);
+        }
+    }, [isMorphEntry]);
 
     const [callOptionsPosition, setCallOptionsPosition] = useState({ x: 0, y: 0 });
     const [isExpanded, setIsExpanded] = useState(false);
@@ -606,8 +647,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
     // Animation Layout State
     const [inputLayout, setInputLayout] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
-    const [flyingBubbles, setFlyingBubbles] = useState<any[]>([]);
-    const [pendingAnimationIds, setPendingAnimationIds] = useState<Set<string>>(new Set());
     // Derived State
     const contact = useMemo(() => {
         const found = contacts.find(c => c.id === id);
@@ -650,7 +689,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const messageKey = contact?.id || id || '';
     const chatMessages = messages[messageKey] || [];
     // Memoize reversed messages to avoid expensive array operations in render
-    const reversedMessages = useMemo(() => [...chatMessages].reverse(), [chatMessages]);
+    const reversedMessages = useMemo(() => [...chatMessages].filter(m => !isMessageEmpty(m)).reverse(), [chatMessages]);
     const isTyping = contact ? typingUsers.includes(contact.id) : false;
 
     useEffect(() => {
@@ -706,26 +745,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             easing: Easing.out(Easing.cubic),
         });
     };
-
-    const handleInputLayout = () => {
-        inputContainerRef.current?.measure((x, y, width, height, pageX, pageY) => {
-            if (width && height) {
-                setInputLayout({ x: pageX, y: pageY, width, height });
-            }
-        });
-    };
-
-    const handleBubbleComplete = useCallback((id: string, messageId?: string) => {
-        // Remove flying bubble and reveal list item in the same batch to avoid double-flash.
-        setFlyingBubbles(prev => prev.filter(b => b.id !== id));
-        if (messageId) {
-            setPendingAnimationIds(prev => {
-                const next = new Set(prev);
-                next.delete(messageId);
-                return next;
-            });
-        }
-    }, []);
 
     // Close options when typing
     const handleFocus = () => {
@@ -1147,34 +1166,10 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             return;
         }
 
-        // Measure global position for perfect flight path from the actual input bar
-        inputContainerRef.current?.measure((x, y, width, height, pageX, pageY) => {
-            const nextMessageId = Crypto.randomUUID();
-            const replyToId = replyingTo ? replyingTo.id : undefined;
-            const now = new Date().toISOString();
-            
-            // 1. UPDATE ANIMATION STATE
-            setPendingAnimationIds(prev => new Set(prev).add(nextMessageId));
-            
-            const newBubble: FlyingBubbleData = {
-                id: `fly-${Date.now()}`,
-                messageId: nextMessageId,
-                text: content,
-                timestamp: now,
-                status: 'pending',
-                startX: pageX + 16, // Inset to match the bubble on the right
-                startY: pageY,
-                endX: pageX + 16,
-                endY: pageY - 65, // Fly up slightly from the actual keyboard
-                width: 0, 
-                height: 0,
-            };
-            setFlyingBubbles(prev => [...prev, newBubble]);
-
-            // 2. TRIGGER ASYNC SEND
-            sendChatMessage(messageKey, content, undefined, replyToId, undefined, nextMessageId);
-        });
-
+        // Simple send without flying bubble animation to reduce UI thread load
+        const nextMessageId = Crypto.randomUUID();
+        const replyToId = replyingTo ? replyingTo.id : undefined;
+        sendChatMessage(messageKey, content, undefined, replyToId, undefined, nextMessageId);
         setReplyingTo(null);
     };
 
@@ -1216,11 +1211,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 } else {
                     Clipboard.setStringAsync(sourceText).catch(() => {});
                 }
-            } else if (action === 'copy_time') {
-                const ts = selectedContextMessage.msg.timestamp
-                    ? new Date(selectedContextMessage.msg.timestamp).toLocaleString()
-                    : '';
-                if (ts) Clipboard.setStringAsync(ts).catch(() => {});
             } else if (action === 'forward') {
                 const forwardText =
                     selectedContextMessage.msg.text ||
@@ -1240,9 +1230,9 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 setEditingMessage(selectedContextMessage.msg as any);
                 setInputText(baseText);
             } else if (action === 'pin') {
-                // Future Implementation
-            } else if (action === 'forward') {
-                // Future Implementation
+                updateMessage(id as string, selectedContextMessage.msg.id, { isPinned: true } as any);
+            } else if (action === 'unpin') {
+                updateMessage(id as string, selectedContextMessage.msg.id, { isPinned: false } as any);
             } else if (action === 'select') {
                 setSelectionMode(true);
                 setSelectedMessageIds([selectedContextMessage.msg.id]);
@@ -1368,8 +1358,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             let localUri = current.url;
             if (!current.url.startsWith('file://')) {
                 const extension = current.type === 'video' ? '.mp4' : '.jpg';
-                const target = `${FileSystem.cacheDirectory}soulsync_${Date.now()}${extension}`;
-                const downloaded = await FileSystem.downloadAsync(current.url, target);
+                const target = `${cacheDirectory}soulsync_${Date.now()}${extension}`;
+                const downloaded = await downloadAsync(current.url, target);
                 localUri = downloaded.uri;
             }
 
@@ -1443,7 +1433,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                     uploadProgress={uploadProgressTracker?.[item.id]}
                     onMediaDownload={handleMediaDownload}
                     onRetry={handleRetryMessage}
-                    isHidden={pendingAnimationIds.has(item.id)}
                 />
                 {item.id === firstUnreadId && unreadIncomingIds.length > 0 && (
                     <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8 }}>
@@ -1470,7 +1459,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 )}
             </>
         );
-    }, [selectedContextMessage, chatMessages, contact?.name, handleMediaTap, selectionMode, selectedMessageIds, handleSelectToggle, uploadProgressTracker, handleMediaDownload, handleRetryMessage, pendingAnimationIds, handleQuotePress, highlightedMessageId, reversedMessages, firstUnreadId, unreadIncomingIds, formatDateLabel]);
+    }, [selectedContextMessage, chatMessages, contact?.name, handleMediaTap, selectionMode, selectedMessageIds, handleSelectToggle, uploadProgressTracker, handleMediaDownload, handleRetryMessage, handleQuotePress, highlightedMessageId, reversedMessages, firstUnreadId, unreadIncomingIds, formatDateLabel]);
     
     const renderCollectionItem = useCallback(({ item, index }: { item: any, index: number }) => (
         <Pressable
@@ -1667,12 +1656,11 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 {/* Chat body — fades in AFTER the morph transition completes */}
                 <View style={StyleSheet.absoluteFill}>
 
-                {/* Chat content - Deferred Rendering for Performance */}
-                {isReady && (
-                    <View style={{ flex: 1 }}>
-                        <Animated.View style={[{ flex: 1 }, messagesContainerAnimatedStyle]}>
-                            {/* Messages - Switched to standard FlatList for stability with viewability tracking */}
-                            <FlatList
+                {/* Chat content - Expensive portions are deferred, UI is immediate */}
+                <View style={{ flex: 1 }}>
+                    <Animated.View style={[{ flex: 1 }, messagesContainerAnimatedStyle]}>
+                        {isReady && (
+                            <Animated.FlatList
                                 ref={flatListRef as any}
                                 data={reversedMessages}
                                 keyExtractor={keyExtractor}
@@ -1681,14 +1669,12 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                 style={styles.messagesList}
                                 contentContainerStyle={styles.messagesContent}
                                 showsVerticalScrollIndicator={false}
-                                removeClippedSubviews={false}
+                                removeClippedSubviews={Platform.OS === 'android'}
                                 onScroll={(e: any) => { 
                                     const offset = e.nativeEvent.contentOffset.y;
-                                    isNearBottomRef.current = offset < 150; 
+                                    // simple scroll tracking
                                 }}
                                 scrollEventThrottle={16}
-                                viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs.current}
-                                 ListHeaderComponent={null}
                                 ListEmptyComponent={
                                     <View style={styles.emptyChat}>
                                         <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.1)" />
@@ -1697,23 +1683,17 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                     </View>
                                 }
                             />
+                        )}
 
 
 
                             {/* Progressive Blur — Telegram/iOS style, works on Android too */}
                             <ProgressiveBlur position="top" height={160} intensity={60} />
                             
-                            {/* Sticky Date Header (WhatsApp Style) */}
-                            {chatMessages && chatMessages.length > 0 && topDateLabel !== '' && (
-                                <View style={styles.stickyDateHeaderContainer} pointerEvents="none">
-                                    <View style={styles.stickyDateBubble}>
-                                        <Text style={styles.stickyDateText}>{topDateLabel}</Text>
-                                    </View>
-                                </View>
-                            )}
+                            {/* Date headers are rendered inline within the list for better performance */}
 
-                            <ProgressiveBlur position="bottom" height={160} intensity={80} />
-                        </Animated.View>
+                        <ProgressiveBlur position="bottom" height={160} intensity={80} />
+                    </Animated.View>
 
                         {/* Input Area */}
                         <Animated.View style={[styles.inputArea, inputAreaAnimatedStyle]}>
@@ -1777,7 +1757,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                         {/* Unified Pill Container */}
                         <View 
                             ref={inputContainerRef}
-                            onLayout={handleInputLayout}
+                            onLayout={undefined}
                             style={styles.unifiedPillContainer}
                         >
                             <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill}  />
@@ -1901,7 +1881,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                         </View>
                         </Animated.View>
                     </View>
-                )}
                 </View>
             </Animated.View>
 
@@ -1926,7 +1905,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                             position: 'absolute', 
                             top: HEADER_PILL_TOP, 
                             left: MAIN_PILL_LEFT,
-                            right: 0, 
+                            right: 24, 
                             backgroundColor: 'rgba(15, 15, 20, 0.4)', 
                             borderRadius: HEADER_PILL_RADIUS, 
                             zIndex: 10,
@@ -1954,7 +1933,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                         <Pressable
                             onPress={(e) => {
                                 const tapX = e.nativeEvent.locationX;
-                                const width = SCREEN_WIDTH - MAIN_PILL_LEFT - 16;
+                                const width = SCREEN_WIDTH - MAIN_PILL_LEFT - 24;
                                 const percent = Math.max(0, Math.min(tapX / width, 1));
                                 const dur = (musicState.currentSong?.duration || 240) * 1000;
                                 seekTo(percent * dur);
@@ -2007,7 +1986,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                 </Pressable>
                             </View>
                         ) : (
-                          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', paddingLeft: 0, paddingRight: -16 }}>
+                          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', paddingLeft: 0 }}>
                             <Pressable 
                                 ref={profileAvatarRef}
                                 collapsable={false}
@@ -2342,10 +2321,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 contactName={contact?.name || 'Someone'}
             />
             
-            <FlyingBubbleLayer 
-                bubbles={flyingBubbles} 
-                onComplete={handleBubbleComplete} 
-            />
+            {/* FlyingBubbleLayer removed — component not available */}
         </View>
     );
 }
@@ -2369,6 +2345,7 @@ const styles = StyleSheet.create({
         borderRadius: HEADER_PILL_RADIUS,
         backgroundColor: 'transparent',
         overflow: 'hidden',
+        right: 24,
     },
     headerGlass: {
         borderRadius: HEADER_PILL_RADIUS,
@@ -2381,7 +2358,7 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: 'transparent',
         paddingLeft: 12,
-        paddingRight: 16,
+        paddingRight: 12,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,

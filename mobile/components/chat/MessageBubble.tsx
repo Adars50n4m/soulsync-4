@@ -1,7 +1,7 @@
 import React, { useRef, useCallback, useMemo, useEffect } from 'react';
 import { View, Text, Pressable, Alert, Platform, Image as RNImage, Linking } from 'react-native';
 import { Image } from 'expo-image';
-import * as FileSystem from 'expo-file-system';
+import { getInfoAsync } from 'expo-file-system';
 import GlassView from '../ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -178,7 +178,7 @@ const MessageBubble = React.memo(({
             const results = await Promise.all(mediaItems.map(async (media, index) => {
                 if (!media.localFileUri?.startsWith('file://')) return null;
                 try {
-                    const info = await FileSystem.getInfoAsync(media.localFileUri);
+                    const info = await getInfoAsync(media.localFileUri);
                     return info.exists ? null : index;
                 } catch {
                     return index;

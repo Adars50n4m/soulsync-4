@@ -18,8 +18,11 @@ export const UUID_TO_LEGACY: Record<string, string> = Object.entries(LEGACY_TO_U
  */
 export function normalizeId(id: string | null | undefined): string {
   if (!id) return '';
-  const trimmed = id.trim().toLowerCase();
-  return LEGACY_TO_UUID[trimmed] || id;
+  const trimmed = id.trim();
+  if (!trimmed) return '';
+
+  const lowered = trimmed.toLowerCase();
+  return LEGACY_TO_UUID[lowered] || lowered;
 }
 
 /**

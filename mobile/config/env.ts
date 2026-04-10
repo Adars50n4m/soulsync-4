@@ -74,12 +74,7 @@ if (IS_DEV) {
     // Try EXPO_PUBLIC_HOST_IP first if explicitly set by the user in .env
     let fallbackIp = getEnvVar('EXPO_PUBLIC_HOST_IP', '');
     
-    // Ignore common non-routable carrier NAT IPs even if manually set
-    if (fallbackIp.startsWith('192.0.0.')) {
-        console.warn(`[Env] ⚠️ Ignoring invalid EXPO_PUBLIC_HOST_IP: ${fallbackIp} (non-routable Android NAT IP).`);
-        fallbackIp = '';
-    }
-
+    // In some hotspot/bridge environments, 192.0.0.x is a valid routable bridge.
     if (fallbackIp && fallbackIp.length > 0) {
         resolvedServerUrl = `http://${fallbackIp}:3000`;
         console.log(`[Env] Using EXPO_PUBLIC_HOST_IP manual fallback: ${resolvedServerUrl}`);
@@ -106,13 +101,19 @@ export const R2_WORKER_URL = getEnvVar('EXPO_PUBLIC_R2_WORKER_URL', 'https://sou
 export const R2_PUBLIC_URL = getEnvVar('EXPO_PUBLIC_R2_PUBLIC_URL', 'https://pub-XXXXXXXXXXXX.r2.dev');
 
 // 6. WebRTC TURN Servers
-export const TURN_SERVER = getEnvVar('EXPO_PUBLIC_TURN_SERVER', '');
-export const TURN_USERNAME = getEnvVar('EXPO_PUBLIC_TURN_USERNAME', '');
-export const TURN_PASSWORD = getEnvVar('EXPO_PUBLIC_TURN_PASSWORD', '');
+// Default: OpenRelay Project free TURN (works from any network, no signup)
+// Override via .env for production self-hosted TURN
+export const TURN_SERVER = getEnvVar('EXPO_PUBLIC_TURN_SERVER', 'openrelay.metered.ca:80');
+export const TURN_USERNAME = getEnvVar('EXPO_PUBLIC_TURN_USERNAME', 'openrelayproject');
+export const TURN_PASSWORD = getEnvVar('EXPO_PUBLIC_TURN_PASSWORD', 'openrelayproject');
 
-export const TURN_SERVER_2 = getEnvVar('EXPO_PUBLIC_TURN_SERVER_2', '');
-export const TURN_USERNAME_2 = getEnvVar('EXPO_PUBLIC_TURN_USERNAME_2', '');
-export const TURN_PASSWORD_2 = getEnvVar('EXPO_PUBLIC_TURN_PASSWORD_2', '');
+export const TURN_SERVER_2 = getEnvVar('EXPO_PUBLIC_TURN_SERVER_2', 'openrelay.metered.ca:443');
+export const TURN_USERNAME_2 = getEnvVar('EXPO_PUBLIC_TURN_USERNAME_2', 'openrelayproject');
+export const TURN_PASSWORD_2 = getEnvVar('EXPO_PUBLIC_TURN_PASSWORD_2', 'openrelayproject');
+
+// Metered.ca free TURN API key (fetches temp credentials at call time)
+// Sign up: https://www.metered.ca/stun-turn → Dashboard → API Key
+export const METERED_API_KEY = getEnvVar('EXPO_PUBLIC_METERED_API_KEY', '');
 const HAS_CUSTOM_TURN =
   (TURN_SERVER && TURN_SERVER.length > 10 && !TURN_SERVER.includes('yourdomain')) ||
   (TURN_SERVER_2 && TURN_SERVER_2.length > 10 && !TURN_SERVER_2.includes('backup-turn'));
@@ -131,10 +132,14 @@ export const CALL_REQUIRE_CUSTOM_TURN = getEnvVar(
 
 // 7. Feature Flags
 export const USE_R2 = getEnvVar('EXPO_PUBLIC_USE_R2', 'true') === 'true';
+export const VOIP_PUSH_ENABLED = getEnvVar('EXPO_PUBLIC_VOIP_PUSH_ENABLED', 'false') === 'true';
 
 // 7. Connectivity Constants
 export const CONNECTIVITY_TIMEOUT = 10000; // 10s
 export const MAX_RETRY_ATTEMPTS = 5;
 
+export const HOST_IP = getEnvVar('EXPO_PUBLIC_HOST_IP', '') || extractExpoDevHost() || '127.0.0.1';
+
 console.log('[Env] Initialized with SERVER_URL:', SERVER_URL);
+console.log('[Env] Host IP for Signaling:', HOST_IP);
 console.log('[Env] Supabase Proxy active:', SUPABASE_PROXY_URL);

@@ -189,7 +189,7 @@ app.post('/api/status/create', async (req, res) => {
                     user_id: status.userId,
                     user_name: status.userName,
                     user_avatar: status.userAvatar,
-                    media_url: status.mediaUrl,
+                    media_key: status.mediaUrl || status.media_key, // Correcting column name
                     media_type: status.mediaType,
                     caption: status.caption,
                     likes: status.likes || [],
@@ -246,7 +246,7 @@ app.post('/api/status/view', async (req, res) => {
 
 // Middleware to authenticate user via Header (Dev/Prototype style)
 const authenticateUser = (req, res, next) => {
-    const userId = req.headers['x-user-id'] || req.query.userId || req.body.userId;
+    const userId = req.headers['x-user-id'] || req.query?.userId || req.body?.userId;
     if (!userId) {
         return res.status(401).json({ error: 'Unauthorized: No user ID provided' });
     }

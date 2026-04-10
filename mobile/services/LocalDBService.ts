@@ -5,7 +5,12 @@
 
 import * as SQLite from 'expo-sqlite';
 import { Platform } from 'react-native';
-import * as FileSystem from 'expo-file-system';
+import { 
+  documentDirectory, 
+  getInfoAsync, 
+  makeDirectoryAsync, 
+  moveAsync 
+} from 'expo-file-system';
 import { MIGRATE_DB } from '../database/schema';
 import { dbManager } from '../database/DatabaseManager';
 
@@ -72,17 +77,17 @@ const OLD_DB_NAME = 'soulsync.db';
 
 async function ensureDatabaseMigration(): Promise<void> {
   try {
-    const dbDir = `${FileSystem.documentDirectory}SQLite/`;
+    const dbDir = `${documentDirectory}SQLite/`;
     const oldPath = `${dbDir}${OLD_DB_NAME}`;
     const newPath = `${dbDir}${DB_NAME}`;
 
-    const oldInfo = await FileSystem.getInfoAsync(oldPath);
-    const newInfo = await FileSystem.getInfoAsync(newPath);
+    const oldInfo = await getInfoAsync(oldPath);
+    const newInfo = await getInfoAsync(newPath);
 
     if (oldInfo.exists && !newInfo.exists) {
       console.log(`[SQLite] Migrating ${OLD_DB_NAME} -> ${DB_NAME}`);
-      await FileSystem.makeDirectoryAsync(dbDir, { intermediates: true });
-      await FileSystem.moveAsync({ from: oldPath, to: newPath });
+      await makeDirectoryAsync(dbDir, { intermediates: true });
+      await moveAsync({ from: oldPath, to: newPath });
       console.log('[SQLite] Database migration successful');
     }
   } catch (error) {
@@ -90,26 +95,31 @@ async function ensureDatabaseMigration(): Promise<void> {
   }
 }
 
-async function getDb(): Promise<SQLite.SQLiteDatabase> {
-  console.log('[SQLite] LocalDBService: starting ensureDatabaseMigration');
-  await ensureDatabaseMigration();
+// Cache the DB instance to avoid repeating migration/setup on every call
+let _dbInstance: SQLite.SQLiteDatabase | null = null;
+let _dbInitPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-  console.log('[SQLite] LocalDBService: getting database instance from dbManager...');
-  const db = await dbManager.getDatabase({
-    name: DB_NAME,
-    migrations: async (dbInstance) => {
-        console.log('[SQLite] LocalDBService: triggering MIGRATE_DB...');
-        await MIGRATE_DB(dbInstance);
-        console.log('[SQLite] LocalDBService: MIGRATE_DB complete');
-    },
-    onOpen: async (db) => {
-      console.log('[SQLite] LocalDBService: database onOpen triggered');
-      // Setup periodic WAL checkpoint to prevent data loss on crash
-      setupWalCheckpoint(db);
-    }
-  });
-  console.log('[SQLite] LocalDBService: database instance acquired successfully');
-  return db;
+async function getDb(): Promise<SQLite.SQLiteDatabase> {
+  if (_dbInstance) return _dbInstance;
+  if (_dbInitPromise) return _dbInitPromise;
+
+  _dbInitPromise = (async () => {
+    await ensureDatabaseMigration();
+    const db = await dbManager.getDatabase({
+      name: DB_NAME,
+      migrations: async (dbInstance) => {
+          await MIGRATE_DB(dbInstance);
+      },
+      onOpen: async (db) => {
+        setupWalCheckpoint(db);
+      }
+    });
+    _dbInstance = db;
+    console.log('[SQLite] LocalDBService: database ready');
+    return db;
+  })();
+
+  return _dbInitPromise;
 }
 
 // Exported for other services (StatusService, etc.)

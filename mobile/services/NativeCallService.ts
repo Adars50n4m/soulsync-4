@@ -14,7 +14,7 @@
  * Install: npx expo install react-native-callkeep
  */
 
-import { Platform, AppState, AppStateStatus, NativeModules } from 'react-native';
+import { Platform, AppState, AppStateStatus, NativeModules, PermissionsAndroid } from 'react-native';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -89,34 +89,23 @@ class NativeCallService {
     // This is a dangerous permission and MUST be requested at runtime
     if (Platform.OS === 'android') {
       try {
-        const { PermissionsAndroid } = require('react-native');
-        const permissions = [
-          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-          PermissionsAndroid.PERMISSIONS.CAMERA,
-        ];
-
-        // Only add READ_PHONE_NUMBERS if it exists (it was added in API 26)
-        if (PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS) {
-          permissions.push(PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS);
-        }
-
+        // Only request permissions if the app is in the foreground to prevent crashes
         if (AppState.currentState === 'active') {
-          // Foreground: request permissions now
+          const permissions = [
+            PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+            PermissionsAndroid.PERMISSIONS.CAMERA,
+          ];
+
+          // Only add READ_PHONE_NUMBERS if it exists (it was added in API 26)
+          if (PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS) {
+            permissions.push(PermissionsAndroid.PERMISSIONS.READ_PHONE_NUMBERS);
+          }
           console.log('[NativeCallService] Requesting required permissions at runtime...');
           const granted = await PermissionsAndroid.requestMultiple(permissions);
           console.log('[NativeCallService] Permissions result:', granted);
-        } else {
-          // Background: check if already granted, don't block init
-          console.log('[NativeCallService] App not active, checking existing permissions...');
-          const audioGranted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
-          if (!audioGranted) {
-            console.warn('[NativeCallService] RECORD_AUDIO not granted — background calls may fail. Will re-request on foreground.');
-          }
-          // Continue with init — permissions will be requested when app comes to foreground
         }
       } catch (e) {
         console.warn('[NativeCallService] Failed to request permissions:', e);
-        // Don't return — continue with init so call infrastructure is ready
       }
     }
 
@@ -156,25 +145,30 @@ class NativeCallService {
       this.isReady = true;
 
       if (Platform.OS === 'android' && this.RNCallKeep) {
-        try {
-          // Check for method existence before calling to prevent 'undefined is not a function' or property access errors
-          if (typeof this.RNCallKeep.setAvailable === 'function') {
-              this.RNCallKeep.setAvailable(true);
+        const runAndroidSetupStep = (name: string, fn: () => void) => {
+          try {
+            if (!this.RNCallKeep) return;
+            fn();
+          } catch (e) {
+            console.warn(`[NativeCallService] ⚠️ Android setup step "${name}" failed (non-fatal):`, e);
           }
-          
-          if (typeof this.RNCallKeep.registerPhoneAccount === 'function') {
-              this.RNCallKeep.registerPhoneAccount();
-          }
-          
-          if (typeof this.RNCallKeep.registerAndroidEvents === 'function') {
-              this.RNCallKeep.registerAndroidEvents();
-          }
-          
-          if (typeof this.RNCallKeep.canMakeMultipleCalls === 'function') {
-              this.RNCallKeep.canMakeMultipleCalls(false);
-          }
-        } catch (e) {
-          console.warn('[NativeCallService] ⚠️ Android-specific setup failed (non-fatal):', e);
+        };
+
+        if (typeof this.RNCallKeep.setAvailable === 'function') {
+          runAndroidSetupStep('setAvailable', () => this.RNCallKeep.setAvailable(true));
+        }
+        if (typeof this.RNCallKeep.registerPhoneAccount === 'function') {
+          runAndroidSetupStep('registerPhoneAccount', () => {
+             // Fallback: Some versions of RNCallKeep expect options to be passed to registerPhoneAccount
+             try {
+               this.RNCallKeep.registerPhoneAccount(options); 
+             } catch (e) {
+               this.RNCallKeep.registerPhoneAccount();
+             }
+          });
+        }
+        if (typeof this.RNCallKeep.registerAndroidEvents === 'function') {
+          runAndroidSetupStep('registerAndroidEvents', () => this.RNCallKeep.registerAndroidEvents());
         }
       }
 
@@ -445,8 +439,11 @@ class NativeCallService {
   };
 
   private onProviderReset = () => {
-    console.log('[NativeCallService] Provider reset — ending all calls');
-    if (this.activeCallUUID) {
+    console.log('[NativeCallService] Provider reset received');
+    // On Android, provider resets happen frequently during audio session transitions
+    // and do NOT mean the call should end. Only act on iOS where it's meaningful.
+    if (Platform.OS === 'ios' && this.activeCallUUID) {
+      console.log('[NativeCallService] iOS provider reset — ending all calls');
       this.notifyHandlers('end', this.activeCallUUID);
       this.activeCallUUID = null;
       this.pendingIncomingCall = null;

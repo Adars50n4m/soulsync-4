@@ -7,18 +7,13 @@ import {
   Pressable,
   StyleSheet,
   StatusBar,
-  Dimensions,
   Alert,
   FlatList,
   Platform,
-  TouchableOpacity,
-  ActionSheetIOS,
-  TextInput,
-  Modal,
-  ActivityIndicator,
 } from 'react-native';
 import { Svg, Circle } from 'react-native-svg';
-import { FlashList } from '@shopify/flash-list';
+// FlashList available but FlatList used for stability
+// import { FlashList } from '@shopify/flash-list';
 
 import { useRouter, useNavigation } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
@@ -26,30 +21,28 @@ import { LinearGradient } from 'expo-linear-gradient';
 import GlassView from '../../components/ui/GlassView';
 import ConnectionBanner from '../../components/ConnectionBanner';
 import { SoulPullToRefresh } from '../../components/ui/SoulPullToRefresh';
+import ChatListItemSkeleton from '../../components/ui/ChatListItemSkeleton';
+import StatusRailSkeleton from '../../components/ui/StatusRailSkeleton';
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, {
   useSharedValue,
-  useAnimatedScrollHandler,
   useAnimatedStyle,
-  interpolateColor,
-  useDerivedValue,
-  runOnJS,
   withSpring,
   withTiming,
-  withRepeat,
-  cancelAnimation,
   Easing,
   SharedTransition,
   interpolate,
   Extrapolation,
-  FadeIn,
-  FadeOut,
 } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
-import * as FileSystem from 'expo-file-system';
+import {
+    cacheDirectory,
+    documentDirectory,
+    copyAsync,
+} from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
-import { storageService } from '../../services/StorageService';
+// import { storageService } from '../../services/StorageService';
 import { proxySupabaseUrl } from '../../config/api';
 import { chatTransitionState } from '../../services/chatTransitionState';
 import SwipeableRow from '../../components/ui/SwipeableRow';
@@ -59,7 +52,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePresence } from '../../context/PresenceContext';
 import { useScrollMotion } from '../../components/navigation/ScrollMotionProvider';
 import { normalizeId, getSuperuserName, LEGACY_TO_UUID, UUID_TO_LEGACY } from '../../utils/idNormalization';
-import { SHRI_ID, HARI_ID } from '../../config/supabase';
+
 import { SoulAvatar } from '../../components/SoulAvatar';
 import { StatusThumbnail } from '../../components/StatusThumbnail';
 import { MediaPreviewModal } from '../../components/MediaPreviewModal';
@@ -87,11 +80,11 @@ const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promi
   // Persist picked media into app cache so viewer/home preview can read reliably.
   if (resolvedUri.startsWith('file://')) {
     const ext = asset.fileName?.split('.').pop() || (asset.type === 'video' ? 'mp4' : 'jpg');
-    const cacheDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+    const cacheDir = cacheDirectory || documentDirectory;
     if (!cacheDir) return resolvedUri;
     const target = `${cacheDir}status-${Date.now()}.${ext}`;
     try {
-      await FileSystem.copyAsync({ from: resolvedUri, to: target });
+      await copyAsync({ from: resolvedUri, to: target });
       resolvedUri = target;
     } catch {
       // Keep original file URI if copy fails.
@@ -156,14 +149,24 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
   const opacityAnim = useSharedValue(1);
   const itemRef = useRef<View>(null);
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [
-      { scale: scaleAnim.value } as any,
-      { translateY: interpolate(homeMorphProgress.value, [0, 1], [0, 35 + (index % 5) * 20], Extrapolation.IDENTITY) } as any,
-      { scale: interpolate(homeMorphProgress.value, [0, 1], [1, 0.92], Extrapolation.IDENTITY) } as any
-    ],
-    opacity: opacityAnim.value * interpolate(homeMorphProgress.value, [0, 0.7], [1, 0], Extrapolation.CLAMP),
-  }));
+  const animatedStyle = useAnimatedStyle(() => {
+    // Android: skip morph interpolations entirely — they cause massive frame drops
+    // when applied to every list item. Only apply press scale.
+    if (Platform.OS === 'android') {
+      return {
+        transform: [{ scale: scaleAnim.value }],
+        opacity: opacityAnim.value,
+      };
+    }
+    return {
+      transform: [
+        { scale: scaleAnim.value } as any,
+        { translateY: interpolate(homeMorphProgress.value, [0, 1], [0, 35 + (index % 5) * 20], Extrapolation.IDENTITY) } as any,
+        { scale: interpolate(homeMorphProgress.value, [0, 1], [1, 0.92], Extrapolation.IDENTITY) } as any
+      ],
+      opacity: opacityAnim.value * interpolate(homeMorphProgress.value, [0, 0.7], [1, 0], Extrapolation.CLAMP),
+    };
+  });
 
   const handlePressIn = useCallback(() => {
     scaleAnim.value = withSpring(0.96, { damping: 15, stiffness: 300 });
@@ -202,12 +205,16 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
       >
         {/* Inner container handles the press scale animation */}
         <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
-          {/* Glass blur background — same feel as navbar */}
-          <View style={[StyleSheet.absoluteFill, { borderRadius: 36, overflow: 'hidden' }]}>
-            <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
-          </View>
+          {/* Glass background — blur on iOS, solid on Android (flattened for perf) */}
+          {Platform.OS === 'android' ? (
+            <View style={[StyleSheet.absoluteFill, { borderRadius: 36, backgroundColor: '#0A0A0A' }]} />
+          ) : (
+            <View style={[StyleSheet.absoluteFill, { borderRadius: 36, overflow: 'hidden' }]}>
+              <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
+            </View>
+          )}
         {/* Subtle dark tint overlay */}
-        <Animated.View
+        <View
             style={[StyleSheet.absoluteFill, { borderRadius: 36, backgroundColor: 'rgba(0, 0, 0, 0.15)' }]}
         />
             
@@ -303,7 +310,7 @@ const AnimatedMoreMenu = ({ router, isSearching }: { router: any, isSearching: b
   const progress = useSharedValue(0);
 
   useEffect(() => {
-    progress.value = withSpring(expanded ? 1 : 0, { damping: 16, stiffness: 180 });
+    progress.value = withTiming(expanded ? 1 : 0, { duration: 220, easing: Easing.out(Easing.cubic) });
   }, [expanded]);
 
   useEffect(() => {
@@ -330,11 +337,12 @@ const AnimatedMoreMenu = ({ router, isSearching }: { router: any, isSearching: b
     transform: [{ translateY: interpolate(progress.value, [0, 1], [-10, 0]) }],
   }));
 
+  // Backdrop uses a simple fullscreen overlay instead of measuring Dimensions every render
   return (
     <View style={[{ zIndex: expanded ? 1000 : 1, width: 40, height: 40 }]}>
       {expanded && (
-         <Pressable 
-           style={[{ position: 'absolute', width: Dimensions.get('window').width * 2, height: Dimensions.get('window').height * 2, top: -Dimensions.get('window').height, right: -Dimensions.get('window').width, bottom: undefined, left: undefined, zIndex: 1 }]}
+         <Pressable
+           style={StyleSheet.flatten([StyleSheet.absoluteFillObject, { position: 'absolute', top: -500, right: -500, width: 2000, height: 2000, zIndex: 1 }])}
            onPress={() => setExpanded(false)}
          />
       )}
@@ -516,15 +524,17 @@ export default function HomeScreen() {
   }));
 
 const homeContentAnimatedStyle = useAnimatedStyle(() => {
+  // Android: skip morph entirely — no translateY/scale per frame on the whole list
+  if (Platform.OS === 'android') {
+    return { transform: [], opacity: 1 };
+  }
   const baseTranslateY = interpolate(homeMorphProgress.value, [0, 1], [0, 45], Extrapolation.IDENTITY);
   return {
     transform: [
       { translateY: baseTranslateY },
       { scale: interpolate(homeMorphProgress.value, [0, 1], [1, 0.92], Extrapolation.IDENTITY) },
     ] as any,
-    opacity: Platform.OS === 'android'
-      ? 1
-      : interpolate(homeMorphProgress.value, [0, 0.6], [1, 1], Extrapolation.CLAMP),
+    opacity: interpolate(homeMorphProgress.value, [0, 0.6], [1, 1], Extrapolation.CLAMP),
   };
 });
 
@@ -582,7 +592,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
       });
     });
     return unsubscribe;
-  }, [homeMorphProgress, navigation, statusRailOpacity]);
+  }, [homeMorphProgress, navigation, statusRailOpacity, statusRailOffset]);
 
   // Safety & Ready Trigger: Ensure visibility if focus listener fails or when app becomes ready
   useEffect(() => {
@@ -591,8 +601,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
             statusRailOpacity.value = withTiming(1, { duration: 600 });
         }
         if (homeMorphProgress.value === 1 && !chatTransitionState.getPhase().includes('returning')) {
-             console.log('[HomeScreen] Ready Visibility Trigger');
-             homeMorphProgress.value = withTiming(0, { 
+             homeMorphProgress.value = withTiming(0, {
                duration: 600,
                easing: Easing.bezier(0.22, 1, 0.36, 1)
              });
@@ -630,7 +639,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
     });
 
     return unsubscribe;
-  }, [homeMorphProgress, statusRailOpacity]);
+  }, [homeMorphProgress, statusRailOpacity, statusRailOffset]);
 
 
 
@@ -1112,23 +1121,38 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
           <Animated.View
             style={[styles.homeContent, homeContentAnimatedStyle]}
           >
-            <Animated.FlatList
-              data={filteredVisibleContacts}
-              keyExtractor={keyExtractor}
-              renderItem={renderItem}
-              ListHeaderComponent={renderHeader}
-              contentContainerStyle={styles.listContent}
-              bounces={false}
-              scrollEnabled={!isRefreshing}
-              showsVerticalScrollIndicator={false}
-              onScroll={(e) => {
-                const y = e.nativeEvent?.contentOffset?.y ?? 0;
-                scrollPosition.value = y;
-                if (typeof handleScrollMotionRaw === 'function') handleScrollMotionRaw(y);
-                if (typeof onPullScroll === 'function') onPullScroll(e);
-              }}
-              scrollEventThrottle={16}
-            />
+            {!isReady ? (
+               <View style={{ flex: 1 }}>
+                 <StatusRailSkeleton />
+                 <View style={{ marginTop: 20 }}>
+                   {[1, 2, 3, 4, 5, 6].map(i => <ChatListItemSkeleton key={i} />)}
+                 </View>
+               </View>
+            ) : (
+              <Animated.FlatList
+                data={filteredVisibleContacts}
+                keyExtractor={keyExtractor}
+                renderItem={renderItem}
+                ListHeaderComponent={renderHeader}
+                contentContainerStyle={styles.listContent}
+                bounces={false}
+                scrollEnabled={!isRefreshing}
+                showsVerticalScrollIndicator={false}
+                onScroll={(e) => {
+                  const y = e.nativeEvent?.contentOffset?.y ?? 0;
+                  scrollPosition.value = y;
+                  if (typeof handleScrollMotionRaw === 'function') handleScrollMotionRaw(y);
+                  if (typeof onPullScroll === 'function') onPullScroll(e);
+                }}
+                scrollEventThrottle={16}
+                ListEmptyComponent={() => (
+                  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 100 }}>
+                    <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.2)" />
+                    <Text style={{ color: 'rgba(255,255,255,0.4)', marginTop: 16, fontSize: 16 }}>No chats yet</Text>
+                  </View>
+                )}
+              />
+            )}
           </Animated.View>
         )}
       </SoulPullToRefresh>
@@ -1248,7 +1272,7 @@ const styles = StyleSheet.create({
         shadowRadius: 10,
       },
       android: {
-        elevation: 10,
+        elevation: 4,
       }
     })
   },
@@ -1341,7 +1365,14 @@ const styles = StyleSheet.create({
       zIndex: 100,
   },
   // Removed overflow: 'hidden' to let shared elements escape during flight
-  chatPillContainer: { flex: 1, borderRadius: 36, borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.22)', overflow: 'hidden' },
+  chatPillContainer: { 
+    flex: 1, 
+    borderRadius: 36, 
+    borderWidth: 1, 
+    borderColor: Platform.OS === 'android' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(255, 255, 255, 0.22)', 
+    overflow: 'hidden' 
+  },
+
   pillBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0, 0, 0, 0.15)', opacity: 0.95 },
   pillBlur: { ...StyleSheet.absoluteFillObject },
   pillContent: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 12 },

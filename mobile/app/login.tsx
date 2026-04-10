@@ -20,7 +20,6 @@ import {
   Dimensions,
   LayoutAnimation,
   UIManager,
-  Keyboard,
 } from 'react-native';
 import Svg, { Circle, Path, Ellipse, G, Line } from 'react-native-svg';
 import { Feather, MaterialIcons } from '@expo/vector-icons';
@@ -111,28 +110,6 @@ export default function LoginScreen() {
   const boyBreathe = useRef(new Animated.Value(0)).current;
   const girlBreathe = useRef(new Animated.Value(0)).current;
   const floatY = useRef(new Animated.Value(0)).current;
-  const bearScale = useRef(new Animated.Value(1)).current;
-  const bearOpacity = useRef(new Animated.Value(1)).current;
-
-  // Keyboard: shrink bears so they don't get cut by notch
-  useEffect(() => {
-    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-
-    const showSub = Keyboard.addListener(showEvent, () => {
-      Animated.parallel([
-        Animated.timing(bearScale, { toValue: 0.5, duration: 250, useNativeDriver: true }),
-        Animated.timing(bearOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-      ]).start();
-    });
-    const hideSub = Keyboard.addListener(hideEvent, () => {
-      Animated.parallel([
-        Animated.timing(bearScale, { toValue: 1, duration: 300, useNativeDriver: true }),
-        Animated.timing(bearOpacity, { toValue: 1, duration: 250, useNativeDriver: true }),
-      ]).start();
-    });
-    return () => { showSub.remove(); hideSub.remove(); };
-  }, []);
 
   // Redirect if already logged in
   useEffect(() => {
@@ -394,10 +371,14 @@ export default function LoginScreen() {
   return (
     <SafeAreaView style={s.safe}>
       <StatusBar barStyle="light-content" backgroundColor="#000" />
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={s.kav}>
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
+        style={s.kav}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? -220 : 0}
+      >
 
         {/* ── Bears SVG ─────────────────────────────────────── */}
-        <Animated.View style={[s.bearsWrap, { opacity: bearOpacity, transform: [{ translateY: Animated.add(jumpY, floatY) }, { translateX: shakeX }, { scale: bearScale }] }]}>
+        <Animated.View style={[s.bearsWrap, { transform: [{ translateY: Animated.add(jumpY, floatY) }, { translateX: shakeX }] }]}>
           <Svg width="400" height="240" viewBox="0 0 400 300">
             {bears.map(({ id, cx, cy, color, snout, cheek, peekArm }) => {
               const isWhite = id === 'boy';

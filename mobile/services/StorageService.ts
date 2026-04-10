@@ -1,4 +1,12 @@
-import * as FileSystem from 'expo-file-system';
+import { 
+  createUploadTask, 
+  FileSystemUploadType, 
+  getInfoAsync, 
+  cacheDirectory, 
+  downloadAsync, 
+  documentDirectory, 
+  makeDirectoryAsync 
+} from 'expo-file-system';
 import { Platform } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
 import { SERVER_URL, safeFetchJson } from '../config/api';
@@ -96,12 +104,12 @@ export const storageService = {
     ): Promise<string | null> {
         console.log(`[StorageService] Uploading via server proxy to ${bucket}/${folder || ''}`);
 
-        const uploadTask = FileSystem.createUploadTask(
+        const uploadTask = createUploadTask(
             `${SERVER_URL}/api/media/upload`,
             localUri,
             {
                 httpMethod: 'POST',
-                uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+                uploadType: FileSystemUploadType.MULTIPART,
                 fieldName: 'file',
                 mimeType: contentType,
                 parameters: {
@@ -222,12 +230,12 @@ export const storageService = {
             const { presignedUrl, key } = data;
 
             // 4. Perform the binary upload to R2 via presigned URL
-            const uploadTask = FileSystem.createUploadTask(
+            const uploadTask = createUploadTask(
                 presignedUrl,
                 localUri,
                 {
                     httpMethod: 'PUT',
-                    uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+                    uploadType: FileSystemUploadType.BINARY_CONTENT,
                     headers: { 'Content-Type': contentType }
                 },
                 (progress) => {
@@ -298,7 +306,7 @@ export const storageService = {
             if (messageId) {
                 const cachedPath = await offlineService.getMediaDownload(messageId);
                 if (cachedPath) {
-                    const info = await FileSystem.getInfoAsync(cachedPath);
+                    const info = await getInfoAsync(cachedPath);
                     if (info.exists) return cachedPath;
                 }
             }
@@ -345,8 +353,8 @@ export const storageService = {
                 }
             }
 
-            const tempPath = `${FileSystem.cacheDirectory}preview_${Date.now()}.${ext}`;
-            const downloadRes = await FileSystem.downloadAsync(downloadUrl, tempPath);
+            const tempPath = `${cacheDirectory}preview_${Date.now()}.${ext}`;
+            const downloadRes = await downloadAsync(downloadUrl, tempPath);
             return downloadRes.uri;
 
         } catch (error) {
@@ -380,21 +388,21 @@ export const storageService = {
     async downloadToDevice(signedUrl: string, statusId: string, mediaType: string): Promise<string | null> {
         try {
             const ext = mediaType === 'video' ? 'mp4' : 'jpg';
-            const directory = `${FileSystem.documentDirectory}soulsync_status/`;
+            const directory = `${documentDirectory}soulsync_status/`;
             const localPath = `${directory}${statusId}.${ext}`;
 
             // Ensure directory exists
-            const dirInfo = await FileSystem.getInfoAsync(directory);
+            const dirInfo = await getInfoAsync(directory);
             if (!dirInfo.exists) {
-                await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
+                await makeDirectoryAsync(directory, { intermediates: true });
             }
 
             // Check if already exists
-            const fileInfo = await FileSystem.getInfoAsync(localPath);
+            const fileInfo = await getInfoAsync(localPath);
             if (fileInfo.exists) return localPath;
 
             // Perform download from provided signedUrl
-            const downloadRes = await FileSystem.downloadAsync(signedUrl, localPath);
+            const downloadRes = await downloadAsync(signedUrl, localPath);
 
             console.log(`[StorageService] Downloaded status ${statusId} to ${downloadRes.uri}`);
             return downloadRes.uri;

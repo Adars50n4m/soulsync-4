@@ -285,147 +285,145 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     useEffect(() => {
         let isMounted = true;
-        let timeoutId: ReturnType<typeof setTimeout>;
+        let sessionTimeoutId: ReturnType<typeof setTimeout> | undefined;
+        let dbTimeoutId: ReturnType<typeof setTimeout> | undefined;
 
         console.log('[AuthContext] Initializing - checking session...');
         
         const startInit = Date.now();
         
         // --- NEW: Block until Database Migration is verified (with 5s fail-safe) ---
-        const dbPromise = getDb().then(() => {
-            console.log(`[AuthContext] Database ready after ${Date.now() - startInit}ms`);
-            return true;
-        });
-
-        const dbTimeout = new Promise<boolean>((resolve) => {
-            setTimeout(() => {
-                console.warn(`[AuthContext] Database initialization HUNG after 5s - continuing without DB for now`);
-                resolve(false);
-            }, 5000);
-        });
-
-        Promise.race([dbPromise, dbTimeout]).then(() => {
-            console.log(`[AuthContext] DB phase complete after ${Date.now() - startInit}ms, starting session check...`);
-            
-            const sessionPromise = supabase.auth.getSession();
-            const timeoutPromise = new Promise<null>((resolve) => {
-                timeoutId = setTimeout(() => {
-                    console.log(`[AuthContext] Session check TIMED OUT after ${Date.now() - startInit}ms, continuing to UI...`);
-                    resolve(null);
-                }, 10000);
-            });
-
-            return Promise.race([sessionPromise, timeoutPromise]);
-        }).then((sessionResult: any) => {
-            console.log(`[AuthContext] Initialization complete after ${Date.now() - startInit}ms. Setting isReady=true`);
-            if (!isMounted) return;
-            clearTimeout(timeoutId);
-
-            // If timeout fired (null), skip session check
-            if (!sessionResult) {
-                setIsReady(true);
-                return;
-            }
-
-            const session = sessionResult?.data?.session;
-            const error = sessionResult?.error;
-
-            if (error) {
-                console.error('[AuthContext] Session check error:', error);
-                setIsReady(true); // Signal ready even on error to unblock UI
-                return;
-            }
-
-            if (session) {
-                console.log('[AuthContext] Session found, syncing profile for:', session.user.id);
-                // Race the entire sync process to ensure we don't hang the splash screen
-                synchronizeSessionWithTimeout(session.user.id).finally(() => {
-                    if (isMounted) {
-                        console.log(`[AuthContext] Reached ready state (total init time: ${Date.now() - startInit}ms)`);
-                        setIsReady(true);
+        const runInit = async () => {
+            try {
+                // 1. Database Phase
+                const dbPromise = (async () => {
+                    await getDb();
+                    if (dbTimeoutId) {
+                        clearTimeout(dbTimeoutId);
+                        dbTimeoutId = undefined;
                     }
+                    if (isMounted) console.log(`[AuthContext] Database ready after ${Date.now() - startInit}ms`);
+                    return true;
+                })();
+
+                const dbTimeout = new Promise<boolean>((resolve) => {
+                    dbTimeoutId = setTimeout(() => {
+                        dbTimeoutId = undefined;
+                        console.warn(`[AuthContext] Database initialization HUNG after 5s - continuing without DB for now`);
+                        resolve(false);
+                    }, 5000);
                 });
-            } else {
-                console.log('[AuthContext] No session found, checking cache...');
-                AsyncStorage.getItem('ss_current_user').then(async (cachedUserId) => {
+
+                await Promise.race([dbPromise, dbTimeout]);
+                if (!isMounted) return;
+
+                console.log(`[AuthContext] DB phase complete after ${Date.now() - startInit}ms, starting session check...`);
+                
+                // 2. Session Phase
+                const sessionPromise = (async () => {
+                    const res = await supabase.auth.getSession();
+                    if (sessionTimeoutId) {
+                        clearTimeout(sessionTimeoutId);
+                        sessionTimeoutId = undefined;
+                    }
+                    return res;
+                })();
+
+                const sessionTimeout = new Promise<null>((resolve) => {
+                    sessionTimeoutId = setTimeout(() => {
+                        sessionTimeoutId = undefined;
+                        console.log(`[AuthContext] Session check TIMED OUT after ${Date.now() - startInit}ms, continuing to UI...`);
+                        resolve(null);
+                    }, 10000);
+                });
+
+                const sessionResult = await Promise.race([sessionPromise, sessionTimeout]);
+                if (!isMounted) return;
+
+                console.log(`[AuthContext] Initialization complete after ${Date.now() - startInit}ms. Setting isReady=true`);
+                
+                if (!isMounted) return;
+
+                // If timeout fired (null), skip session check
+                if (!sessionResult) {
+                    setIsReady(true);
+                    return;
+                }
+
+                const session = (sessionResult as any)?.data?.session;
+                const error = (sessionResult as any)?.error;
+
+                if (error) {
+                    console.error('[AuthContext] Session check error:', error);
+                    setIsReady(true); // Signal ready even on error to unblock UI
+                    return;
+                }
+
+                if (session) {
+                    console.log('[AuthContext] Session found, syncing profile for:', session.user.id);
+                    await synchronizeSessionWithTimeout(session.user.id);
+                } else {
+                    console.log('[AuthContext] No session found, checking cache...');
+                    const cachedUserId = await AsyncStorage.getItem('ss_current_user');
                     if (!isMounted) return;
 
                     if (cachedUserId) {
                         if (isDeveloperBypassId(cachedUserId)) {
                             console.log('[AuthContext] Restoring developer bypass user from local cache:', cachedUserId);
-                            synchronizeSessionWithTimeout(cachedUserId).finally(() => {
-                                if (isMounted) {
-                                    console.log(`[AuthContext] Bypass cache restore complete (total init time: ${Date.now() - startInit}ms), readying app`);
-                                    setIsReady(true);
-                                }
-                            });
-                            return;
-                        }
+                            await synchronizeSessionWithTimeout(cachedUserId);
+                        } else {
+                            console.log('[AuthContext] Found cached user without active session:', cachedUserId);
+                            console.log('[AuthContext] Attempting session refresh from persisted auth state...');
 
-                        console.log('[AuthContext] Found cached user without active session:', cachedUserId);
-                        console.log('[AuthContext] Attempting session refresh from persisted auth state...');
+                            const refreshed = await authService.refreshSession();
+                            const { data: refreshedSessionData } = await supabase.auth.getSession();
+                            const refreshedUserId = refreshedSessionData.session?.user?.id;
 
-                        const refreshed = await authService.refreshSession();
-                        const { data: refreshedSessionData } = await supabase.auth.getSession();
-                        const refreshedUserId = refreshedSessionData.session?.user?.id;
+                            if (refreshed && refreshedUserId) {
+                                console.log('[AuthContext] Session restored. Syncing profile for:', refreshedUserId);
+                                await synchronizeSessionWithTimeout(refreshedUserId);
+                            } else {
+                                const cachedProfileRaw = await AsyncStorage.getItem('ss_cached_user_profile');
+                                const cachedAt = Number(await AsyncStorage.getItem('ss_cached_user_profile_at') || '0');
+                                const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-                        if (refreshed && refreshedUserId) {
-                            console.log('[AuthContext] Session restored. Syncing profile for:', refreshedUserId);
-                            synchronizeSessionWithTimeout(refreshedUserId).finally(() => {
-                                if (isMounted) {
-                                    console.log(`[AuthContext] Refreshed session sync complete (total init time: ${Date.now() - startInit}ms), readying app`);
-                                    setIsReady(true);
-                                }
-                            });
-                            return;
-                        }
-
-                        const cachedProfileRaw = await AsyncStorage.getItem('ss_cached_user_profile');
-                        const cachedAt = Number(await AsyncStorage.getItem('ss_cached_user_profile_at') || '0');
-                        const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-
-                        if (cachedProfileRaw && (Date.now() - cachedAt) < CACHE_TTL_MS) {
-                            try {
-                                const parsed = JSON.parse(cachedProfileRaw) as User;
-                                if (parsed?.id === cachedUserId) {
-                                    console.warn('[AuthContext] Session missing, restoring cached profile in offline mode');
-                                    setCurrentUser(parsed);
-                                    if (isMounted) {
-                                        setIsReady(true);
+                                if (cachedProfileRaw && (Date.now() - cachedAt) < CACHE_TTL_MS) {
+                                    try {
+                                        const parsed = JSON.parse(cachedProfileRaw) as User;
+                                        if (parsed?.id === cachedUserId) {
+                                            console.warn('[AuthContext] Session missing, restoring cached profile in offline mode');
+                                            setCurrentUser(parsed);
+                                        }
+                                    } catch (parseError) {
+                                        console.warn('[AuthContext] Failed to parse cached profile:', parseError);
                                     }
-                                    return;
+                                } else {
+                                    console.warn('[AuthContext] Cached user is stale (no valid session). Clearing local auth cache.');
+                                    setCurrentUser(null);
+                                    await AsyncStorage.multiRemove(['ss_current_user', 'ss_cached_user_profile']);
                                 }
-                            } catch (parseError) {
-                                console.warn('[AuthContext] Failed to parse cached profile:', parseError);
                             }
                         }
-
-                        console.warn('[AuthContext] Cached user is stale (no valid session). Clearing local auth cache.');
-                        setCurrentUser(null);
-                        await AsyncStorage.multiRemove(['ss_current_user', 'ss_cached_user_profile']);
-                        if (isMounted) {
-                            setIsReady(true);
-                        }
-                        return;
+                    } else {
+                        console.log(`[AuthContext] No session or cached user (total init time: ${Date.now() - startInit}ms), readying app`);
                     }
-
-                    console.log(`[AuthContext] No session or cached user (total init time: ${Date.now() - startInit}ms), readying app`);
+                }
+            } catch (err) {
+                console.error('[AuthContext] Initialization exception:', err);
+            } finally {
+                if (isMounted) {
+                    console.log(`[AuthContext] Reached ready state (total init time: ${Date.now() - startInit}ms)`);
                     setIsReady(true);
-                }).catch((err) => {
-                    console.error('[AuthContext] Cache check failed:', err);
-                    if (isMounted) setIsReady(true);
-                });
+                }
             }
-        }).catch((err) => {
-            if (!isMounted) return;
-            clearTimeout(timeoutId);
-            console.error('[AuthContext] Session check exception:', err);
-            setIsReady(true); // Unblock UI on error
-        });
+        };
+
+        runInit();
 
         return () => {
             isMounted = false;
-            if (timeoutId) clearTimeout(timeoutId);
+            if (dbTimeoutId) clearTimeout(dbTimeoutId);
+            if (sessionTimeoutId) clearTimeout(sessionTimeoutId);
         };
     }, [isDeveloperBypassId, synchronizeSession, synchronizeSessionWithTimeout]);
 
