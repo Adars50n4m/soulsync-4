@@ -247,33 +247,44 @@ class CallService {
             : since;
 
         const normalizedUserId = normalizeId(userId);
-        const [modern, legacy] = await Promise.all([
-            supabase
-                .from('call_signals')
-                .select('*')
-                .eq('receiver_id', normalizedUserId)
-                .gte('created_at', effectiveSince)
-                .order('created_at', { ascending: true }),
-            supabase
-                .from('call_signals')
-                .select('*')
-                .eq('recipient_id', normalizedUserId)
-                .gte('created_at', effectiveSince)
-                .order('created_at', { ascending: true }),
-        ]);
+        try {
+            const [modern, legacy] = await Promise.all([
+                supabase
+                    .from('call_signals')
+                    .select('*')
+                    .eq('receiver_id', normalizedUserId)
+                    .gte('created_at', effectiveSince)
+                    .order('created_at', { ascending: true }),
+                supabase
+                    .from('call_signals')
+                    .select('*')
+                    .eq('recipient_id', normalizedUserId)
+                    .gte('created_at', effectiveSince)
+                    .order('created_at', { ascending: true }),
+            ]);
 
-        if (modern.error && legacy.error) {
-            console.error('[CallService] ❌ Signal poll failed for both schemas', {
-                modern: modern.error.message,
-                legacy: legacy.error.message,
-            });
-            throw modern.error;
+            if (modern.error && legacy.error) {
+                console.warn('[CallService] 📶 Signal poll failed (Network/Auth):', {
+                    modern: modern.error.message,
+                    legacy: legacy.error.message,
+                });
+                return []; // Return empty on dual-schema failure
+            }
+
+            const rows: any[] = [];
+            if (!modern.error && modern.data?.length) rows.push(...modern.data);
+            if (!legacy.error && legacy.data?.length) rows.push(...legacy.data);
+            return rows;
+        } catch (err: any) {
+            // Handle "Network request failed" or other transient exceptions gracefully
+            const isNetworkError = err?.message?.includes('Network request failed') || err?.message?.includes('fetch');
+            if (isNetworkError) {
+                console.warn('[CallService] 📶 Signaling poll: Network unreachable (retrying...)');
+            } else {
+                console.warn('[CallService] ⚠️ Signaling poll: Unexpected fetch exception:', err?.message || err);
+            }
+            return null; // Return null to distinguish error from zero signals
         }
-
-        const rows: any[] = [];
-        if (!modern.error && modern.data?.length) rows.push(...modern.data);
-        if (!legacy.error && legacy.data?.length) rows.push(...legacy.data);
-        if (rows.length === 0) return [];
 
         const uniqueRows = new Map<string, any>();
         rows.forEach((row: any) => {
@@ -339,9 +350,16 @@ class CallService {
         
         try {
             const data = await this.fetchSignalsForUserSince(this.userId, this.lastSignalPollAt);
-            this._consecutivePollFailures = 0; // Reset on success
+            
+            if (data === null) {
+                // Network error occurred inside fetchSignalsForUserSince
+                this._consecutivePollFailures++;
+                return;
+            }
 
-            if (data && data.length > 0) {
+            this._consecutivePollFailures = 0; // SUCCESS: even if 0 signals, the network is UP
+
+            if (data.length > 0) {
                 console.log(`[CallService] 📬 Poll found ${data.length} signal(s): ${data.map((r: any) => r.type || r.signal_type).join(', ')}`);
                 this.lastSignalPollAt = data[data.length - 1].created_at;
                 data.forEach(row => {
@@ -352,7 +370,7 @@ class CallService {
         } catch (err: any) {
             this._consecutivePollFailures++;
             if (this._consecutivePollFailures <= 2 || this._consecutivePollFailures % 5 === 0) {
-                console.warn(`[CallService] Poll failed (#${this._consecutivePollFailures}):`, err?.message || err);
+                console.warn(`[CallService] Poll unexpected failure (#${this._consecutivePollFailures}):`, err?.message || err);
             }
         }
     }
