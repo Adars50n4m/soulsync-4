@@ -273,6 +273,7 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         playPrevious: music.playPrevious,
         sleepTimerMinutes: music.sleepTimerMinutes,
         setSleepTimer: music.setSleepTimer,
+        setMusicPartner: music.setMusicPartner,
 
         // Settings
         theme,

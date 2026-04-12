@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Platform, RefreshControl, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SERVER_URL, safeFetchJson, proxySupabaseUrl } from '../config/api';
+import { SERVER_URL, proxySupabaseUrl } from '../config/api';
+import { supabase } from '../config/supabase';
 import { useApp } from '../context/AppContext';
 import { MaterialIcons } from '@expo/vector-icons';
 import GlassView from '../components/ui/GlassView';
@@ -21,20 +22,65 @@ export default function RequestsScreen() {
 
     const fetchRequests = useCallback(async () => {
         setErrorMsg(null);
+        const userId = currentUser?.id || '';
         try {
-            const { success, data, error } = await safeFetchJson<any>(
-                `${SERVER_URL}/api/connections/requests`,
-                {
-                    headers: { 'x-user-id': currentUser?.id || '' }
+            // Try server with 2s timeout (no retries)
+            let serverOk = false;
+            try {
+                const ctrl = new AbortController();
+                const tid = setTimeout(() => ctrl.abort(), 2000);
+                const res = await fetch(`${SERVER_URL}/api/connections/requests`, {
+                    headers: { 'x-user-id': userId },
+                    signal: ctrl.signal,
+                });
+                clearTimeout(tid);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data?.success) {
+                        setIncoming(data.incoming || []);
+                        setOutgoing(data.outgoing || []);
+                        serverOk = true;
+                    }
                 }
-            );
+            } catch (_) {}
+            if (serverOk) return;
 
-            if (success && data?.success) {
-                setIncoming(data.incoming || []);
-                setOutgoing(data.outgoing || []);
-            } else {
-                setErrorMsg(error || 'Could not load requests');
+            // Direct Supabase (instant)
+            const { data: inReqs } = await supabase
+                .from('connection_requests')
+                .select('id, sender_id, receiver_id, message, status, created_at')
+                .eq('receiver_id', userId)
+                .eq('status', 'pending');
+
+            const { data: outReqs } = await supabase
+                .from('connection_requests')
+                .select('id, sender_id, receiver_id, message, status, created_at')
+                .eq('sender_id', userId)
+                .eq('status', 'pending');
+
+            // Enrich with profile data
+            const allIds = [
+                ...(inReqs || []).map(r => r.sender_id),
+                ...(outReqs || []).map(r => r.receiver_id),
+            ].filter(Boolean);
+
+            let profileMap: Record<string, any> = {};
+            if (allIds.length > 0) {
+                const { data: profiles } = await supabase
+                    .from('profiles')
+                    .select('id, username, display_name, avatar_url')
+                    .in('id', allIds);
+                (profiles || []).forEach(p => { profileMap[p.id] = p; });
             }
+
+            setIncoming((inReqs || []).map(r => ({
+                ...r,
+                sender: profileMap[r.sender_id] || { username: 'Unknown' },
+            })));
+            setOutgoing((outReqs || []).map(r => ({
+                ...r,
+                receiver: profileMap[r.receiver_id] || { username: 'Unknown' },
+            })));
         } catch (err: any) {
             setErrorMsg(err?.message || 'Network error');
         } finally {
@@ -50,25 +96,35 @@ export default function RequestsScreen() {
     const handleAction = async (requestId: string, action: 'accept' | 'reject' | 'cancel') => {
         setActionId(requestId);
         try {
-            const method = action === 'cancel' ? 'DELETE' : 'PUT';
-            const endpoint = `${SERVER_URL}/api/connections/request/${requestId}/${action}`;
-            
-            const { success, error } = await safeFetchJson<any>(endpoint, {
-                method,
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'x-user-id': currentUser?.id || ''
+            // Direct Supabase (fast, no server dependency)
+            if (action === 'accept') {
+                // Get the request to find sender/receiver
+                const request = incoming.find(r => r.id === requestId);
+                if (request) {
+                    // Update request status
+                    await supabase.from('connection_requests')
+                        .update({ status: 'accepted', responded_at: new Date().toISOString() })
+                        .eq('id', requestId);
+                    // Create connection (sorted IDs)
+                    const ids = [request.sender_id, request.receiver_id].sort();
+                    await supabase.from('connections')
+                        .upsert({ user_1_id: ids[0], user_2_id: ids[1] }, { onConflict: 'user_1_id,user_2_id' });
                 }
-            });
-
-            if (success) {
                 setIncoming(prev => prev.filter(r => r.id !== requestId));
+            } else if (action === 'reject') {
+                await supabase.from('connection_requests')
+                    .update({ status: 'rejected', responded_at: new Date().toISOString() })
+                    .eq('id', requestId);
+                setIncoming(prev => prev.filter(r => r.id !== requestId));
+            } else if (action === 'cancel') {
+                await supabase.from('connection_requests')
+                    .delete()
+                    .eq('id', requestId);
                 setOutgoing(prev => prev.filter(r => r.id !== requestId));
-            } else {
-                Alert.alert('Error', error || `Failed to ${action}`);
             }
         } catch (err) {
             console.error(`[Requests] ${action} error:`, err);
+            Alert.alert('Error', `Failed to ${action}`);
         } finally {
             setActionId(null);
         }

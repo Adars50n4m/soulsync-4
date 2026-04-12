@@ -155,6 +155,12 @@ class ChatService {
 
     this.isInitialized         = true;
 
+    // Reset any previously-failed media messages so they get retried with current code
+    try {
+      const resetCount = await offlineService.resetFailedMediaMessages();
+      if (resetCount > 0) console.log(`[ChatService] ♻️ Reset ${resetCount} failed media messages for retry`);
+    } catch (_) {}
+
     await this.setupNetworkListener();
     await this.fetchMissedMessages();
     await this.subscribeToRealtime();
@@ -401,7 +407,6 @@ class ChatService {
       let mediaType = message.media?.type ?? null;
       let mediaThumbnail = message.media?.thumbnail ?? null;
       let mediaDuration = message.media?.duration ?? null;
-
       // ── STEP 1: Upload media (best-effort, don't block message send) ──
       const groupedItems = decodeGroupedItems(message.media?.thumbnail);
       let uploadSucceeded = false;
@@ -423,7 +428,7 @@ class ChatService {
                 } catch (_) {}
               }) || '';
             } catch (uploadErr: any) {
-              // Suppress — upload failure is non-fatal, message will send without media
+              // Suppress — upload failure is non-fatal, message will send without media URL
             }
           }
           uploadedItems.push({
@@ -438,28 +443,44 @@ class ChatService {
           finalMediaUrl = uploadedItems.find(i => !!i.url)?.url || finalMediaUrl;
           mediaType = uploadedItems[0]?.type || mediaType;
           mediaDuration = uploadedItems[0]?.duration || mediaDuration;
-          // Strip localFileUri from items that uploaded successfully
           mediaThumbnail = encodeGroupedItems(uploadedItems.map(i => ({
             ...i,
             localFileUri: i.url ? undefined : i.localFileUri,
           })));
         }
       } else if (message.localFileUri && !finalMediaUrl && message.media) {
+        // Verify local file still exists before attempting upload
+        try {
+          const fileCheck = await FileSystem.getInfoAsync(message.localFileUri);
+          if (!fileCheck.exists) {
+            console.warn(`[ChatService] ⚠️ Source file missing: ${message.localFileUri} — marking permanently failed`);
+            await offlineService.markMessageAsFailed(message.id, 'Source file deleted');
+            this.onStatusUpdate?.(message.id, 'failed');
+            this.sendingIds.delete(message.id);
+            return;
+          }
+        } catch (_) {}
+
+        console.log(`[ChatService] 📸 Uploading single media: ${message.localFileUri.substring(0, 60)}...`);
         try {
           finalMediaUrl = await storageService.uploadImage(message.localFileUri, 'chat-media', senderId, (progress) => {
             try { this.onUploadProgressCb?.(message.id, progress); } catch (_) {}
           }) || undefined;
-          if (finalMediaUrl) uploadSucceeded = true;
-        } catch (_) {
-          // Suppress — upload failure is non-fatal
+          if (finalMediaUrl) {
+            uploadSucceeded = true;
+            console.log(`[ChatService] ✅ Upload success: ${finalMediaUrl}`);
+          }
+        } catch (uploadErr: any) {
+          console.warn(`[ChatService] ⚠️ Upload failed (non-fatal): ${uploadErr.message}`);
         }
       }
 
       if (finalMediaUrl) await offlineService.updateMessageMediaUrl(message.id, finalMediaUrl);
 
       // ── STEP 2: Send message to Supabase (always, even if upload failed) ──
-      // If upload failed, send without media URL. The message text still reaches the receiver.
-      // Media can be retried later via the pending sync queue.
+      // If upload failed, send without media URL but keep thumbnail/type so receiver
+      // knows it's a media message and can see a preview.
+      console.log(`[ChatService] 📤 Inserting message ${message.id} to Supabase | media_url: ${finalMediaUrl ? 'YES' : 'NO'} | media_type: ${mediaType} | uploadOk: ${uploadSucceeded}`);
       const { data, error } = await supabase
         .from('messages')
         .insert({
@@ -470,7 +491,7 @@ class ChatService {
           media_type:    mediaType,
           media_url:     finalMediaUrl          ?? null,
           media_caption: message.media?.caption ?? null,
-          media_thumbnail: uploadSucceeded ? mediaThumbnail : null, // Don't send local URIs to server
+          media_thumbnail: uploadSucceeded ? mediaThumbnail : (message.media?.thumbnail && !message.media.thumbnail.startsWith(MEDIA_GROUP_MARKER) ? message.media.thumbnail : null),
           reply_to_id:   message.replyTo        ?? null,
           created_at:    message.timestamp,
           media_duration: mediaDuration,
@@ -478,7 +499,11 @@ class ChatService {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.warn(`[ChatService] ❌ Supabase INSERT failed for ${message.id}:`, error.message);
+        throw error;
+      }
+      console.log(`[ChatService] ✅ Message ${message.id} inserted as ${data.id}`);
       this.syncConnected();
 
       const serverId = data.id.toString();
@@ -536,12 +561,14 @@ class ChatService {
       const { data, error } = await query;
 
       if (error || !data) {
+        console.warn(`[ChatService] fetchMissedMessages query failed:`, error?.message || 'no data');
         if (!this.lastPollAt) this.lastPollAt = new Date().toISOString();
         return;
       }
-      
+
+      console.log(`[ChatService] fetchMissedMessages returned ${data.length} rows for ${this.userId} <-> ${this.partnerId}`);
       this.syncConnected();
-      
+
       const messages = [...data];
       if (!latestLocalTimestamp) {
         messages.reverse(); // If we used limit(50) with desc order, reverse for storage
@@ -549,7 +576,7 @@ class ChatService {
         // If we queried with gt, ensure ascending order for processing
         messages.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
       }
-      
+
       if (messages.length > 0) {
         this.lastPollAt = messages[messages.length - 1].created_at;
       } else if (!this.lastPollAt) {
@@ -720,7 +747,7 @@ class ChatService {
   private mapDbRowToChatMessage(row: any): ChatMessage {
     return {
       id: row.id.toString(), sender_id: row.sender, receiver_id: row.receiver, text: row.text ?? '', timestamp: row.created_at, status: (row.status as ChatMessage['status']) ?? 'sent',
-      media: row.media_url ? { type: row.media_type ?? 'image', url: row.media_url, caption: row.media_caption, thumbnail: row.media_thumbnail, duration: row.media_duration } : undefined,
+      media: (row.media_url || row.media_type || row.media_thumbnail) ? { type: row.media_type ?? 'image', url: row.media_url ?? '', caption: row.media_caption, thumbnail: row.media_thumbnail, duration: row.media_duration } : undefined,
       reply_to: row.reply_to_id ? row.reply_to_id.toString() : undefined, reactions: row.reaction ? [row.reaction] : undefined,
     };
   }

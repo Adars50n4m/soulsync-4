@@ -2,6 +2,7 @@ import React, { useRef, useCallback, useMemo, useEffect } from 'react';
 import { View, Text, Pressable, Alert, Platform, Image as RNImage, Linking } from 'react-native';
 import { Image } from 'expo-image';
 import { getInfoAsync } from 'expo-file-system';
+import LottieView from 'lottie-react-native';
 import GlassView from '../ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -21,6 +22,7 @@ import { Message } from '../../types';
 import { ChatStyles } from './ChatStyles';
 import { getMessageMediaItems } from '../../utils/chatUtils';
 import VoiceNotePlayer from './VoiceNotePlayer';
+import { SpoilerView } from 'react-native-spoiler-view';
 
 interface MessageBubbleProps {
     msg: Message;
@@ -97,6 +99,13 @@ const isSameRatio = (current: number | null, next: number) => {
 
 const mediaAspectRatioCache = new Map<string, number>();
 const DEFAULT_MEDIA_RATIO = 0.78;
+const MEDIA_DOUBLE_TAP_DELAY_MS = 260;
+const MEDIA_LIKE_ANIMATION_HIDE_MS = 920;
+const MEDIA_LIKE_ANIMATION_SOURCE = {
+    uri: 'https://lottie.host/a1007fcc-beef-400c-ae66-36168992c97a/GaYBDY5AIT.lottie',
+};
+
+const isLikeableMediaType = (type?: string) => type === 'image' || type === 'status_reply';
 
 const MessageBubble = React.memo(({ 
   msg, 
@@ -150,11 +159,29 @@ const MessageBubble = React.memo(({
     const [aspectRatio, setAspectRatio] = React.useState<number | null>(initialAspectRatio || cachedAspectRatio || null);
     const [downloadingIndices, setDownloadingIndices] = React.useState<number[]>([]);
     const [invalidLocalIndices, setInvalidLocalIndices] = React.useState<number[]>([]);
+    const [likeAnimation, setLikeAnimation] = React.useState<{ index: number; nonce: number } | null>(null);
     const translateX = useSharedValue(0);
+    const likeAnimationOpacity = useSharedValue(0);
+    const likeAnimationScale = useSharedValue(0.72);
     const isMe = msg.sender === 'me';
     const bubbleRef = useRef<View>(null);
+    const likeHideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const lastLongPressAtRef = useRef(0);
+    const pendingMediaTapRef = useRef<{
+        index: number;
+        at: number;
+        timeout: ReturnType<typeof setTimeout> | null;
+    }>({
+        index: -1,
+        at: 0,
+        timeout: null,
+    });
 
     const mediaItems = useMemo(() => getMessageMediaItems(msg), [msg]);
+    const enableMessageLevelDoubleTap = useMemo(
+        () => !mediaItems.some((media) => isLikeableMediaType(media.type)),
+        [mediaItems]
+    );
     const mediaValidationKey = useMemo(
         () => mediaItems.map((media, index) => `${index}:${media.localFileUri || ''}:${media.url || ''}:${media.thumbnail || ''}`).join('|'),
         [mediaItems]
@@ -227,6 +254,15 @@ const MessageBubble = React.memo(({
             cancelled = true;
         };
     }, [aspectRatio, primaryMediaAspectCacheKey, primaryMediaPreviewSource]);
+
+    React.useEffect(() => () => {
+        if (pendingMediaTapRef.current.timeout) {
+            clearTimeout(pendingMediaTapRef.current.timeout);
+        }
+        if (likeHideTimeoutRef.current) {
+            clearTimeout(likeHideTimeoutRef.current);
+        }
+    }, []);
     
     React.useEffect(() => {
         if (!isMe && onMediaDownload) {
@@ -261,7 +297,7 @@ const MessageBubble = React.memo(({
         .numberOfTaps(2)
         .maxDuration(250)
         .onEnd(() => {
-            if (onDoubleTap) runOnJS(onDoubleTap)(msg.id);
+            if (enableMessageLevelDoubleTap && onDoubleTap) runOnJS(onDoubleTap)(msg.id);
         });
 
     const measureAndShowMenu = useCallback((id: string) => {
@@ -291,6 +327,7 @@ const MessageBubble = React.memo(({
         .runOnJS(true)
         .onStart(() => {
             if (!selectionMode && !isClone) {
+                lastLongPressAtRef.current = Date.now();
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                 measureAndShowMenu(msg.id);
             }
@@ -319,9 +356,11 @@ const MessageBubble = React.memo(({
             }
         });
 
-    const composedGestures = selectionMode 
-        ? singleTapGesture 
-        : Gesture.Simultaneous(panGesture, Gesture.Exclusive(doubleTapGesture, longPressGesture));
+    const composedGestures = selectionMode
+        ? singleTapGesture
+        : enableMessageLevelDoubleTap
+            ? Gesture.Simultaneous(panGesture, Gesture.Exclusive(doubleTapGesture, longPressGesture))
+            : Gesture.Simultaneous(panGesture, longPressGesture);
 
     const highlightProgress = useSharedValue(0);
 
@@ -344,6 +383,11 @@ const MessageBubble = React.memo(({
         )
     }));
 
+    const likeAnimationStyle = useAnimatedStyle(() => ({
+        opacity: likeAnimationOpacity.value,
+        transform: [{ scale: likeAnimationScale.value }],
+    }));
+
     const iconStyle = useAnimatedStyle(() => ({
         opacity: translateX.value / 60,
         transform: [
@@ -352,12 +396,28 @@ const MessageBubble = React.memo(({
         ] as any,
     }));
 
-    const handleMediaPress = (index: number, openGallery = false) => {
+    const clearPendingMediaTap = useCallback(() => {
+        if (pendingMediaTapRef.current.timeout) {
+            clearTimeout(pendingMediaTapRef.current.timeout);
+        }
+        pendingMediaTapRef.current = {
+            index: -1,
+            at: 0,
+            timeout: null,
+        };
+    }, []);
+
+    const handleMediaPress = useCallback((index: number, openGallery = false) => {
         if (!isClone) {
             const media = mediaItems[index];
             const usableLocalUri = invalidLocalIndexSet.has(index) ? undefined : media.localFileUri;
             if (!isMe && !usableLocalUri && onMediaDownload) {
+                if (!media.url) {
+                    console.log(`[MessageBubble] No media URL for ${msg.id} — media not yet uploaded by sender`);
+                    return;
+                }
                 if (!downloadingIndices.includes(index)) {
+                    console.log(`[MessageBubble] Downloading media for ${msg.id}: ${media.url.substring(0, 60)}`);
                     setDownloadingIndices(prev => [...prev, index]);
                     onMediaDownload(msg.id, media.url, index);
                 }
@@ -365,6 +425,98 @@ const MessageBubble = React.memo(({
             }
             measureAndShowMedia(index, openGallery);
         }
+    }, [downloadingIndices, invalidLocalIndexSet, isClone, isMe, mediaItems, measureAndShowMedia, msg.id, onMediaDownload]);
+
+    const triggerLikeAnimation = useCallback((index: number) => {
+        if (likeHideTimeoutRef.current) {
+            clearTimeout(likeHideTimeoutRef.current);
+        }
+
+        clearPendingMediaTap();
+        setLikeAnimation((prev) => ({
+            index,
+            nonce: (prev?.nonce ?? 0) + 1,
+        }));
+
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+
+        likeAnimationOpacity.value = 0;
+        likeAnimationScale.value = 0.72;
+        likeAnimationOpacity.value = withSequence(
+            withTiming(1, { duration: 90 }),
+            withTiming(1, { duration: 560 }),
+            withTiming(0, { duration: 220 })
+        );
+        likeAnimationScale.value = withSequence(
+            withSpring(1.08, { damping: 13, stiffness: 220 }),
+            withTiming(0.96, { duration: 170 }),
+            withTiming(1, { duration: 110 })
+        );
+
+        likeHideTimeoutRef.current = setTimeout(() => {
+            setLikeAnimation(null);
+        }, MEDIA_LIKE_ANIMATION_HIDE_MS);
+    }, [clearPendingMediaTap, likeAnimationOpacity, likeAnimationScale]);
+
+    const handleMediaTapIntent = useCallback((index: number, openGallery = false) => {
+        const media = mediaItems[index];
+        if (!media) return;
+
+        if (Date.now() - lastLongPressAtRef.current < 450) {
+            return;
+        }
+
+        if (!isLikeableMediaType(media.type) || selectionMode || isClone) {
+            handleMediaPress(index, openGallery);
+            return;
+        }
+
+        const now = Date.now();
+        const pending = pendingMediaTapRef.current;
+        const isDoubleTap =
+            pending.timeout &&
+            pending.index === index &&
+            now - pending.at <= MEDIA_DOUBLE_TAP_DELAY_MS;
+
+        if (isDoubleTap) {
+            clearPendingMediaTap();
+            triggerLikeAnimation(index);
+            onDoubleTap?.(msg.id);
+            return;
+        }
+
+        clearPendingMediaTap();
+        pendingMediaTapRef.current = {
+            index,
+            at: now,
+            timeout: setTimeout(() => {
+                clearPendingMediaTap();
+                handleMediaPress(index, openGallery);
+            }, MEDIA_DOUBLE_TAP_DELAY_MS),
+        };
+    }, [clearPendingMediaTap, handleMediaPress, isClone, mediaItems, msg.id, onDoubleTap, selectionMode, triggerLikeAnimation]);
+
+    const renderLikeOverlay = (index: number, size: number, borderRadius = 12) => {
+        if (likeAnimation?.index !== index) return null;
+
+        return (
+            <Animated.View
+                pointerEvents="none"
+                style={[
+                    ChatStyles.mediaLikeOverlay,
+                    { borderRadius },
+                    likeAnimationStyle,
+                ]}
+            >
+                <LottieView
+                    key={`media-like-${msg.id}-${likeAnimation.nonce}`}
+                    source={MEDIA_LIKE_ANIMATION_SOURCE}
+                    autoPlay
+                    loop={false}
+                    style={{ width: size, height: size }}
+                />
+            </Animated.View>
+        );
     };
 
     const renderMediaContent = () => {
@@ -397,7 +549,7 @@ const MessageBubble = React.memo(({
 
             return (
                 <Pressable
-                    onPress={() => handleMediaPress(0)}
+                    onPress={() => handleMediaTapIntent(0)}
                     style={[
                         ChatStyles.mediaSurface,
                         isMe ? ChatStyles.mediaSurfaceMe : ChatStyles.mediaSurfaceThem,
@@ -410,39 +562,60 @@ const MessageBubble = React.memo(({
                     ]}
                 >
                     {!shouldHideInitialFlash && (
-                        <Image
-                            source={previewSource ? { uri: previewSource } : undefined}
-                            placeholder={media.thumbnail && !media.thumbnail.startsWith('http') && !media.thumbnail.startsWith('file:')
-                                ? { blurhash: media.thumbnail }
-                                : undefined
-                            }
-                            style={{
-                                width: mediaWidth,
-                                height: mediaHeight,
-                            }}
-                            contentFit="cover"
-                            transition={showDownloadOverlay ? 0 : 120}
-                            cachePolicy="memory-disk"
-                            blurRadius={showDownloadOverlay ? 18 : 0}
-                            onLoad={(e) => {
-                                if (!shouldMeasureImage) return;
-                                const { width, height } = e.source;
-                                if (width && height) {
-                                    const ratio = Math.max(0.6, Math.min(width / height, 1.8));
-                                    if (primaryMediaAspectCacheKey) {
-                                        mediaAspectRatioCache.set(primaryMediaAspectCacheKey, ratio);
+                        <>
+                            <Image
+                                source={previewSource ? { uri: previewSource } : undefined}
+                                placeholder={media.thumbnail && !media.thumbnail.startsWith('http') && !media.thumbnail.startsWith('file:')
+                                    ? { blurhash: media.thumbnail }
+                                    : undefined
+                                }
+                                style={{
+                                    width: mediaWidth,
+                                    height: mediaHeight,
+                                }}
+                                contentFit="cover"
+                                transition={showDownloadOverlay ? 0 : 120}
+                                cachePolicy="memory-disk"
+                                blurRadius={showDownloadOverlay ? 20 : 0}
+                                onLoad={(e) => {
+                                    if (!shouldMeasureImage) return;
+                                    const { width, height } = e.source;
+                                    if (width && height) {
+                                        const ratio = Math.max(0.6, Math.min(width / height, 1.8));
+                                        if (primaryMediaAspectCacheKey) {
+                                            mediaAspectRatioCache.set(primaryMediaAspectCacheKey, ratio);
+                                        }
+                                        setAspectRatio(prev => (isSameRatio(prev, ratio) ? prev : ratio));
                                     }
-                                    setAspectRatio(prev => (isSameRatio(prev, ratio) ? prev : ratio));
-                                }
-                            }}
-                            onError={() => {
-                                if (usableLocalUri && !invalidLocalIndexSet.has(0)) {
-                                    setInvalidLocalIndices(prev => (prev.includes(0) ? prev : [...prev, 0]));
-                                }
-                            }}
-                        />
+                                }}
+                                onError={() => {
+                                    if (usableLocalUri && !invalidLocalIndexSet.has(0)) {
+                                        setInvalidLocalIndices(prev => (prev.includes(0) ? prev : [...prev, 0]));
+                                    }
+                                }}
+                            />
+                            {showDownloadOverlay && (
+                                <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, width: mediaWidth, height: mediaHeight }}>
+                                    <SpoilerView
+                                        revealed={false}
+                                        enabled={false}
+                                        config={{
+                                            particleColor: 'rgba(255, 255, 255, 0.55)',
+                                            overlayColor: 'transparent',
+                                            particleDensity: 0.04,
+                                            particleSizeRange: [0.4, 1.2],
+                                            revealDuration: 400,
+                                            burstSpeed: 200,
+                                        }}
+                                        style={{ width: mediaWidth, height: mediaHeight }}
+                                    >
+                                        <View style={{ width: mediaWidth, height: mediaHeight }} />
+                                    </SpoilerView>
+                                </View>
+                            )}
+                        </>
                     )}
-                    {media.type === 'video' && uploadProgress === undefined && (
+                    {media.type === 'video' && uploadProgress === undefined && !showDownloadOverlay && (
                         <View style={ChatStyles.mediaTilePlayOverlay}>
                             <MaterialIcons name="play-circle-filled" size={46} color="rgba(255,255,255,0.92)" />
                         </View>
@@ -455,17 +628,17 @@ const MessageBubble = React.memo(({
                         </View>
                     )}
                     {showDownloadOverlay && !shouldHideInitialFlash && (
-                        <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'transparent', borderRadius: 46 }]}>
-                            <View style={ChatStyles.mediaDownloadScrim} />
-                            <GlassView intensity={55} tint="dark" style={ChatStyles.mediaDownloadBadge}>
-                                <MaterialIcons 
-                                    name={downloadingIndices.includes(0) ? 'hourglass-empty' : (media.url ? 'file-download' : 'hourglass-empty')}
-                                    size={28}
+                        <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'transparent' }]}>
+                            <View style={{ backgroundColor: 'rgba(0,0,0,0.45)', borderRadius: 24, width: 48, height: 48, alignItems: 'center', justifyContent: 'center' }}>
+                                <MaterialIcons
+                                    name={downloadingIndices.includes(0) ? 'downloading' : (media.url ? 'file-download' : 'schedule')}
+                                    size={26}
                                     color="#fff"
                                 />
-                            </GlassView>
+                            </View>
                         </View>
                     )}
+                    {isLikeableMediaType(media.type) && renderLikeOverlay(0, Math.min(mediaWidth * 0.58, 164), 14)}
                 </Pressable>
             );
         }
@@ -491,7 +664,7 @@ const MessageBubble = React.memo(({
                 <Pressable
                     key={`grid-${index}`}
                     style={ChatStyles.mediaGridTile}
-                    onPress={() => handleMediaPress(index, showMore)}
+                    onPress={() => handleMediaTapIntent(index, showMore)}
                 >
                     <Image
                         source={previewSource ? { uri: previewSource } : undefined}
@@ -503,14 +676,33 @@ const MessageBubble = React.memo(({
                         contentFit="cover"
                         transition={showDownloadOverlay ? 0 : 120}
                         cachePolicy="memory-disk"
-                        blurRadius={showDownloadOverlay ? 18 : 0}
+                        blurRadius={showDownloadOverlay ? 20 : 0}
                         onError={() => {
                             if (usableLocalUri && !invalidLocalIndexSet.has(index)) {
                                 setInvalidLocalIndices(prev => (prev.includes(index) ? prev : [...prev, index]));
                             }
                         }}
                     />
-                    {media.type === 'video' && !showMore && uploadProgress === undefined && (
+                    {showDownloadOverlay && (
+                        <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
+                            <SpoilerView
+                                revealed={false}
+                                enabled={false}
+                                config={{
+                                    particleColor: 'rgba(255, 255, 255, 0.55)',
+                                    overlayColor: 'transparent',
+                                    particleDensity: 0.04,
+                                    particleSizeRange: [0.4, 1.2],
+                                    revealDuration: 400,
+                                    burstSpeed: 200,
+                                }}
+                                style={{ flex: 1 }}
+                            >
+                                <View style={{ flex: 1 }} />
+                            </SpoilerView>
+                        </View>
+                    )}
+                    {media.type === 'video' && !showMore && uploadProgress === undefined && !showDownloadOverlay && (
                         <View style={ChatStyles.mediaTilePlayOverlay}>
                             <MaterialIcons name="play-circle-filled" size={34} color="rgba(255,255,255,0.92)" />
                         </View>
@@ -523,15 +715,14 @@ const MessageBubble = React.memo(({
                         </View>
                     )}
                     {showDownloadOverlay && (
-                        <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'transparent', borderRadius: 34 }]}>
-                            <View style={ChatStyles.mediaDownloadScrim} />
-                            <GlassView intensity={55} tint="dark" style={ChatStyles.mediaDownloadBadgeSmall}>
+                        <View style={[ChatStyles.mediaTilePlayOverlay, { backgroundColor: 'transparent' }]}>
+                            <View style={{ backgroundColor: 'rgba(0,0,0,0.45)', borderRadius: 20, width: 40, height: 40, alignItems: 'center', justifyContent: 'center' }}>
                                 <MaterialIcons
-                                    name={downloadingIndices.includes(index) ? 'hourglass-empty' : 'file-download'}
-                                    size={18}
+                                    name={downloadingIndices.includes(index) ? 'downloading' : 'file-download'}
+                                    size={22}
                                     color="#fff"
                                 />
-                            </GlassView>
+                            </View>
                         </View>
                     )}
                     {showMore && (
@@ -539,6 +730,7 @@ const MessageBubble = React.memo(({
                             <Text style={ChatStyles.mediaMoreText}>{`+${extraCount}`}</Text>
                         </View>
                     )}
+                    {isLikeableMediaType(media.type) && renderLikeOverlay(index, 88, 10)}
                 </Pressable>
             );
         };

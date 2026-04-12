@@ -4,10 +4,10 @@ import { View, Pressable, StyleSheet, useWindowDimensions, Platform } from 'reac
 import GlassView from '../../components/ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import Animated, { 
-  useSharedValue, 
-  useAnimatedStyle, 
-  withSpring, 
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
   withTiming,
   withDelay,
   Easing,
@@ -15,8 +15,6 @@ import Animated, {
 import { useApp } from '../../context/AppContext';
 import { ScrollMotionProvider, useScrollMotion } from '../../components/navigation/ScrollMotionProvider';
 
-// Tells expo-router how to construct initial tab state during hydration
-// Prevents "Cannot read property 'stale' of undefined" in TabRouter.getRehydratedState
 export const unstable_settings = {
   initialRouteName: 'index',
 };
@@ -32,7 +30,7 @@ const TabIcon = ({ name, focused, size = 24 }: { name: any; focused: boolean; si
   }, [focused]);
 
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }]
+    transform: [{ scale: scale.value }],
   }));
 
   return (
@@ -51,26 +49,30 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
   const TAB_BAR_WIDTH = SCREEN_WIDTH - 32;
   const { activeTheme } = useApp();
 
-  // Compute safe values for hooks (hooks must always be called)
   const numTabs = state?.routes?.length || 3;
   const tabWidth = (TAB_BAR_WIDTH - 24) / numTabs;
   const currentIndex = state?.index ?? 0;
 
   const isFirstIndicatorSync = React.useRef(true);
   const translateX = useSharedValue(currentIndex * tabWidth);
+  const glowProgress = useSharedValue(0);
   const tabBarOpacity = useSharedValue(hasRenderedTabBarOnce ? 0 : 1);
 
+  // Pill position + glow flash
   useEffect(() => {
     if (isFirstIndicatorSync.current) {
-      // Avoid first-frame indicator slide when tab bar remounts after chat.
       isFirstIndicatorSync.current = false;
       translateX.value = currentIndex * tabWidth;
       return;
     }
+    // Flash glow during shift, fade back
+    glowProgress.value = withTiming(1, { duration: 150 }, () => {
+      glowProgress.value = withTiming(0, { duration: 600 });
+    });
     translateX.value = withSpring(currentIndex * tabWidth, {
       damping: 18,
       stiffness: 120,
-      mass: 0.8
+      mass: 0.8,
     });
   }, [currentIndex, tabWidth, translateX]);
 
@@ -82,23 +84,30 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
     }
     tabBarOpacity.value = withDelay(
       60,
-      withTiming(1, {
-        duration: 300,
-        easing: Easing.out(Easing.cubic),
-      })
+      withTiming(1, { duration: 300, easing: Easing.out(Easing.cubic) })
     );
   }, [tabBarOpacity]);
 
   const indicatorStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
-    backgroundColor: `${activeTheme.primary}0D`, // 0D is ~5% opacity (even more subtle)
+    backgroundColor: 'rgba(255, 255, 255, 0.07)',
   }));
+
+  // Soft glow blob — follows pill, fades in/out on switch
+  const glowStyle = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      transform: [
+        { translateX: translateX.value - tabWidth * 0.25 } as const,
+      ] as const,
+      opacity: glowProgress.value,
+    };
+  });
 
   const tabBarFadeStyle = useAnimatedStyle(() => ({
     opacity: tabBarOpacity.value,
   }));
 
-  // Safely extract route info before hooks
   const focusedRoute = state?.routes?.[state.index];
   const focusedOptions = focusedRoute ? descriptors?.[focusedRoute.key]?.options : undefined;
   const focusedRouteId = focusedRoute?.name || 'index';
@@ -110,15 +119,14 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
     translateY.value = withSpring(isTabBarHidden ? 150 : 0, {
       damping: 20,
       stiffness: 160,
-      mass: 0.8
+      mass: 0.8,
     });
   }, [isTabBarHidden, translateY]);
 
   const dropDownStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: translateY.value }]
+    transform: [{ translateY: translateY.value }],
   }));
 
-  // Guard: state may be undefined during initial navigation hydration
   if (!state || !state.routes || state.routes.length === 0 || !descriptors || !focusedRoute) {
     return null;
   }
@@ -130,38 +138,32 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
   return (
     <Animated.View style={[styles.tabBarContainer, tabBarFadeStyle, dropDownStyle]}>
       <View style={styles.tabBarGlassContainer}>
-        {/* Layer 1: The Glass background */}
-        <GlassView
-          intensity={35}
-          tint="dark"
-          style={StyleSheet.absoluteFill}
-        />
-        
-        {/* Layer 2: The Indicator Pill (Vibrant & SOLID) */}
-        <Animated.View 
+        <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFillObject} />
+
+        {/* Shadow-only glow — no fill, no edge, just soft light */}
+        <Animated.View
           style={[
-            styles.indicatorPill, 
-            { 
-              width: tabWidth,
-            }, 
-            indicatorStyle
-          ]} 
+            styles.glowBlob,
+            { width: tabWidth * 1.5, borderRadius: 30, shadowColor: activeTheme.primary },
+            glowStyle,
+          ]}
+          pointerEvents="none"
         />
 
-        {/* Layer 3: The Interactive Icons */}
+        {/* Indicator pill */}
+        <Animated.View style={[styles.indicatorPill, { width: tabWidth }, indicatorStyle]} />
+
         <View style={styles.tabBarInner}>
           {state.routes.map((route: any, index: number) => {
             const isFocused = state.index === index;
 
             const onPress = () => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              
               const event = navigation.emit({
                 type: 'tabPress',
                 target: route.key,
                 canPreventDefault: true,
               });
-
               if (!isFocused && !event.defaultPrevented) {
                 navigation.navigate(route.name, route.params);
               }
@@ -173,11 +175,7 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
             if (route.name === 'settings') iconName = 'tune';
 
             return (
-              <Pressable
-                key={route.key}
-                onPress={onPress}
-                style={styles.tabButton}
-              >
+              <Pressable key={route.key} onPress={onPress} style={styles.tabButton}>
                 <TabIcon name={iconName} focused={isFocused} />
               </Pressable>
             );
@@ -192,31 +190,14 @@ export default function TabLayout() {
   return (
     <ScrollMotionProvider>
       <Tabs
-        tabBar={props => <TabBar {...props} />}
-        screenOptions={{
-          headerShown: false,
-        }}
+        tabBar={(props) => <TabBar {...props} />}
+        screenOptions={{ headerShown: false }}
         initialRouteName="index"
         backBehavior="initialRoute"
       >
-        <Tabs.Screen
-          name="index"
-          options={{
-            title: 'Chats',
-          }}
-        />
-        <Tabs.Screen
-          name="calls"
-          options={{
-            title: 'Calls',
-          }}
-        />
-        <Tabs.Screen
-          name="settings"
-          options={{
-            title: 'Settings',
-          }}
-        />
+        <Tabs.Screen name="index" options={{ title: 'Chats' }} />
+        <Tabs.Screen name="calls" options={{ title: 'Calls' }} />
+        <Tabs.Screen name="settings" options={{ title: 'Settings' }} />
       </Tabs>
     </ScrollMotionProvider>
   );
@@ -225,7 +206,7 @@ export default function TabLayout() {
 const styles = StyleSheet.create({
   tabBarContainer: {
     position: 'absolute',
-    bottom: 34, // Slightly higher for premium feel
+    bottom: 34,
     left: 0,
     right: 0,
     alignItems: 'center',
@@ -239,9 +220,16 @@ const styles = StyleSheet.create({
     borderColor: Platform.OS === 'android' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.22)',
     backgroundColor: Platform.OS === 'android' ? '#0A0A0A' : 'transparent',
   },
-
-  tabBarOverlay: {
-    ...StyleSheet.absoluteFillObject,
+  glowBlob: {
+    position: 'absolute',
+    top: 10,
+    height: 52,
+    left: 12,
+    backgroundColor: 'transparent',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 30,
+    elevation: 20,
   },
   tabBarInner: {
     flexDirection: 'row',
@@ -252,7 +240,7 @@ const styles = StyleSheet.create({
   },
   indicatorPill: {
     position: 'absolute',
-    top: 10, // Perfectly centered (72 - 52) / 2
+    top: 10,
     left: 12,
     height: 52,
     borderRadius: 26,

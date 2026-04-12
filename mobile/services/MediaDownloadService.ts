@@ -105,11 +105,8 @@ export async function downloadMedia(
     
     await offlineService.updateMessageLocalUri(messageId, downloadResult.uri, fileSize);
 
-    try {
-      await soulFolderService.saveToDeviceGallery(downloadResult.uri, inferredType as any, isSent);
-    } catch (galErr) {
-      console.warn('[MediaDownload] Gallery save ignored:', galErr);
-    }
+    // Don't auto-save to device gallery — WhatsApp only saves when user explicitly taps "Save"
+    // Gallery save was triggering permission dialogs on every incoming media
 
     return { success: true, localUri: downloadResult.uri, fileSize };
   } catch (error) {
@@ -148,12 +145,6 @@ export async function saveLocalMediaFromUri(
     
     await ensureMediaDir(inferredType, true);
     await copyAsync({ from: sourceUri, to: destUri });
-
-    try {
-      await soulFolderService.saveToDeviceGallery(destUri, inferredType as any, true);
-    } catch (galErr) {
-      console.warn('[MediaDownload] Gallery save for sent media failed:', galErr);
-    }
 
     const fileInfo = await getInfoAsync(destUri) as FileInfo;
     const fileSize = fileInfo.exists ? (fileInfo as any).size : 0;

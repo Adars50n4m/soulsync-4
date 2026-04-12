@@ -18,6 +18,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
+import LottieView from 'lottie-react-native';
 import * as MediaLibrary from 'expo-media-library';
 import { 
     documentDirectory, 
@@ -90,8 +91,8 @@ const IOS_KEYBOARD_SAFE_ADJUST = 0;
 const HEADER_PILL_TOP = 62;
 const LIST_PILL_HEIGHT = 72;
 const LIST_PILL_RADIUS = 36;
-const MORPH_IN_OUT_DURATION = 520;
-const MORPH_OUT_HANDOFF = Math.round(MORPH_IN_OUT_DURATION * 0.82);
+const MORPH_IN_OUT_DURATION = 420;
+const MORPH_OUT_HANDOFF = Math.round(MORPH_IN_OUT_DURATION * 0.92);
 const BACK_BTN_SIZE = 54;
 const BACK_BTN_GAP = 10;
 const MAIN_PILL_LEFT = 16 + BACK_BTN_SIZE + BACK_BTN_GAP;
@@ -135,68 +136,17 @@ const formatLastSeen = (isoString: string): string => {
     }
 };
 
+const TYPING_LOTTIE = require('../../assets/animations/typing-dots.json');
+
 const TypingDots = () => {
-    const dot1 = useMemo(() => new RNAnimated.Value(0.35), []);
-    const dot2 = useMemo(() => new RNAnimated.Value(0.35), []);
-    const dot3 = useMemo(() => new RNAnimated.Value(0.35), []);
-
-    useEffect(() => {
-        const createLoop = (value: RNAnimated.Value, delay: number) =>
-            RNAnimated.loop(
-                RNAnimated.sequence([
-                    RNAnimated.delay(delay),
-                    RNAnimated.timing(value, {
-                        toValue: 1,
-                        duration: 380,
-                        useNativeDriver: true,
-                    }),
-                    RNAnimated.timing(value, {
-                        toValue: 0.35,
-                        duration: 380,
-                        useNativeDriver: true,
-                    }),
-                ])
-            );
-        const animations = [
-            createLoop(dot1, 0),
-            createLoop(dot2, 140),
-            createLoop(dot3, 280),
-        ];
-        animations.forEach((animation) => animation.start());
-        return () => {
-            animations.forEach((animation) => animation.stop());
-            dot1.stopAnimation();
-            dot2.stopAnimation();
-            dot3.stopAnimation();
-        };
-    }, [dot1, dot2, dot3]);
-
     return (
-        <View style={styles.typingAnimationWrap}>
-            {[
-                { key: 'dot-1', value: dot1 },
-                { key: 'dot-2', value: dot2 },
-                { key: 'dot-3', value: dot3 },
-            ].map(({ key, value }) => (
-                <RNAnimated.View
-                    key={key}
-                    style={[
-                        styles.typingDot,
-                        {
-                            opacity: value,
-                            transform: [
-                                {
-                                    scale: value.interpolate({
-                                        inputRange: [0.35, 1],
-                                        outputRange: [0.92, 1.15],
-                                    }),
-                                },
-                            ],
-                        },
-                    ]}
-                />
-            ))}
-        </View>
+        <LottieView
+            source={TYPING_LOTTIE}
+            autoPlay
+            loop
+            speed={0.9}
+            style={styles.typingLottie}
+        />
     );
 };
 
@@ -279,7 +229,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     
     const router = useRouter();
     const isFocused = useIsFocused();
-    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, deleteMessage, musicState, getPlaybackPosition, seekTo, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, initializeChatSession, cleanupChatSession, fetchOtherUserProfile } = useApp() as any;
+    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, toggleHeart, deleteMessage, musicState, getPlaybackPosition, seekTo, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, initializeChatSession, cleanupChatSession, fetchOtherUserProfile, setMusicPartner } = useApp() as any;
     const { getPresence } = usePresence();
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
@@ -585,10 +535,12 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             return;
         }
         chatTransitionState.setPhase('returning');
-        headerAccessoryOpacity.value = withTiming(0, { duration: 180 });
-        requestAnimationFrame(() => {
-            finishBack();
+        headerAccessoryOpacity.value = withTiming(0, { duration: 150 });
+        backgroundMorphProgress.value = withTiming(0, {
+            duration: 250,
+            easing: Easing.out(Easing.cubic),
         });
+        setTimeout(() => finishBack(), 220);
     }, [
         backgroundMorphProgress,
         finishBack,
@@ -700,6 +652,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         const task = InteractionManager.runAfterInteractions(() => {
             initializeChatSession?.(id);
             fetchOtherUserProfile?.(id);
+            setMusicPartner?.(id);
         });
 
         return () => {
@@ -1173,11 +1126,11 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         setReplyingTo(null);
     };
 
-    const handleReaction = (emoji: string) => {
+    const handleReaction = useCallback((emoji: string) => {
         if (selectedContextMessage && id) {
             addReaction(id, selectedContextMessage.msg.id, emoji);
         }
-    };
+    }, [addReaction, id, selectedContextMessage]);
 
     const handleAction = (action: string) => {
         if (selectedContextMessage && id) {
@@ -1303,11 +1256,14 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         );
     };
 
-    const handleDoubleTap = (msgId: string) => {
-        if (id) {
+    const handleDoubleTap = useCallback((msgId: string) => {
+        if (!id) return;
+        if (typeof toggleHeart === 'function') {
+            toggleHeart(id, msgId);
+        } else {
             addReaction(id, msgId, '❤️');
         }
-    };
+    }, [addReaction, id, toggleHeart]);
 
     const handleMediaTap = (payload: any) => {
         if (!payload?.mediaItems?.length) return;
@@ -1459,7 +1415,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 )}
             </>
         );
-    }, [selectedContextMessage, chatMessages, contact?.name, handleMediaTap, selectionMode, selectedMessageIds, handleSelectToggle, uploadProgressTracker, handleMediaDownload, handleRetryMessage, handleQuotePress, highlightedMessageId, reversedMessages, firstUnreadId, unreadIncomingIds, formatDateLabel]);
+    }, [selectedContextMessage, chatMessages, contact?.name, handleReaction, handleDoubleTap, handleMediaTap, selectionMode, selectedMessageIds, handleSelectToggle, uploadProgressTracker, handleMediaDownload, handleRetryMessage, handleQuotePress, highlightedMessageId, reversedMessages, firstUnreadId, unreadIncomingIds, formatDateLabel]);
     
     const renderCollectionItem = useCallback(({ item, index }: { item: any, index: number }) => (
         <Pressable
@@ -2476,34 +2432,17 @@ const styles = StyleSheet.create({
         zIndex: 100,
     },
     typingBubbleMini: {
-        backgroundColor: 'rgba(255,255,255,0.12)',
+        backgroundColor: 'rgba(255,255,255,0.08)',
         borderRadius: 999,
-        minWidth: 74,
-        height: 38,
-        paddingHorizontal: 18,
-        flexDirection: 'row',
+        width: 48,
+        height: 28,
         alignItems: 'center',
         justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.06)',
-        shadowColor: '#000',
-        shadowOpacity: 0.18,
-        shadowRadius: 14,
-        shadowOffset: { width: 0, height: 8 },
+        overflow: 'hidden',
     },
-    typingAnimationWrap: {
-        width: 42,
-        height: 18,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 7,
-    },
-    typingDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 999,
-        backgroundColor: 'rgba(255,255,255,0.9)',
+    typingLottie: {
+        width: 40,
+        height: 40,
     },
     typingBubble: {
         backgroundColor: 'rgba(255,255,255,0.08)',

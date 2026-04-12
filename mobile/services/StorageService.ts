@@ -1,11 +1,9 @@
-import { 
-  createUploadTask, 
-  FileSystemUploadType, 
-  getInfoAsync, 
-  cacheDirectory, 
-  downloadAsync, 
-  documentDirectory, 
-  makeDirectoryAsync 
+import {
+  getInfoAsync,
+  cacheDirectory,
+  downloadAsync,
+  documentDirectory,
+  makeDirectoryAsync
 } from 'expo-file-system';
 import { Platform } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
@@ -104,46 +102,50 @@ export const storageService = {
     ): Promise<string | null> {
         console.log(`[StorageService] Uploading via server proxy to ${bucket}/${folder || ''}`);
 
-        const uploadTask = createUploadTask(
-            `${SERVER_URL}/api/media/upload`,
-            localUri,
-            {
-                httpMethod: 'POST',
-                uploadType: FileSystemUploadType.MULTIPART,
-                fieldName: 'file',
-                mimeType: contentType,
-                parameters: {
-                    bucket,
-                    folder: folder || '',
-                },
-            },
-            (progress) => {
-                if (onProgress && progress.totalBytesExpectedToSend > 0) {
-                    onProgress(progress.totalBytesSent / progress.totalBytesExpectedToSend);
-                } else if (onProgress && progress.totalBytesSent > 0) {
-                    onProgress(0.01);
-                }
-            }
-        );
-
-        const result = await uploadTask.uploadAsync();
-        if (!result || result.status < 200 || result.status >= 300) {
-            throw new Error(`Upload proxy failed with status ${result?.status || 'unknown'}`);
+        const fileCheck = await getInfoAsync(localUri);
+        if (!fileCheck.exists) {
+            throw new Error(`Source file not found: ${localUri}`);
         }
 
-        let payload: Partial<UploadResponse> = {};
-        try {
-            payload = result.body ? JSON.parse(result.body) : {};
-        } catch {
-            console.warn('[StorageService] Failed to parse proxy response body');
+        // React Native FormData: use { uri, type, name } object instead of Blob
+        const fileName = localUri.split('/').pop() || `upload-${Date.now()}`;
+        const normalizedUri = localUri.startsWith('file://') ? localUri : `file://${localUri}`;
+
+        const formData = new FormData();
+        formData.append('file', {
+            uri: normalizedUri,
+            type: contentType,
+            name: fileName,
+        } as any);
+        formData.append('bucket', bucket);
+        formData.append('folder', folder || '');
+
+        onProgress?.(0.4);
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+        const response = await fetch(`${SERVER_URL}/api/media/upload`, {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        onProgress?.(0.9);
+
+        if (!response.ok) {
+            throw new Error(`Upload proxy failed with status ${response.status}`);
         }
 
-        if (result && result.status >= 200 && result.status < 300 && payload.success) {
+        const payload: Partial<UploadResponse> = await response.json().catch(() => ({}));
+
+        if (payload.success) {
             const key = payload.key || payload.filename;
             if (key) return key;
         }
 
-        throw new Error(payload.error || `Upload proxy failed with status ${result?.status || 'unknown'}`);
+        throw new Error(payload.error || `Upload proxy failed with status ${response.status}`);
     },
 
     /**
@@ -157,6 +159,14 @@ export const storageService = {
         try {
             // 1. Resolve URI to local file path
             localUri = await this.resolveUri(uri);
+
+            // Guard: verify file exists before attempting native upload (prevents SIGABRT crash)
+            const fileInfo = await getInfoAsync(localUri);
+            if (!fileInfo.exists) {
+                console.warn(`[StorageService] Source file does not exist: ${localUri}`);
+                throw new Error('Source file not found');
+            }
+
             contentType = this.getMimeType(localUri);
             const ext = localUri.split('.').pop()?.toLowerCase() || 'jpg';
             const fileName = `${folder ? folder + '-' : ''}${Date.now()}.${ext}`;
@@ -230,26 +240,28 @@ export const storageService = {
             const { presignedUrl, key } = data;
 
             // 4. Perform the binary upload to R2 via presigned URL
-            const uploadTask = createUploadTask(
-                presignedUrl,
-                localUri,
-                {
-                    httpMethod: 'PUT',
-                    uploadType: FileSystemUploadType.BINARY_CONTENT,
-                    headers: { 'Content-Type': contentType }
-                },
-                (progress) => {
-                    if (onProgress && progress.totalBytesExpectedToSend > 0) {
-                        onProgress(progress.totalBytesSent / progress.totalBytesExpectedToSend);
-                    } else if (onProgress && progress.totalBytesSent > 0) {
-                        onProgress(0.01);
-                    }
+            // Use RN-compatible XMLHttpRequest for binary PUT (fetch + uri object only works with POST multipart)
+            onProgress?.(0.5);
+            const putResponse = await new Promise<{ ok: boolean; status: number }>((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('PUT', presignedUrl);
+                xhr.setRequestHeader('Content-Type', contentType);
+                xhr.timeout = 60000;
+                xhr.onload = () => resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status });
+                xhr.onerror = () => reject(new Error('XHR upload failed'));
+                xhr.ontimeout = () => reject(new Error('Upload timed out'));
+                if (xhr.upload && onProgress) {
+                    xhr.upload.onprogress = (e) => {
+                        if (e.lengthComputable) onProgress(0.5 + (e.loaded / e.total) * 0.45);
+                    };
                 }
-            );
+                // Read file and send as blob
+                const fileUri = localUri.startsWith('file://') ? localUri : `file://${localUri}`;
+                fetch(fileUri).then(r => r.blob()).then(blob => xhr.send(blob)).catch(reject);
+            });
+            onProgress?.(0.95);
 
-            const result = await uploadTask.uploadAsync();
-
-            if (result && (result.status === 200 || result.status === 201 || result.status === 204)) {
+            if (putResponse.ok) {
                 console.log(`[StorageService] Upload success: ${key}`);
                 return key;
             } else {
@@ -262,7 +274,7 @@ export const storageService = {
                 } catch (proxyErr: any) {
                     console.warn(`[StorageService] Recovery via server proxy failed: ${proxyErr.message}`);
                 }
-                throw new Error(`Upload failed with status ${result?.status || 'unknown'}`);
+                throw new Error(`Upload failed with status ${putResponse?.status || 'unknown'}`);
             }
         } catch (e: any) {
             console.warn(`[StorageService] Upload catch error:`, e.message);

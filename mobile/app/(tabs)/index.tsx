@@ -33,6 +33,7 @@ import Animated, {
   SharedTransition,
   interpolate,
   Extrapolation,
+  useDerivedValue,
 } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
@@ -96,7 +97,6 @@ const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promi
 
 // ─── Stable style objects (extracted to avoid inline object creation in render) ──
 const typingStyle = { color: '#22c55e', fontWeight: '700' as const };
-const chevronColor = 'rgba(255,255,255,0.3)';
 const pillSharedTransition = SharedTransition.custom((values) => {
   'worklet';
   const morph = {
@@ -276,7 +276,6 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
                 </View>
               )}
             </View>
-            <MaterialIcons name="chevron-right" size={20} color={chevronColor} />
           </View>
         </View>
         </Animated.View>
@@ -518,10 +517,28 @@ export default function HomeScreen() {
   const homeMorphProgress = useSharedValue(0);
   const scrollPosition = useSharedValue(0);
   const statusRefs = useRef<Record<string, any>>({});
-  const statusRailAnimStyle = useAnimatedStyle(() => ({
-    opacity: statusRailOpacity.value,
-    transform: [{ translateY: statusRailOffset.value }],
-  }));
+  // Telegram-style: status rail collapses as user scrolls down
+  const RAIL_FULL_HEIGHT = 230;  // Full status rail height (cards + padding)
+  const RAIL_COLLAPSED_HEIGHT = 75; // Collapsed: just circle avatars
+  const COLLAPSE_SCROLL = 120;   // Scroll distance to fully collapse
+
+  const statusRailAnimStyle = useAnimatedStyle(() => {
+    const scrollY = scrollPosition.value;
+    const collapseProgress = interpolate(scrollY, [0, COLLAPSE_SCROLL], [0, 1], Extrapolation.CLAMP);
+    const railHeight = interpolate(collapseProgress, [0, 1], [RAIL_FULL_HEIGHT, RAIL_COLLAPSED_HEIGHT], Extrapolation.CLAMP);
+
+    return {
+      opacity: statusRailOpacity.value,
+      height: railHeight,
+      transform: [{ translateY: statusRailOffset.value }],
+      overflow: 'hidden' as const,
+    };
+  });
+
+  // Shared value for child items to read collapse progress
+  const railCollapseProgress = useDerivedValue(() => {
+    return interpolate(scrollPosition.value, [0, COLLAPSE_SCROLL], [0, 1], Extrapolation.CLAMP);
+  });
 
 const homeContentAnimatedStyle = useAnimatedStyle(() => {
   // Android: skip morph entirely — no translateY/scale per frame on the whole list
@@ -850,6 +867,28 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
     });
   }, [homeMorphProgress, router]);
 
+  // Telegram-style card morph: rectangle → circle avatar on scroll
+  const StatusCardWrapper = useCallback(({ children, index }: { children: React.ReactNode; index: number }) => {
+    const cardStyle = useAnimatedStyle(() => {
+      const p = railCollapseProgress.value;
+      const scale = interpolate(p, [0, 1], [1, 0.42], Extrapolation.CLAMP);
+      const borderRadius = interpolate(p, [0, 1], [28, 50], Extrapolation.CLAMP);
+      const translateX = interpolate(p, [0, 1], [0, -index * 42], Extrapolation.CLAMP);
+      const translateY = interpolate(p, [0, 1], [0, 10], Extrapolation.CLAMP);
+
+      return {
+        transform: [{ scale }, { translateX }, { translateY }] as any,
+        borderRadius,
+      };
+    });
+
+    return (
+      <Animated.View style={[styles.statusCard, cardStyle as any]}>
+        {children}
+      </Animated.View>
+    );
+  }, [railCollapseProgress]);
+
   const renderStatusItem = useCallback(({ item, index }: { item: any; index: number }) => {
     if (item.id === 'my-status') {
       const reversedMine = [...myStatuses].reverse();
@@ -871,9 +910,10 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
             : 'My Status';
       
       return (
-        <Pressable 
+        <StatusCardWrapper index={index}>
+        <Pressable
           ref={ref => statusRefs.current['my-status'] = ref}
-          style={styles.statusCard} 
+          style={{ flex: 1 }}
           onPress={() => handleMyStatusPress()}
         >
           <View style={styles.statusCardSurface}>
@@ -958,9 +998,10 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
             </View>
           )}
         </Pressable>
+        </StatusCardWrapper>
       );
     }
-    
+
     const contact = item as Contact;
     const group = contactStatusGroupsMap.get(contact.id);
     const latestStatus = group?.statuses
@@ -971,10 +1012,11 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
     const hasUnviewed = group?.hasUnviewed || false;
 
     return (
-      <Pressable 
+      <StatusCardWrapper index={index}>
+      <Pressable
         key={contact.id}
         ref={ref => statusRefs.current[contact.id] = ref}
-        style={styles.statusCard} 
+        style={{ flex: 1 }}
         onPress={() => handleStatusPress(contact)}
       >
         <View style={styles.statusCardSurface}>
@@ -1018,6 +1060,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
             </View>
         )}
       </Pressable>
+      </StatusCardWrapper>
     );
   }, [
     myStatuses,
@@ -1026,7 +1069,8 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
     pendingStatusUploads,
     isStatusSyncing,
     handleMyStatusPress,
-    handleStatusPress
+    handleStatusPress,
+    StatusCardWrapper,
   ]);
 
   const lastMessagesMap = useMemo(() => {

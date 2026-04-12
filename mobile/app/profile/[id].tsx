@@ -402,18 +402,19 @@ export default function ProfileScreen() {
         isClosingRef.current = true;
 
         if (!hasAvatarMorph) {
-            finishDismiss(action);
+            headerOpacity.value = withTiming(0, { duration: 150 });
+            setTimeout(() => finishDismiss(action), 150);
             return;
         }
 
-        headerOpacity.value = withTiming(0, { duration: 120 });
+        headerOpacity.value = withTiming(0, { duration: 150 });
         heroMorphProgress.value = withTiming(0, {
-            duration: 420,
+            duration: 350,
             easing: Easing.bezier(0.4, 0, 0.2, 1),
         });
         setTimeout(() => {
             finishDismiss(action);
-        }, 280);
+        }, 320);
     }, [finishDismiss, hasAvatarMorph, headerOpacity, heroMorphProgress]);
 
     useEffect(() => {

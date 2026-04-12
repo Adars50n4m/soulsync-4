@@ -95,6 +95,7 @@
     "react-native-safe-area-context": "4.12.0",
     "react-native-screens": "~4.4.0",
     "react-native-sheet-transitions": "^0.1.2",
+    "react-native-spoiler-view": "^0.0.1",
     "react-native-svg": "15.8.0",
     "react-native-track-player": "^4.1.2",
     "react-native-view-shot": "~4.0.3",

@@ -372,9 +372,9 @@ export default function LoginScreen() {
     <SafeAreaView style={s.safe}>
       <StatusBar barStyle="light-content" backgroundColor="#000" />
       <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'padding'} 
         style={s.kav}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? -220 : 0}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? -380 : -550}
       >
 
         {/* ── Bears SVG ─────────────────────────────────────── */}
@@ -753,6 +753,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 22,
+    paddingTop: 270,
   },
   bearsWrap: {
     width: 400,

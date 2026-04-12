@@ -18,6 +18,8 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Video, ResizeMode } from 'expo-av';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import MaskedView from '@react-native-masked-view/masked-view';
 import GlassView from '../components/ui/GlassView';
 import { SoulAvatar } from '../components/SoulAvatar';
 import { statusService } from '../services/StatusService';
@@ -55,6 +57,7 @@ export default function ViewStatusScreen() {
     const progress = useSharedValue(0);
     const translateY = useSharedValue(0);
     const scale = useSharedValue(1);
+    const isLongPressing = useSharedValue(0);
 
     // Initial Load
     useEffect(() => {
@@ -181,12 +184,15 @@ export default function ViewStatusScreen() {
     const longPressGesture = Gesture.LongPress()
         .minDuration(200)
         .onStart(() => {
+            isLongPressing.value = withTiming(1, { duration: 200 });
             cancelAnimation(progress);
             runOnJS(pauseStatusPlayback)();
         })
         .onFinalize(() => {
+            isLongPressing.value = withTiming(0, { duration: 200 });
             runOnJS(resumeStatusPlayback)();
         });
+
 
     const panGesture = Gesture.Pan()
         .onUpdate((e) => {
@@ -215,6 +221,27 @@ export default function ViewStatusScreen() {
         overflow: 'hidden'
     }));
 
+    const mediaAnimatedStyle = useAnimatedStyle(() => ({
+        transform: [
+            { scale: withTiming(isLongPressing.value ? 1 : 1.15, { duration: 300 }) }
+        ],
+    }));
+
+    const uiAnimatedStyle = useAnimatedStyle(() => ({
+        opacity: withTiming(1 - isLongPressing.value, { duration: 200 }),
+    }));
+
+    const overlayAnimatedStyle = useAnimatedStyle(() => ({
+        opacity: withTiming(1 - isLongPressing.value, { duration: 250 }),
+    }));
+
+    const maskAnimatedStyle = useAnimatedStyle(() => ({
+        opacity: withTiming(isLongPressing.value, { duration: 250 }),
+    }));
+
+
+
+
     if (!statusGroup) return <View style={styles.black} />;
 
     const currentStatus = statusGroup.statuses[currentIndex];
@@ -236,101 +263,158 @@ export default function ViewStatusScreen() {
                     </View>
                 )}
                 
-                {/* Media Content */}
+                {/* Media Content with Progressive Feathering */}
                 <GestureDetector gesture={composedGestures}>
-                    <View style={styles.mediaContainer}>
-                        {mediaSource ? (
-                            currentStatus.mediaType === 'video' ? (
-                                <Video
-                                    source={{ uri: mediaSource.uri }}
+                    <MaskedView
+                        style={StyleSheet.absoluteFill}
+                        maskElement={
+                            <View style={StyleSheet.absoluteFill}>
+                                <LinearGradient
+                                    colors={['transparent', 'white', 'white', 'transparent']}
+                                    locations={[0, 0.15, 0.85, 1]}
                                     style={StyleSheet.absoluteFill}
-                                    resizeMode={ResizeMode.CONTAIN}
-                                    shouldPlay={!loading && !isPaused}
-                                    isMuted={false}
-                                    onLoad={() => setLoading(false)}
                                 />
-                            ) : (
-                                <Image 
-                                    source={{ uri: mediaSource.uri }} 
-                                    style={StyleSheet.absoluteFill} 
-                                    resizeMode="contain" 
-                                />
-                            )
-                        ) : null}
-                        
-                        {loading && (
-                            <View style={styles.loader}>
-                                <ActivityIndicator color="#fff" size="large" />
+                                {/* This view reveals the full image on long press by making the mask solid white */}
+                                <Animated.View style={[
+                                    StyleSheet.absoluteFill, 
+                                    { backgroundColor: 'white' },
+                                    maskAnimatedStyle
+                                ]} />
                             </View>
-                        )}
-                    </View>
+                        }
+
+                    >
+                        <Animated.View style={[styles.mediaContainer, mediaAnimatedStyle]}>
+                            {mediaSource ? (
+                                currentStatus.mediaType === 'video' ? (
+                                    <Video
+                                        source={{ uri: mediaSource.uri }}
+                                        style={StyleSheet.absoluteFill}
+                                        resizeMode={ResizeMode.CONTAIN}
+                                        shouldPlay={!loading && !isPaused}
+                                        isMuted={false}
+                                        onLoad={() => setLoading(false)}
+                                    />
+                                ) : (
+                                    <Image 
+                                        source={{ uri: mediaSource.uri }} 
+                                        style={StyleSheet.absoluteFill} 
+                                        resizeMode="contain" 
+                                    />
+                                )
+                            ) : null}
+                            
+                            {loading && (
+                                <View style={styles.loader}>
+                                    <ActivityIndicator color="#fff" size="large" />
+                                </View>
+                            )}
+                        </Animated.View>
+                    </MaskedView>
                 </GestureDetector>
 
-                {/* Overlays */}
-                <View style={[styles.overlay, { paddingTop: insets.top + 10 }]}>
-                    {/* Progress Bars */}
-                    <View style={styles.progressRow}>
-                        {statusGroup.statuses.map((_, i) => (
-                            <StatusProgressBar 
-                                key={i} 
-                                idx={i} 
-                                currentIndex={currentIndex} 
-                                progress={progress} 
-                            />
-                        ))}
+                {/* Overlays (Gradients only, NO sharp blur blocks) */}
+                <Animated.View style={[StyleSheet.absoluteFill, overlayAnimatedStyle]} pointerEvents="none">
+                    {/* Top Section Readiness Gradient */}
+                    <View style={styles.topGradientContainer}>
+                        <LinearGradient
+                            colors={[
+                                'rgba(0,0,0,0.85)', 
+                                'rgba(0,0,0,0.6)', 
+                                'rgba(0,0,0,0.3)', 
+                                'rgba(0,0,0,0.1)', 
+                                'transparent'
+                            ]}
+                            style={StyleSheet.absoluteFill}
+                        />
                     </View>
 
-                    {/* Header */}
-                    <View style={styles.header}>
-                        <Pressable onPress={() => router.back()} style={styles.backBtn}>
-                            <Ionicons name="chevron-back" size={28} color="#fff" />
-                        </Pressable>
-                        <View style={styles.userRow}>
-                            <SoulAvatar
-                                uri={proxySupabaseUrl(statusGroup.user.avatarUrl)}
-                                localUri={statusGroup.user.localAvatarUri}
-                                size={36}
-                            />
-                            <View>
-                                <Text style={styles.userName}>{statusGroup.user.displayName || statusGroup.user.username}</Text>
-                                <Text style={styles.timeLabel}>
-                                    {new Date(currentStatus.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                </Text>
-                            </View>
-                        </View>
+                    {/* Bottom Section Readiness Gradient */}
+                    <View style={styles.bottomGradientContainer}>
+                        <LinearGradient
+                            colors={[
+                                'transparent', 
+                                'rgba(0,0,0,0.1)', 
+                                'rgba(0,0,0,0.3)', 
+                                'rgba(0,0,0,0.6)', 
+                                'rgba(0,0,0,0.85)'
+                            ]}
+                            style={StyleSheet.absoluteFill}
+                        />
                     </View>
-                </View>
+                </Animated.View>
 
-                {/* Caption & Reply */}
-                <View style={[styles.bottomOverlay, { paddingBottom: insets.bottom + 10 }]}>
-                    {currentStatus.caption && (
-                        <View style={styles.captionBox}>
-                            <Text style={styles.captionText}>{currentStatus.caption}</Text>
-                        </View>
-                    )}
 
-                    {!statusGroup.isMine ? (
-                        <View style={styles.replyRow}>
-                            <View style={styles.replyInputBox}>
-                                <TextInput 
-                                    style={styles.replyInput}
-                                    placeholder="Reply..."
-                                    placeholderTextColor="rgba(255,255,255,0.6)"
-                                    value={replyText}
-                                    onChangeText={setReplyText}
+
+
+                {/* UI Content (Progress, Header, Reply) */}
+                <Animated.View style={[StyleSheet.absoluteFill, uiAnimatedStyle]} pointerEvents="box-none">
+                    <View style={[styles.overlay, { paddingTop: insets.top + 20 }]}>
+                        {/* Progress Bars */}
+                        <View style={[styles.progressRow, { marginBottom: 12 }]}>
+                            {statusGroup.statuses.map((_, i) => (
+                                <StatusProgressBar 
+                                    key={i} 
+                                    idx={i} 
+                                    currentIndex={currentIndex} 
+                                    progress={progress} 
                                 />
-                            </View>
-                            <Pressable style={styles.iconBtn}>
-                                <Ionicons name="send" size={24} color="#fff" />
-                            </Pressable>
+                            ))}
                         </View>
-                    ) : (
-                        <Pressable style={styles.viewersRow} onPress={() => setShowViewers(true)}>
-                            <Ionicons name="eye-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
-                            <Text style={styles.viewersText}>{viewers.length} views</Text>
-                        </Pressable>
-                    )}
-                </View>
+
+                        {/* Header */}
+                        <View style={styles.header}>
+                            <Pressable onPress={() => router.back()} style={styles.backBtn}>
+                                <Ionicons name="chevron-back" size={28} color="#fff" />
+                            </Pressable>
+                            <View style={styles.userRow}>
+                                <SoulAvatar
+                                    uri={proxySupabaseUrl(statusGroup.user.avatarUrl)}
+                                    localUri={statusGroup.user.localAvatarUri}
+                                    size={36}
+                                />
+                                <View style={{ marginLeft: 12 }}>
+                                    <Text style={styles.userName}>{statusGroup.user.displayName || statusGroup.user.username}</Text>
+                                    <Text style={styles.timeLabel}>
+                                        {new Date(currentStatus.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </Text>
+                                </View>
+                            </View>
+                        </View>
+                    </View>
+
+                    {/* Footer (Caption & Reply) */}
+                    <View style={[styles.bottomOverlay, { paddingBottom: insets.bottom + 10 }]}>
+                        {currentStatus.caption && (
+                            <View style={styles.captionBox}>
+                                <Text style={styles.captionText}>{currentStatus.caption}</Text>
+                            </View>
+                        )}
+
+                        {!statusGroup.isMine ? (
+                            <View style={styles.replyRow}>
+                                <View style={styles.replyInputBox}>
+                                    <TextInput 
+                                        style={styles.replyInput}
+                                        placeholder="Reply..."
+                                        placeholderTextColor="rgba(255,255,255,0.6)"
+                                        value={replyText}
+                                        onChangeText={setReplyText}
+                                    />
+                                </View>
+                                <Pressable style={styles.iconBtn}>
+                                    <Ionicons name="send" size={24} color="#fff" />
+                                </Pressable>
+                            </View>
+                        ) : (
+                            <Pressable style={styles.viewersRow} onPress={() => setShowViewers(true)}>
+                                <Ionicons name="eye-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
+                                <Text style={styles.viewersText}>{viewers.length} views</Text>
+                            </Pressable>
+                        )}
+                    </View>
+                </Animated.View>
+
 
                 {/* Viewers Modal */}
                 <Modal visible={showViewers} animationType="slide" transparent>
@@ -365,8 +449,8 @@ const styles = StyleSheet.create({
     mediaContainer: { flex: 1, backgroundColor: 'transparent' },
     loader: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.3)' },
     overlay: { ...StyleSheet.absoluteFillObject, height: 150, paddingHorizontal: 10 },
-    progressRow: { flexDirection: 'row', gap: 4, width: '100%', marginBottom: 15 },
-    progressBar: { flex: 1, height: 2, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 1, overflow: 'hidden' },
+    progressRow: { flexDirection: 'row', gap: 6, width: '100%', marginBottom: 15 },
+    progressBar: { flex: 1, height: 3, backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 2, overflow: 'hidden' },
     progressFill: { height: '100%', backgroundColor: '#fff' },
     header: { flexDirection: 'row', alignItems: 'center' },
     backBtn: { padding: 5 },
@@ -389,5 +473,25 @@ const styles = StyleSheet.create({
     modalList: { padding: 25 },
     viewerItem: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
     viewerAvatar: { width: 44, height: 44, borderRadius: 22, marginRight: 15 },
-    viewerName: { color: '#fff', fontSize: 16, fontWeight: '600' }
+    viewerName: { color: '#fff', fontSize: 16, fontWeight: '600' },
+    topGradientContainer: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 320, // Equalized
+        overflow: 'hidden',
+    },
+    bottomGradientContainer: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: 320, // Equalized
+        overflow: 'hidden',
+    }
+
+
+
 });
+

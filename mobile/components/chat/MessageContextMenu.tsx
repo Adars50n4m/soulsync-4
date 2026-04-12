@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
-import { View, Text, Pressable, Modal, StyleSheet, ScrollView, Platform } from 'react-native';
-import GlassView from '../ui/GlassView';
+import { View, Text, Pressable, StyleSheet, ScrollView } from 'react-native';
+import { BlurView } from 'expo-blur';
+// GlassView uses solid bg on Android; BlurView with dimezisBlurView gives real blur
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, { 
     useSharedValue, 
@@ -123,21 +124,21 @@ const MessageContextMenu = ({
     const unitY = startY + topAdjust;
 
     return (
-        <Modal visible={visible} transparent animationType="none" onRequestClose={handleClose}>
-            <View style={StyleSheet.absoluteFill}>
-                <Animated.View style={[StyleSheet.absoluteFill, backdropStyle]}>
-                    <GlassView intensity={40} tint="dark" style={StyleSheet.absoluteFill}  />
-                    <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
-                </Animated.View>
+        <View style={[StyleSheet.absoluteFill, { zIndex: 9999, elevation: 9999 }]}>
+            <Animated.View style={[StyleSheet.absoluteFill, backdropStyle]}>
+                <BlurView intensity={80} tint="dark" experimentalBlurMethod="dimezisBlurView" style={StyleSheet.absoluteFill} />
+                <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0, 0, 0, 0.45)' }]} pointerEvents="none" />
+                <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
+            </Animated.View>
 
-                <Animated.View style={[StyleSheet.absoluteFill, containerStyle]} pointerEvents="box-none">
-                    <View style={{
-                        position: 'absolute',
-                        top: unitY,
-                        [isMe ? 'right' : 'left']: isMe ? SCREEN_WIDTH - layout.x - layout.width : layout.x,
-                        alignItems: isMe ? 'flex-end' : 'flex-start',
-                        gap: UNIT_GAP, 
-                    }}>
+            <Animated.View style={[StyleSheet.absoluteFill, containerStyle]} pointerEvents="box-none">
+                <View style={{
+                    position: 'absolute',
+                    top: unitY,
+                    [isMe ? 'right' : 'left']: isMe ? SCREEN_WIDTH - layout.x - layout.width : layout.x,
+                    alignItems: isMe ? 'flex-end' : 'flex-start',
+                    gap: UNIT_GAP,
+                }}>
                         {/* 1. Emoji Bar */}
                         <View style={{
                             width: 270,
@@ -148,8 +149,8 @@ const MessageContextMenu = ({
                             shadowRadius: 15,
                             elevation: 10,
                         }}>
-                            <GlassView intensity={80} tint="dark" style={[ChatStyles.contextEmojiTail, { [isMe ? 'right' : 'left']: 20 }]}  />
-                            <GlassView intensity={80} tint="dark" style={{ flex: 1, borderRadius: 27, overflow: 'hidden', backgroundColor: 'rgba(30,30,30,0.5)' }} >
+                            <BlurView intensity={60} tint="dark" experimentalBlurMethod="dimezisBlurView" style={[ChatStyles.contextEmojiTail, { [isMe ? 'right' : 'left']: 20 }]}  />
+                            <BlurView intensity={60} tint="dark" experimentalBlurMethod="dimezisBlurView" style={{ flex: 1, borderRadius: 27, overflow: 'hidden', backgroundColor: 'rgba(30,30,30,0.4)' }} >
                                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: 'center', paddingHorizontal: 16, gap: 14 }}>
                                     {emojis.map(e => (
                                         <Pressable key={e} onPress={() => { onReaction(e); handleClose(); }} style={{ paddingVertical: 10 }}>
@@ -160,7 +161,7 @@ const MessageContextMenu = ({
                                         <MaterialIcons name="add" size={20} color="#fff" />
                                     </Pressable>
                                 </ScrollView>
-                            </GlassView>
+                            </BlurView>
                         </View>
 
                         <View style={{
@@ -186,7 +187,7 @@ const MessageContextMenu = ({
                             shadowRadius: 15,
                             elevation: 10,
                         }}>
-                            <GlassView intensity={80} tint="dark" style={{ borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(30,30,30,0.5)', height: '100%' }} >
+                            <BlurView intensity={60} tint="dark" experimentalBlurMethod="dimezisBlurView" style={{ borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', backgroundColor: 'rgba(30,30,30,0.4)', height: '100%' }} >
                                 <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
                                     <Pressable style={ChatStyles.contextActionBtn} onPress={() => { onAction('reply'); handleClose(); }}>
                                         <MaterialIcons name="reply" size={20} color="#fff" />
@@ -229,12 +230,11 @@ const MessageContextMenu = ({
                                         </Text>
                                     </Pressable>
                                 </ScrollView>
-                            </GlassView>
+                            </BlurView>
                         </View>
-                    </View>
-                </Animated.View>
-            </View>
-        </Modal>
+                </View>
+            </Animated.View>
+        </View>
     );
 };
 

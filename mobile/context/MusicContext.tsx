@@ -92,6 +92,7 @@ interface MusicContextType {
     playPrevious: () => Promise<void>;
     sleepTimerMinutes: number | null;
     setSleepTimer: (minutes: number | null) => void;
+    setMusicPartner: (partnerId: string) => void;
 }
 
 export const MusicContext = createContext<MusicContextType | undefined>(undefined);
@@ -103,6 +104,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         isPlaying: false,
         favorites: []
     });
+    const musicStateRef = useRef(musicState);
+    musicStateRef.current = musicState;
     const [isPlayerReady, setIsPlayerReady] = useState(false);
     const [repeatMode, setRepeatMode] = useState<RepeatMode>('off');
     const [shuffle, setShuffle] = useState(false);
@@ -204,8 +207,53 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         AsyncStorage.getItem(`ss_favorites_${currentUser.id}`).then(favs => {
             if (favs) setMusicState(prev => ({ ...prev, favorites: JSON.parse(favs) }));
         });
-        musicSyncService.initialize(currentUser.id, (remoteState) => {
-            // Sync logic...
+        musicSyncService.initialize(currentUser.id, async (remoteState) => {
+            console.log('[MusicSync] Received remote update:', remoteState.isPlaying, remoteState.currentSong?.name);
+            if (!TrackPlayer || !isPlayerReady) return;
+
+            try {
+                // If partner started playing a new song
+                if (remoteState.currentSong && remoteState.currentSong.url) {
+                    const currentSong = musicStateRef.current?.currentSong;
+                    if (!currentSong || currentSong.id !== remoteState.currentSong.id) {
+                        // Different song — load and play it
+                        await TrackPlayer.reset();
+                        await TrackPlayer.add({
+                            id: remoteState.currentSong.id,
+                            url: remoteState.currentSong.url,
+                            title: remoteState.currentSong.name,
+                            artist: remoteState.currentSong.artist,
+                            artwork: remoteState.currentSong.image,
+                            duration: remoteState.currentSong.duration ? Number(remoteState.currentSong.duration) / 1000 : undefined,
+                        });
+                        if (remoteState.position > 0) {
+                            await TrackPlayer.seekTo(remoteState.position / 1000);
+                        }
+                        if (remoteState.isPlaying) {
+                            await TrackPlayer.play();
+                        }
+                        setMusicState(prev => ({
+                            ...prev,
+                            currentSong: remoteState.currentSong,
+                            isPlaying: remoteState.isPlaying,
+                        }));
+                    } else {
+                        // Same song — sync play/pause state
+                        if (remoteState.isPlaying) {
+                            await TrackPlayer.play();
+                        } else {
+                            await TrackPlayer.pause();
+                        }
+                        setMusicState(prev => ({ ...prev, isPlaying: remoteState.isPlaying }));
+                    }
+                } else if (!remoteState.isPlaying && !remoteState.currentSong) {
+                    // Partner stopped playback
+                    await TrackPlayer.pause();
+                    setMusicState(prev => ({ ...prev, isPlaying: false }));
+                }
+            } catch (e) {
+                console.warn('[MusicSync] Failed to apply remote state:', e);
+            }
         });
 
         // When app comes to foreground, reset retry cap so MusicSync can reconnect
@@ -273,11 +321,20 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const togglePlayMusic = useCallback(async () => {
         if (!isPlayerReady || !TrackPlayer) return;
         const state = await TrackPlayer.getState();
-        if (state === (TrackPlayerEvents.State?.Playing || 'playing')) {
+        const wasPlaying = state === (TrackPlayerEvents.State?.Playing || 'playing');
+        if (wasPlaying) {
             await TrackPlayer.pause();
         } else {
             await TrackPlayer.play();
         }
+        const nowPlaying = !wasPlaying;
+        setMusicState(prev => ({ ...prev, isPlaying: nowPlaying }));
+        const pos = await TrackPlayer.getPosition();
+        musicSyncService.broadcastUpdate({
+            currentSong: musicStateRef.current.currentSong,
+            isPlaying: nowPlaying,
+            position: pos * 1000,
+        });
     }, [isPlayerReady]);
 
     const toggleFavoriteSong = useCallback(async (song: Song) => {
@@ -292,6 +349,11 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const seekTo = useCallback(async (position: number) => {
         if (!isPlayerReady || !TrackPlayer) return;
         await TrackPlayer.seekTo(position / 1000);
+        musicSyncService.broadcastUpdate({
+            currentSong: musicStateRef.current.currentSong,
+            isPlaying: musicStateRef.current.isPlaying,
+            position,
+        });
     }, [isPlayerReady]);
 
     const getPlaybackPosition = useCallback(async () => {
@@ -374,11 +436,15 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return () => sub?.remove?.();
     }, [repeatMode, musicState.currentSong, queue, playNext]);
 
+    const setMusicPartner = useCallback((partnerId: string) => {
+        musicSyncService.setPartner(partnerId);
+    }, []);
+
     const value = {
         musicState, playSong, togglePlayMusic, toggleFavoriteSong, seekTo, getPlaybackPosition,
         repeatMode, toggleRepeat, shuffle, toggleShuffle,
         queue, addToQueue, removeFromQueue, clearQueue, playNext, playPrevious,
-        sleepTimerMinutes, setSleepTimer,
+        sleepTimerMinutes, setSleepTimer, setMusicPartner,
     };
     return <MusicContext.Provider value={value}>{children}</MusicContext.Provider>;
 };

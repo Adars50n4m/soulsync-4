@@ -3,11 +3,7 @@
  * Handles file uploads to Cloudflare R2 via Worker proxy
  */
 
-import { 
-  createUploadTask, 
-  FileSystemUploadType, 
-  FileSystemUploadResult 
-} from 'expo-file-system';
+import { getInfoAsync } from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { R2_CONFIG } from '../config/r2';
 import { supabase } from '../config/supabase';
@@ -48,68 +44,72 @@ class R2StorageService {
         const token = await this.getAuthToken();
         if (!token) throw new R2AuthError('Auth token missing');
 
+        const normalizedUri = this.normalizeFileUri(uri);
+        const fileCheck = await getInfoAsync(normalizedUri);
+        if (!fileCheck.exists) {
+          throw new Error(`Source file not found: ${normalizedUri}`);
+        }
+
         const contentType = forceContentType || this.getContentType(uri);
-        const fileName = uri.split('/').pop() || `status-${Date.now()}`;
+        const fileName = uri.split('/').pop() || `upload-${Date.now()}`;
 
         const uploadPath = this.getUploadPath(bucket);
         const uploadUrl = `${R2_CONFIG.WORKER_URL}${uploadPath}`;
 
-        console.log(`[R2Direct] Uploading via POST to ${uploadUrl} (${contentType})`);
+        console.log(`[R2Direct] Uploading via fetch to ${uploadUrl} (${contentType}, ${((fileCheck as any).size || 0) / 1024}KB)`);
+        onProgress?.(0.1);
 
-        const uploadTask = createUploadTask(
-          uploadUrl,
-          this.normalizeFileUri(uri),
-          {
-            httpMethod: 'POST',
-            uploadType: FileSystemUploadType.MULTIPART,
-            fieldName: 'file',
-            mimeType: contentType,
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'x-filename': fileName,
-              'x-folder': folder || '',
-            },
-            parameters: {
-              'folder': folder || '',
-            },
+        // React Native FormData: use { uri, type, name } object instead of Blob
+        const formData = new FormData();
+        formData.append('file', {
+          uri: normalizedUri,
+          type: contentType,
+          name: fileName,
+        } as any);
+        formData.append('folder', folder || '');
+
+        onProgress?.(0.4);
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+        const response = await fetch(uploadUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'x-filename': fileName,
+            'x-folder': folder || '',
           },
-          (p) => {
-            if (onProgress && p.totalBytesExpectedToSend > 0) {
-              const progress = Math.round((p.totalBytesSent / p.totalBytesExpectedToSend) * 100);
-              onProgress(progress);
-            }
-          }
-        );
+          body: formData,
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
 
-        const UPLOAD_TIMEOUT = 60000;
-        const uploadPromise = uploadTask.uploadAsync();
-        const timeoutPromise = new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('Upload timed out after 60s')), UPLOAD_TIMEOUT)
-        );
+        onProgress?.(0.9);
 
-        const result = await Promise.race([uploadPromise, timeoutPromise]) as FileSystemUploadResult;
-
-        if (result && result.status >= 200 && result.status < 300) {
-          const data: UploadResponse = JSON.parse(result.body);
-          const normalizedKey = data.key
-            ? data.key
-            : data.filename
-              ? (data.filename.startsWith(`${bucket}/`) ? data.filename : `${bucket}/${data.filename}`)
-              : null;
-
-          if (data.success && normalizedKey) {
-            console.log(`[R2Direct] ✅ Success: ${normalizedKey}`);
-            return normalizedKey;
-          } else {
-            throw new Error(data.error || 'Worker response successful but missing final key');
-          }
+        if (response.status === 401 || response.status === 403) {
+          throw new R2AuthError(`Worker auth rejected request (${response.status})`);
         }
 
-        if (result?.status === 401 || result?.status === 403) {
-          throw new R2AuthError(`Worker auth rejected request (${result.status})`);
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          throw new Error(`Worker returned ${response.status}: ${text}`);
         }
 
-        throw new Error(`Worker returned ${result?.status}: ${result?.body || 'Empty response'}`);
+        const data: UploadResponse = await response.json();
+        const normalizedKey = data.key
+          ? data.key
+          : data.filename
+            ? (data.filename.startsWith(`${bucket}/`) ? data.filename : `${bucket}/${data.filename}`)
+            : null;
+
+        if (data.success && normalizedKey) {
+          onProgress?.(1);
+          console.log(`[R2Direct] ✅ Success: ${normalizedKey}`);
+          return normalizedKey;
+        } else {
+          throw new Error(data.error || 'Worker response successful but missing final key');
+        }
       } catch (error: any) {
         if (error instanceof R2AuthError) {
           lastError = error;

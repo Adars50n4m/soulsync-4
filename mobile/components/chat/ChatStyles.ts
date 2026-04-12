@@ -182,6 +182,12 @@ export const ChatStyles = StyleSheet.create({
         backgroundColor: 'rgba(0,0,0,0.3)',
         borderRadius: 12,
     },
+    mediaLikeOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 8,
+    },
     mediaDownloadScrim: {
         ...StyleSheet.absoluteFillObject,
         backgroundColor: 'transparent',

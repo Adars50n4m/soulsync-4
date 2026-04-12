@@ -61,9 +61,9 @@ export const getMessageMediaItems = (msg: Message | any): ChatMediaItem[] => {
         }));
     }
 
-    if (msg.media?.url || msg.localFileUri) {
-        return [{ 
-            ...msg.media, 
+    if (msg.media?.url || msg.localFileUri || msg.media?.thumbnail || msg.media?.type) {
+        return [{
+            ...msg.media,
             localFileUri: msg.localFileUri,
             thumbnail: msg.media.thumbnail
         }];

@@ -419,6 +419,15 @@ class OfflineService {
     await db.runAsync(`UPDATE messages SET status = 'failed', error_message = ? WHERE id = ?;`, [reason, messageId]);
   }
 
+  async resetFailedMediaMessages(): Promise<number> {
+    const db = await getDb();
+    const result = await db.runAsync(
+      `UPDATE messages SET status = 'pending', retry_count = 0, error_message = NULL
+       WHERE status = 'failed' AND sender = 'me' AND (media_type IS NOT NULL OR local_file_uri IS NOT NULL);`
+    );
+    return result.changes;
+  }
+
   async markMessageAsUnsent(messageId: string): Promise<void> {
     const db = await getDb();
     await db.runAsync(`UPDATE messages SET is_unsent = 1 WHERE id = ?;`, [messageId]);
