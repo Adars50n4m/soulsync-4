@@ -121,7 +121,7 @@ export default function CallScreen() {
         }
     }, [remoteStream, remoteStreamUpdate]);
 
-    const uiConnected = wasConnected || callState === 'connected' || hasRemoteTracks || stats.bytesReceived > 0;
+    const uiConnected = wasConnected || callState === 'connected' || stats.bytesReceived > 0;
 
     useEffect(() => {
         if (callState === 'connecting') {
@@ -346,6 +346,19 @@ export default function CallScreen() {
         const secs = seconds % 60;
         return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     };
+
+    const statusLabel = useMemo(() => {
+        if (uiConnected) {
+            return formatDuration(callDuration);
+        }
+        if (activeCall?.isIncoming && !activeCall?.isAccepted) {
+            return 'Incoming call...';
+        }
+        if (activeCall?.isRinging || callState === 'ringing') {
+            return 'Ringing...';
+        }
+        return 'Connecting...';
+    }, [activeCall?.isAccepted, activeCall?.isIncoming, activeCall?.isRinging, callDuration, callState, uiConnected]);
 
     const handleEndCall = useCallback(() => {
         setLocalStream(null);
@@ -580,13 +593,8 @@ export default function CallScreen() {
                                     </View>
                                     <Text style={styles.contactName}>{contact.name}</Text>
                                     <Text style={styles.callStatus}>
-                                        {uiConnected ? formatDuration(callDuration) : 'Connecting...'}
+                                        {statusLabel}
                                     </Text>
-                                    {uiConnected && (
-                                        <Text style={[styles.callStatus, { fontSize: 10, opacity: 0.8 }]}>
-                                            Data Rx: {(stats.bytesReceived / 1024).toFixed(1)} KB
-                                        </Text>
-                                    )}
                                 </View>
                             )}
 

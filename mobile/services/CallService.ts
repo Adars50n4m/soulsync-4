@@ -150,6 +150,7 @@ class CallService {
     initialize(userId: string, user: { name: string, avatar: string } | null = null): void {
         const normalizedUserId = normalizeId(userId);
         this.currentUser = user;
+        console.log(`[CallService] 🚀 initialize() called | userId=${normalizedUserId} | channel=call_user_${normalizedUserId}`);
 
         // If same user AND channel is alive and subscribed, skip
         if (this.userId === normalizedUserId && _personalChannel && this.personalChannelSubscribed) {
@@ -248,35 +249,20 @@ class CallService {
 
         const normalizedUserId = normalizeId(userId);
         try {
-            const [modern, legacy] = await Promise.all([
-                supabase
-                    .from('call_signals')
-                    .select('*')
-                    .eq('receiver_id', normalizedUserId)
-                    .gte('created_at', effectiveSince)
-                    .order('created_at', { ascending: true }),
-                supabase
-                    .from('call_signals')
-                    .select('*')
-                    .eq('recipient_id', normalizedUserId)
-                    .gte('created_at', effectiveSince)
-                    .order('created_at', { ascending: true }),
-            ]);
+            const { data, error } = await supabase
+                .from('call_signals')
+                .select('*')
+                .eq('receiver_id', normalizedUserId)
+                .gte('created_at', effectiveSince)
+                .order('created_at', { ascending: true });
 
-            if (modern.error && legacy.error) {
-                console.warn('[CallService] 📶 Signal poll failed (Network/Auth):', {
-                    modern: modern.error.message,
-                    legacy: legacy.error.message,
-                });
-                return []; // Return empty on dual-schema failure
+            if (error) {
+                console.warn('[CallService] 📶 Signal poll failed:', error.message);
+                return [];
             }
 
-            const rows: any[] = [];
-            if (!modern.error && modern.data?.length) rows.push(...modern.data);
-            if (!legacy.error && legacy.data?.length) rows.push(...legacy.data);
-            return rows;
+            return data || [];
         } catch (err: any) {
-            // Handle "Network request failed" or other transient exceptions gracefully
             const isNetworkError = err?.message?.includes('Network request failed') || err?.message?.includes('fetch');
             if (isNetworkError) {
                 console.warn('[CallService] 📶 Signaling poll: Network unreachable (retrying...)');
@@ -285,23 +271,6 @@ class CallService {
             }
             return null; // Return null to distinguish error from zero signals
         }
-
-        const uniqueRows = new Map<string, any>();
-        rows.forEach((row: any) => {
-            const rowKey =
-                row?.signal_id
-                || row?.id
-                || `${row?.created_at || ''}_${row?.sender_id || ''}_${row?.receiver_id || row?.recipient_id || ''}_${row?.type || row?.signal_type || ''}`;
-            if (!uniqueRows.has(rowKey)) {
-                uniqueRows.set(rowKey, row);
-            }
-        });
-
-        return Array.from(uniqueRows.values()).sort((a: any, b: any) => {
-            const aTime = new Date(a?.created_at || 0).getTime();
-            const bTime = new Date(b?.created_at || 0).getTime();
-            return aTime - bTime;
-        });
     }
 
     private async persistLifecycleSignalToDb(signalType: string, recipientId: string, signal: CallSignal): Promise<void> {
@@ -309,8 +278,8 @@ class CallService {
         signal.signalId = signalId; // Ensure it's set on the signal object too
         console.log(`[CallService] 💾 Persisting [${signalType}] to DB: sender=${this.userId}, receiver=${recipientId}`);
 
-        // New schema path
-        const modern = await supabase.from('call_signals').insert({
+        // Match actual table schema: signal_id, sender_id, receiver_id, type, payload
+        const result = await supabase.from('call_signals').insert({
             signal_id: signalId,
             sender_id: this.userId,
             receiver_id: recipientId,
@@ -318,54 +287,60 @@ class CallService {
             payload: signal,
         });
 
-        if (!modern.error) {
+        if (!result.error) {
             console.log(`[CallService] ✅ [${signalType}] persisted OK`);
             return;
         }
 
-        console.warn(`[CallService] ⚠️ [${signalType}] modern insert failed: ${modern.error.message} — trying legacy schema`);
-
-        // Legacy schema fallback
-        const legacy = await supabase.from('call_signals').insert({
-            sender_id: this.userId,
-            recipient_id: recipientId,
-            signal_type: signalType,
-            payload: signal,
-        });
-
-        if (!legacy.error) {
-            console.log(`[CallService] ✅ [${signalType}] persisted via legacy schema`);
-            return;
-        }
-
-        console.error(`[CallService] ❌ [${signalType}] DB persist failed in both schemas`, {
-            modern: modern.error.message,
-            legacy: legacy.error.message,
-        });
-        throw modern.error;
+        console.error(`[CallService] ❌ [${signalType}] DB persist failed: ${result.error.message} (code: ${result.error.code})`);
+        throw result.error;
     }
 
+    private _pollCount = 0;
     private async pollForSignals() {
         if (!this.userId) return;
-        
+        this._pollCount++;
+
         try {
             const data = await this.fetchSignalsForUserSince(this.userId, this.lastSignalPollAt);
-            
+
             if (data === null) {
-                // Network error occurred inside fetchSignalsForUserSince
                 this._consecutivePollFailures++;
+                if (this._consecutivePollFailures <= 3) {
+                    console.warn(`[CallService] 📶 Poll returned null (network error #${this._consecutivePollFailures})`);
+                }
                 return;
             }
 
-            this._consecutivePollFailures = 0; // SUCCESS: even if 0 signals, the network is UP
+            this._consecutivePollFailures = 0;
 
             if (data.length > 0) {
-                console.log(`[CallService] 📬 Poll found ${data.length} signal(s): ${data.map((r: any) => r.type || r.signal_type).join(', ')}`);
-                this.lastSignalPollAt = data[data.length - 1].created_at;
-                data.forEach(row => {
+                // Pre-filter: check which signals are genuinely new (not yet in dedup set)
+                const newSignals: CallSignal[] = [];
+                for (const row of data) {
                     const signal = this.mapSignalRowToCallSignal(row);
-                    if (signal) this.handleIncomingSignal(signal);
-                });
+                    if (!signal) continue;
+                    const signalKey = signal.signalId ||
+                        `${signal.type}_${signal.roomId || signal.callId || 'no-room'}_${signal.callerId || 'no-caller'}`;
+                    if (!this.processedSignalIds.has(signalKey)) {
+                        newSignals.push(signal);
+                    }
+                }
+
+                if (newSignals.length > 0) {
+                    // Advance cursor to latest signal
+                    this.lastSignalPollAt = data[data.length - 1].created_at;
+                    console.log(`[CallService] 📬 Poll #${this._pollCount}: ${newSignals.length} signal(s) | since=${this.lastSignalPollAt} | user=${this.userId.substring(0,12)}...`);
+                    for (const signal of newSignals) {
+                        console.log(`[CallService] 📬 Processing polled signal: [${signal.type}] from ${signal.callerId?.substring(0,12)}...`);
+                        this.handleIncomingSignal(signal);
+                    }
+                } else {
+                    // All signals were already processed — advance cursor to now to escape
+                    // the overlap window re-fetch loop. Safe because any genuinely new signal
+                    // would have been returned by the unbounded query and wouldn't be in the dedup set.
+                    this.lastSignalPollAt = new Date().toISOString();
+                }
             }
         } catch (err: any) {
             this._consecutivePollFailures++;
@@ -494,16 +469,24 @@ class CallService {
             }
         }
 
+        let justLatched = false;
         if (!this.currentRoomId && signalRoomId && isLifecycleSignal) {
             console.log(`[CallService] 🏠 Latching to Room ${signalRoomId} from [${signal.type}]`);
             this.currentRoomId = signalRoomId;
             this.currentPartnerId = signal.callerId;
             this.currentCallType = signal.callType || 'audio';
             this.joinRoom(this.currentRoomId);
+            justLatched = true;
         }
 
         // Check for busy state or duplicate call requests
         if (signal.type === 'call-request' && this.currentRoomId) {
+            // If we JUST latched to this room from this very signal, deliver it — not a duplicate
+            if (justLatched) {
+                this.notifyListeners(signal);
+                return;
+            }
+
             const signalTime = new Date(signal.timestamp).getTime();
             const now = Date.now();
             const ageSeconds = (now - signalTime) / 1000;
@@ -782,13 +765,45 @@ class CallService {
         // Ensure polling is active
         this.startSignalPolling();
 
-        // Send call-request to the callee's personal channel
-        await this.sendSignal(signal);
-
         // Start timeout - if no response in 45 seconds, end the call
         this.startCallTimeout(() => {
             this.cleanup('timeout');
         });
+
+        // Do not block the UI on signaling delivery or diagnostic reads.
+        // Returning the roomId quickly lets the caller mount the call screen
+        // before a fast `call-accept` races back from the callee.
+        void (async () => {
+            try {
+                await this.sendSignal(signal);
+
+                // DIAGNOSTIC: Verify signal was persisted — read it back
+                try {
+                    const { data: verifyData, error: verifyErr } = await supabase
+                        .from('call_signals')
+                        .select('id, type, receiver_id')
+                        .eq('receiver_id', partnerId)
+                        .order('created_at', { ascending: false })
+                        .limit(1);
+
+                    if (verifyErr) {
+                        console.error(`[CallService] 🔴 DIAG: DB read-back FAILED: ${verifyErr.message}`);
+                        const { Alert } = require('react-native');
+                        Alert.alert('Call Signal Debug', `DB read FAILED: ${verifyErr.message}\n\nSignal may not reach the other device.`);
+                    } else if (!verifyData || verifyData.length === 0) {
+                        console.error('[CallService] 🔴 DIAG: Signal NOT found in DB after persist!');
+                        const { Alert } = require('react-native');
+                        Alert.alert('Call Signal Debug', 'Signal was NOT saved to DB!\n\nBroadcast is the only path. Check Realtime connection.');
+                    } else {
+                        console.log(`[CallService] 🟢 DIAG: Signal verified in DB: ${JSON.stringify(verifyData[0])}`);
+                    }
+                } catch (diagErr: any) {
+                    console.error('[CallService] 🔴 DIAG exception:', diagErr?.message);
+                }
+            } catch (sendErr: any) {
+                console.error('[CallService] ❌ call-request send failed:', sendErr?.message || sendErr);
+            }
+        })();
 
         return roomId;
     }
@@ -1035,33 +1050,42 @@ class CallService {
         (signal as any).sender_id = this.userId;
         (signal as any).normalized_sender_id = normalizeId(this.userId);
 
-        console.log(`[CallService] 📤 TX [${signalType}] signal from ${this.userId} TO ${normalizedRecipientId} (ID: ${signal.signalId})`);
+        console.log(`[CallService] 📤 TX [${signalType}] signal TO ${normalizedRecipientId} (ID: ${signal.signalId})`);
 
-        // 1. Persist to DB (Value-add path)
         const isCriticalLifecycle = ['call-request', 'call-accept', 'call-reject', 'call-end', 'offer', 'answer', 'ice-candidate'].includes(signalType);
-        
+        const isHighPriority = signalType === 'call-request' || signalType === 'call-accept';
+
+        // --- DEFENSIVE CONCURRENCY ---
+        // Path 1: Database Persistence
+        let dbPathPromise = Promise.resolve();
         if (isCriticalLifecycle) {
-            // FIRE AND FORGET DB persistence so it doesn't block the fast Realtime path
-            this.persistLifecycleSignalToDb(signalType, normalizedRecipientId, signal).catch(dbErr => {
-                console.warn('[CallService] ⚠️ DB Persistence background failure:', dbErr);
+            dbPathPromise = (async () => {
+                try {
+                    const dbTask = this.persistLifecycleSignalToDb(signalType, normalizedRecipientId, signal);
+                    await Promise.race([
+                        dbTask,
+                        this.delay(5000).then(() => { throw new Error('DB persist timeout'); })
+                    ]);
+                    console.log(`[CallService] ✅ [${signalType}] DB path confirmed`);
+                } catch (dbErr: any) {
+                    console.warn(`[CallService] ⚠️ DB Path failed/timed-out for [${signalType}]:`, dbErr?.message || dbErr);
+                    this._pendingSignals.push(signal);
+                }
+            })();
+        }
+
+        // Path 2: Personal Channel Broadcast
+        const broadcastPathPromise = (async () => {
+            try {
+                await this.sendToPersonalChannel(normalizedRecipientId, 'call_signal', signal, signalType);
+                console.log(`[CallService] ✅ [${signalType}] Broadcast path confirmed`);
+            } catch (err: any) {
+                console.warn(`[CallService] ⚠️ Broadcast Path failure for [${signalType}]:`, err?.message || err);
                 this._pendingSignals.push(signal);
-            });
-        }
+            }
+        })();
 
-        // 2. Broadcast via personal channels (Primary path)
-        // This is highly robust as it targets both UUID and legacy channels.
-        const personalSendTask = this.sendToPersonalChannel(normalizedRecipientId, 'call_signal', signal, signalType).catch(err => {
-            console.warn(`[CallService] ⚠️ Personal delivery failure for [${signalType}]:`, err);
-            this._pendingSignals.push(signal);
-        });
-        if (isCriticalLifecycle && signalType !== 'ice-candidate') {
-            await Promise.race([
-                personalSendTask,
-                this.delay(2500),
-            ]);
-        }
-
-        // 3. Room channel broadcast (Secondary path / Sync)
+        // Path 3: Room Channel (Secondary sync)
         if (this.currentRoomId && this.roomSubscribed && _roomChannel) {
             try {
                 _roomChannel.send({
@@ -1069,18 +1093,32 @@ class CallService {
                     event: 'call_signal',
                     payload: signal
                 }).then((status) => {
-                    if (status !== 'ok') console.warn(`[CallService] Room broadcast [${signalType}] returned status:`, status);
+                    if (status !== 'ok') console.warn(`[CallService] ⚠️ Room sync [${signalType}] status:`, status);
+                    else console.log(`[CallService] ✅ [${signalType}] Room sync confirmed`);
                 });
             } catch (roomErr) {
-                console.warn('[CallService] ⚠️ Room broadcast failed:', roomErr);
+                console.warn('[CallService] ⚠️ Room sync exception:', roomErr);
             }
         }
 
-        // 4. Push notifications for call-request (wake up sleeping device)
+        // Path 4: Push notifications
         if (signalType === 'call-request') {
             this.triggerCallPush(normalizedRecipientId, signal).catch(() => {
-                console.warn('[CallService] Push notification failed (non-critical)');
+                console.warn('[CallService] ⚠️ Push notification failed (non-critical)');
             });
+        }
+
+        // --- CONSOLIDATION ---
+        if (isHighPriority) {
+            await Promise.race([
+                Promise.all([dbPathPromise, broadcastPathPromise]), 
+                this.delay(3500)
+            ]);
+        } else if (isCriticalLifecycle && signalType !== 'ice-candidate') {
+            await Promise.race([
+                Promise.all([dbPathPromise, broadcastPathPromise]),
+                this.delay(1500)
+            ]);
         }
     }
 

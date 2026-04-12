@@ -32,7 +32,7 @@ export default function AddStatusScreen() {
     const handlePickMedia = async () => {
         try {
             const result = await ImagePicker.launchImageLibraryAsync({
-                mediaTypes: ImagePicker.MediaTypeOptions.All,
+                mediaTypes: ['images', 'videos'] as ImagePicker.MediaType[],
                 allowsEditing: true,
                 quality: 0.8,
                 videoMaxDuration: 30,

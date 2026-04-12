@@ -778,15 +778,23 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
   };
 
   const handleSelectCamera = async () => {
-      const permission = await ImagePicker.requestCameraPermissionsAsync();
-      if (!permission.granted) return Alert.alert('Permission needed', 'Camera permission required.');
-      const result = await ImagePicker.launchCameraAsync({
-        quality: 0.8,
-        mediaTypes: ImagePicker.MediaTypeOptions.All,
-        allowsEditing: true,
-        videoMaxDuration: 60,
-      });
-      await createStatus(result);
+      try {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission?.granted) {
+          return Alert.alert('Permission needed', 'Camera permission required.');
+        }
+        const result = await ImagePicker.launchCameraAsync({
+          quality: 0.8,
+          mediaTypes: ['images', 'videos'] as ImagePicker.MediaType[],
+          allowsEditing: true,
+          videoMaxDuration: 60,
+        });
+        await createStatus(result);
+      } catch (error: any) {
+        const message = error instanceof Error ? error.message : 'Failed to open camera.';
+        console.warn('[Status] Camera picker failed:', message);
+        Alert.alert('Camera Error', message || 'Failed to open camera.');
+      }
   };
 
   const handleSelectGallery = async (providedAsset?: MediaLibrary.Asset) => {
@@ -807,16 +815,22 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
           return;
       }
 
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) return Alert.alert('Permission needed', 'Gallery permission required.');
-      const result = await ImagePicker.launchImageLibraryAsync({
-        quality: 0.8,
-        mediaTypes: ImagePicker.MediaTypeOptions.All,
-        allowsEditing: true,
-        videoMaxDuration: 60,
-        legacy: true,
-      });
-      await createStatus(result);
+      try {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission?.granted) return Alert.alert('Permission needed', 'Gallery permission required.');
+        const result = await ImagePicker.launchImageLibraryAsync({
+          quality: 0.8,
+          mediaTypes: ['images', 'videos'] as ImagePicker.MediaType[],
+          allowsEditing: true,
+          videoMaxDuration: 60,
+          legacy: true,
+        });
+        await createStatus(result);
+      } catch (error: any) {
+        const message = error instanceof Error ? error.message : 'Failed to open gallery.';
+        console.warn('[Status] Gallery picker failed:', message);
+        Alert.alert('Gallery Error', message || 'Failed to open gallery.');
+      }
   };
 
   const handleUserSelect = useCallback((contact: Contact, y: number) => {

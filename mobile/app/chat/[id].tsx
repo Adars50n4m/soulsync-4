@@ -1496,7 +1496,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             return;
         }
         const result = await ImagePicker.launchCameraAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.All,
+            mediaTypes: ['images', 'videos'] as ImagePicker.MediaType[],
             quality: 0.8,
             allowsEditing: false,
             videoMaxDuration: 120,
@@ -1512,7 +1512,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         if (isExpanded) toggleOptions();
         setShowMediaPicker(false);
         const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.All,
+            mediaTypes: ['images', 'videos'] as ImagePicker.MediaType[],
             quality: 0.8,
             allowsEditing: false,
             allowsMultipleSelection: true,

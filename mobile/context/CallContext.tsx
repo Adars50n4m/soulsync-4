@@ -35,6 +35,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const activeCallRef = useRef(activeCall);
     const callStartTimeRef = useRef<number | null>(null);
     const incomingSignalRef = useRef<CallSignal | null>(null);
+    const pendingAcceptedRoomRef = useRef<string | null>(null);
 
     useEffect(() => { activeCallRef.current = activeCall; }, [activeCall]);
 
@@ -152,6 +153,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setActiveCall(null);
         callStartTimeRef.current = null;
         incomingSignalRef.current = null;
+        pendingAcceptedRoomRef.current = null;
     }, [fetchCalls]);
 
     useEffect(() => {
@@ -232,6 +234,8 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
                 case 'call-accept': {
                     const active = activeCallRef.current;
+                    const signalRoomId = signal.roomId || signal.callId || null;
+                    pendingAcceptedRoomRef.current = signalRoomId;
                     // [AUTO-CUT FIX] PREVENT CALLEE FROM AUTO-ACCEPTING GHOST SIGNALS
                     // Only the CALLER (!isIncoming) should set isAccepted=true when receiving this signal.
                     // The CALLEE (isIncoming) sets it themselves when clicking the Accept button.
@@ -243,10 +247,17 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     // [AUTO-CUT FIX] Clear timeout on caller's side when target accepts
                     callService.clearCallTimeout();
                     clearCallTimeout(); // Clear local timeout too
-                    setActiveCall(prev => prev ? { ...prev, isAccepted: true } : null);
+                    setActiveCall(prev => {
+                        if (!prev) return prev;
+                        const activeRoomId = prev.roomId || prev.callId || null;
+                        if (signalRoomId && activeRoomId && activeRoomId !== signalRoomId) {
+                            return prev;
+                        }
+                        return { ...prev, isAccepted: true };
+                    });
                     callStartTimeRef.current = Date.now();
                     
-                    if (webRTCService && active && !active.isIncoming) {
+                    if (webRTCService && !active?.isIncoming) {
                         try { webRTCService.onCallAccepted(); } catch (e) {}
                     }
                     break;
@@ -300,6 +311,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     setActiveCall(null);
                     incomingSignalRef.current = null;
                     callStartTimeRef.current = null;
+                    pendingAcceptedRoomRef.current = null;
                     callService.cleanup('remote-terminated');
                     break;
                 }
@@ -329,7 +341,12 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 case 'ice-candidate':
                     console.log(`[CallContext] 📡 WebRTC signal received: ${signal.type} from ${signal.callerId?.substring(0,8)}...`);
                     if (signal.callType === 'audio' || signal.callType === 'video') {
-                        setActiveCall(prev => prev ? { ...prev, type: signal.callType } : null);
+                        setActiveCall(prev => {
+                            if (!prev || prev.type === signal.callType) {
+                                return prev;
+                            }
+                            return { ...prev, type: signal.callType };
+                        });
                         callService.setCurrentCallType(signal.callType);
                     }
                     if (webRTCService) {
@@ -378,25 +395,29 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         const normalizedContactId = normalizeId(contactId);
+        pendingAcceptedRoomRef.current = null;
         console.log(`[CallContext] 📞 Starting call to ${normalizedContactId} (${type})`);
         const roomId = await callService.startCall(normalizedContactId, type);
         console.log(`[CallContext] 📞 startCall returned roomId: ${roomId}`);
         if (roomId) {
             const contactName = getSuperuserName(normalizedContactId) || 'User';
+            const wasAcceptedEarly = pendingAcceptedRoomRef.current === roomId;
             setActiveCall({
                 callId: roomId,
                 contactId: normalizedContactId,
                 contactName,
                 type,
                 isIncoming: false,
-                isAccepted: false,
+                isAccepted: wasAcceptedEarly,
                 isMuted: false,
                 isVideoOff: false,
                 isMinimized: false,
                 remoteVideoOff: false,
                 roomId
             });
-            callStartTimeRef.current = null;
+            if (!wasAcceptedEarly) {
+                callStartTimeRef.current = null;
+            }
             
             // Start timeout for unanswered call
             startCallTimeout(roomId);
@@ -426,6 +447,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await callService.endCall();
         setActiveCall(null);
         callStartTimeRef.current = null;
+        pendingAcceptedRoomRef.current = null;
     }, [fetchCalls]);
 
     const toggleMute = useCallback(() => {

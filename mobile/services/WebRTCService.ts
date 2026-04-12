@@ -43,6 +43,14 @@ try {
     RTCIceCandidate = require('react-native-webrtc/lib/commonjs/RTCIceCandidate').default;
     mediaDevices = require('react-native-webrtc/lib/commonjs/MediaDevices').default;
     MediaStream = require('react-native-webrtc/lib/commonjs/MediaStream').default;
+
+    // CRITICAL: The main package entry (react-native-webrtc/index) calls setupNativeEvents()
+    // which bridges native WebRTC events to JS. Since we import individual files to avoid
+    // eagerly loading RTCView, we must call it explicitly — without this, NO events
+    // (ICE candidates, connection state, gathering state, etc.) reach JavaScript.
+    const { setupNativeEvents } = require('react-native-webrtc/lib/commonjs/EventEmitter');
+    setupNativeEvents();
+    console.log('[WebRTCService] ✅ setupNativeEvents() bridge activated');
 } catch (e: any) {
     webRTCCoreLoadError = webRTCCoreLoadError || e?.message || 'unknown';
     console.log('[WebRTCService] Native modules not available:', webRTCCoreLoadError);
@@ -674,23 +682,9 @@ class WebRTCService {
             }
         };
 
-        // --- CRITICAL: ICE CANDIDATE SIGNALING ---
-        // This is the bridge that sends local connection paths to the partner.
-        pc.onicecandidate = (event: any) => {
-            if (event.candidate) {
-                const type = event.candidate.candidate.includes('typ relay') ? 'RELAY' : 
-                            (event.candidate.candidate.includes('typ srflx') ? 'STUN' : 'HOST');
-                
-                console.log(`[WebRTCService] [${label}] 🧊 Local candidate generated [${type}]: ${event.candidate.candidate.substring(0, 40)}...`);
-                
-                // Send candidate to partner via signaling service
-                callService.sendIceCandidate(event.candidate).catch(err => {
-                    console.warn('[WebRTCService] Failed to send ICE candidate:', err);
-                });
-            } else {
-                console.log(`[WebRTCService] [${label}] 🧊 ICE Gathering COMPLETE`);
-            }
-        };
+        // ICE candidate handling is set up in createPeerConnection() via addEventListener.
+        // Do NOT set pc.onicecandidate here — it would be overwritten and the property
+        // assignment can conflict with addEventListener in react-native-webrtc.
 
         // --- DIAGNOSTICS: ICE CANDIDATE ERRORS ---
         pc.onicecandidateerror = (event: any) => {
@@ -1620,9 +1614,19 @@ class WebRTCService {
                 });
 
                 this.broadcast('onRemoteStream', this.remoteStream);
-                
-                // Any remote media means we are connected
-                this.setState('connected');
+
+                const iceReady =
+                    pc.iceConnectionState === 'connected'
+                    || pc.iceConnectionState === 'completed';
+                const peerReady = pc.connectionState === 'connected';
+
+                if (iceReady || peerReady) {
+                    this.setState('connected');
+                } else {
+                    console.log(
+                        `[WebRTCService] Remote track received before transport connected. ICE=${pc.iceConnectionState} Peer=${pc.connectionState}`
+                    );
+                }
                 
                 // Verify encryption
                 this.verifyEncryption();
@@ -1641,16 +1645,17 @@ class WebRTCService {
             batchTimer = null;
         };
 
-        pc.onicecandidate = ({ candidate }: any) => {
-            if (candidate) {
-                candidateBatch.push(candidate);
+        pc.addEventListener('icecandidate', (event: any) => {
+            if (event.candidate) {
+                candidateBatch.push(event.candidate);
                 if (!batchTimer) {
-                    batchTimer = setTimeout(flushCandidates, 150); // Batch candidates over 150ms
+                    batchTimer = setTimeout(flushCandidates, 150);
                 }
             } else {
+                flushCandidates();
                 console.log('[WebRTCService] ICE candidates collection finished (End-of-Candidates)');
             }
-        };
+        });
 
         // Update connection state handler with recovery logic
         pc.addEventListener('connectionstatechange', () => {
@@ -1780,6 +1785,9 @@ class WebRTCService {
 
         const answer = await this.peerConnection.createAnswer(answerOptions);
         await this.peerConnection.setLocalDescription(answer);
+
+        const pc = this.peerConnection as any;
+        console.log(`[WebRTCService] POST-SLD: gathering=${pc.iceGatheringState} signaling=${pc.signalingState} connection=${pc.connectionState} ice=${pc.iceConnectionState}`);
 
         console.log('[WebRTCService] Sending answer...');
         callService.sendAnswer(answer);
@@ -2007,8 +2015,10 @@ class WebRTCService {
                 const hasNoAudio = remoteAudio.length === 0;
                 const allMuted = remoteAudio.length > 0 && remoteAudio.every((t: any) => t.muted);
                 const now = Date.now();
+                const transportReady = iceState === 'connected' || iceState === 'completed';
                 const noAudioBytesFlow =
-                    hasStatsSample
+                    transportReady
+                    && hasStatsSample
                     && remoteAudio.length > 0
                     && counter > 10
                     && (Number(statsValue.bytesReceived || 0) <= 0 || (now - lastRxBytesChangedAt) > 18000);
@@ -2021,7 +2031,7 @@ class WebRTCService {
                     }
                 }
                 
-                if (hasNoAudio || allMuted) {
+                if (transportReady && (hasNoAudio || allMuted)) {
                     console.warn(`[WebRTCService] ⚠️ ${hasNoAudio ? '0 remote tracks' : 'Muted remote tracks'} detected! Attempting recovery...`);
                     // If we have transceivers, check their direction
                     try {
@@ -2064,7 +2074,9 @@ class WebRTCService {
             }
 
             // Controlled renegotiation with ICE restart.
-            if (this.peerConnection.signalingState === 'stable') {
+            // Keep the initiator as the owner of recovery offers to avoid
+            // the receiver entering have-local-offer during initial setup.
+            if (this.peerConnection.signalingState === 'stable' && this.isInitiator) {
                 const offerOptions = {
                     iceRestart: true,
                     offerToReceiveAudio: true,
@@ -2074,7 +2086,9 @@ class WebRTCService {
                 await this.peerConnection.setLocalDescription(offer);
                 callService.sendOffer(offer);
             } else {
-                console.log(`[WebRTCService] Skipping recovery offer, signalingState=${this.peerConnection.signalingState}`);
+                console.log(
+                    `[WebRTCService] Skipping recovery offer, role=${this.isInitiator ? 'initiator' : 'receiver'} signalingState=${this.peerConnection.signalingState}`
+                );
             }
             
             console.log('[WebRTCService] Recovery attempt initiated. Waiting for reconnection...');

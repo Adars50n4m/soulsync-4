@@ -97,7 +97,7 @@ export default function MyStatusScreen() {
     
     const result = await ImagePicker.launchCameraAsync({
       quality: 0.8,
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      mediaTypes: ['images', 'videos'] as ImagePicker.MediaType[],
       allowsEditing: true,
       videoMaxDuration: 60,
     });
@@ -112,7 +112,7 @@ export default function MyStatusScreen() {
       await createStatus(providedAsset);
     } else {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        mediaTypes: ['images', 'videos'] as ImagePicker.MediaType[],
         allowsEditing: true,
         quality: 0.8,
       });
