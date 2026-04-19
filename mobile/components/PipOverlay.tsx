@@ -96,7 +96,7 @@ export default function PipOverlay() {
     // FIX: More robust check for active call - must have callId and not be ended
     const hasValidCall = activeCall && activeCall.callId && !activeCall.callId.includes('ended');
 
-    const isVisible = hasValidCall && !inCallScreen && contact && (activeCall.isAccepted || !activeCall.isIncoming);
+    const isVisible = hasValidCall && !inCallScreen && contact && (activeCall.isAccepted || !activeCall.isIncoming) && activeCall.isMinimized;
 
     // Debug log only when visibility changes (not every render)
 

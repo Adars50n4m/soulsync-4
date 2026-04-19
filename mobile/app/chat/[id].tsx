@@ -1026,17 +1026,34 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
     }), [isRecording]);
 
     const slideToCancelStyle = useAnimatedStyle(() => ({
-        transform: [{ translateX: recordingTranslateX.value }],
-        opacity: interpolate(recordingTranslateX.value, [-100, 0], [0, 1], Extrapolation.CLAMP),
+        transform: [{ translateX: recordingTranslateX.value / 4 }], // Move slightly with drag
+        opacity: interpolate(recordingTranslateX.value, [-60, 0], [0, 1], Extrapolation.CLAMP),
+    }));
+
+    const cancelTextAnimatedStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: recordingTranslateX.value / 3 }],
+        opacity: interpolate(recordingTranslateX.value, [-120, -10], [0, 0.8], Extrapolation.CLAMP),
     }));
 
     const MIC_TRAVEL_FULL = SCREEN_WIDTH - 110; // drag distance fromStandalone right mic button to left delete zone
 
     const deleteIconAnimatedStyle = useAnimatedStyle(() => {
-        const progress = Math.min(1, Math.abs(recordingTranslateX.value) / MIC_TRAVEL_FULL);
+        const absX = Math.abs(recordingTranslateX.value);
+        const progress = Math.min(1, absX / MIC_TRAVEL_FULL);
+        // Pop in after a 20px drag threshold
+        const popProgress = interpolate(absX, [0, 40, 100], [0, 0.3, 1], Extrapolation.CLAMP);
+        
         return {
-            transform: [{ scale: interpolate(progress, [0, 0.6, 1], [1, 1.15, 1.5], Extrapolation.CLAMP) }],
-            opacity: interpolate(progress, [0, 1], [0.55, 1], Extrapolation.CLAMP),
+            transform: [
+                { scale: interpolate(popProgress, [0, 0.8, 1], [0, 1.2, 1], Extrapolation.CLAMP) },
+                { rotate: `${interpolate(popProgress, [0, 1], [45, 0], Extrapolation.CLAMP)}deg` }
+            ],
+            opacity: interpolate(popProgress, [0, 1], [0, 1], Extrapolation.CLAMP),
+            backgroundColor: interpolateColor(
+                absX,
+                [CANCEL_SWIPE_THRESHOLD - 20, CANCEL_SWIPE_THRESHOLD],
+                ['rgba(255,255,255,0.08)', 'rgba(239, 68, 68, 0.2)']
+            )
         };
     });
 
@@ -1045,13 +1062,13 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
         return {
             transform: [
                 { translateX: recordingTranslateX.value },
-                { scale: interpolate(progress, [0, 0.9, 0.98, 1], [1, 1, 0.92, 0.28], Extrapolation.CLAMP) },
+                { scale: interpolate(progress, [0, 0.85, 0.95, 1], [1, 1, 0.85, 0.2], Extrapolation.CLAMP) },
             ] as any,
-            opacity: interpolate(progress, [0, 0.97, 1], [1, 1, 0], Extrapolation.CLAMP),
+            opacity: interpolate(progress, [0, 0.96, 1], [1, 1, 0], Extrapolation.CLAMP),
             backgroundColor: interpolateColor(
                 progress,
-                [0, 0.9, 1],
-                [themeAccent, themeAccentSoft, '#ff4d6d']
+                [0, 0.8, 1],
+                [themeAccent, themeAccentSoft, '#ef4444']
             ),
         };
     });
@@ -2076,22 +2093,32 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                 {isRecording && (
                                     <Animated.View style={[StyleSheet.absoluteFill, { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 4, zIndex: 10 }]}>
                                         <Animated.View style={[styles.deleteIconWrap, deleteIconAnimatedStyle]}>
-                                            <MaterialIcons name="delete" size={24} color="rgba(255,255,255,0.72)" />
+                                            <MaterialIcons name="delete-outline" size={24} color="#ef4444" />
+                                        </Animated.View>
+                                        <Animated.View style={[styles.deleteIconWrap, deleteIconAnimatedStyle, { position: 'absolute', left: 4, backgroundColor: 'transparent' }]}>
+                                            <MaterialIcons name="delete" size={24} color="#ef4444" />
                                         </Animated.View>
 
                                         <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(18, 16, 26, 0.4)', borderRadius: 24, height: 44, marginHorizontal: 4, paddingHorizontal: 12, borderWidth: 1.2, borderColor: 'rgba(255,255,255,0.22)', overflow: 'hidden' }}>
                                             <GlassView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
                                             <Animated.View style={[styles.recordingIndicator, recordingPulseStyle]} />
                                             <Text style={styles.recordingTimer}>{formatDuration(recordingDuration)}</Text>
-                                            <View style={{ flex: 1, height: 40, justifyContent: 'center' }}>
-                                               <SiriWaveform level={recordingLevel} active={isRecording} themeColor={activeTheme.primary} />
+                                            
+                                            <View style={{ flex: 1, paddingHorizontal: 8, justifyContent: 'center' }}>
+                                               <Animated.View style={[{ position: 'absolute', width: '100%', alignItems: 'center' }, cancelTextAnimatedStyle]}>
+                                                   <Text style={{ color: 'rgba(255,255,255,0.4)', fontSize: 13, fontWeight: '500' }}>Slide to cancel</Text>
+                                               </Animated.View>
+                                               <Animated.View style={recordingWaveAnimatedStyle}>
+                                                   <SiriWaveform level={recordingLevel} active={isRecording} themeColor={activeTheme.primary} />
+                                               </Animated.View>
                                             </View>
+
                                             <Animated.View style={[{ opacity: 0.4 }, slideToCancelStyle]}>
                                                 <MaterialIcons name="chevron-left" size={20} color="white" />
                                             </Animated.View>
                                         </View>
 
-                                        <Animated.View style={[styles.recordingMicIconWrap, { backgroundColor: activeTheme.primary, width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' }]}>
+                                        <Animated.View style={[styles.recordingMicIconWrap, recordingMicAnimatedStyle, { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' }]}>
                                             <MaterialIcons name="mic" size={24} color="#fff" />
                                         </Animated.View>
                                     </Animated.View>
