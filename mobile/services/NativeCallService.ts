@@ -125,7 +125,7 @@ class NativeCallService {
         imageName: 'ic_launcher',
         selfManaged: true, // CRITICAL for VoIP apps on Android
         foregroundService: {
-          channelId: 'com.soulsync4.mobile.calls',
+          channelId: 'com.soul4.mobile.calls',
           channelName: 'Soul Calls',
           notificationTitle: 'Soul Call',
           notificationIcon: 'ic_launcher',

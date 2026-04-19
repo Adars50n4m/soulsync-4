@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import LottieView from 'lottie-react-native';
 import {
     View, Text, Image, StyleSheet, StatusBar,
     useWindowDimensions, Pressable, Alert, TextInput, Modal, ScrollView,
@@ -43,7 +44,8 @@ export default function ViewStatusScreen() {
     const insets = useSafeAreaInsets();
     const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
-    const { currentUser } = useApp();
+    const { currentUser, sendChatMessage, activeTheme } = useApp();
+    const themeAccent = activeTheme.primary;
     
     const [statusGroup, setStatusGroup] = useState<UserStatusGroup | null>(null);
     const [currentIndex, setCurrentIndex] = useState(0);
@@ -51,8 +53,11 @@ export default function ViewStatusScreen() {
     const [loading, setLoading] = useState(true);
     const [isPaused, setIsPaused] = useState(false);
     const [replyText, setReplyText] = useState('');
+    const [isReplyComposerActive, setIsReplyComposerActive] = useState(false);
+    const [isReplyActionLoading, setIsReplyActionLoading] = useState(false);
     const [showViewers, setShowViewers] = useState(false);
     const [viewers, setViewers] = useState<any[]>([]);
+    const replyInputRef = useRef<TextInput>(null);
 
     const progress = useSharedValue(0);
     const translateY = useSharedValue(0);
@@ -239,12 +244,73 @@ export default function ViewStatusScreen() {
         opacity: withTiming(isLongPressing.value, { duration: 250 }),
     }));
 
+    const currentStatus = statusGroup?.statuses[currentIndex] ?? null;
+    const trimmedReplyText = replyText.trim();
+    const showSendAction = isReplyComposerActive || trimmedReplyText.length > 0;
 
+    const buildStatusReplyMedia = useCallback(() => {
+        if (!currentStatus) return null;
 
+        const remoteStatusUrl = currentStatus.mediaKey
+            ? proxySupabaseUrl(currentStatus.mediaKey)
+            : (!mediaSource?.isLocal ? mediaSource?.uri : '');
 
-    if (!statusGroup) return <View style={styles.black} />;
+        if (!remoteStatusUrl) return null;
 
-    const currentStatus = statusGroup.statuses[currentIndex];
+        return {
+            type: 'status_reply' as const,
+            url: remoteStatusUrl,
+            thumbnail: currentStatus.mediaType === 'image' ? remoteStatusUrl : undefined,
+            caption: currentStatus.caption?.trim() || undefined,
+        };
+    }, [currentStatus, mediaSource]);
+
+    const sendStatusReplyMessage = useCallback(async (text: string) => {
+        if (!statusGroup || !currentStatus || isReplyActionLoading) return;
+
+        const normalizedText = text.trim();
+        const statusReplyMedia = buildStatusReplyMedia();
+        if (!statusReplyMedia) {
+            Alert.alert('Wait a second', 'Status preview abhi ready nahi hua. Ek baar phir try karo.');
+            return;
+        }
+
+        setIsReplyActionLoading(true);
+        let sendError: unknown = null;
+        try {
+            await sendChatMessage(statusGroup.user.id, normalizedText, statusReplyMedia);
+        } catch (error) {
+            sendError = error;
+            console.warn('[ViewStatus] Failed to send status reply:', error);
+            Alert.alert('Not sent', 'Status response send nahi hua. Dobara try karo.');
+        }
+        setIsReplyActionLoading(false);
+        if (sendError) throw sendError;
+    }, [buildStatusReplyMedia, currentStatus, isReplyActionLoading, sendChatMessage, statusGroup]);
+
+    const handleSendReply = useCallback(async () => {
+        if (!trimmedReplyText) return;
+        try {
+            await sendStatusReplyMessage(trimmedReplyText);
+        } catch {
+            return;
+        }
+        setReplyText('');
+        setIsReplyComposerActive(false);
+        replyInputRef.current?.blur();
+    }, [sendStatusReplyMessage, trimmedReplyText]);
+
+    const [showLikeAnim, setShowLikeAnim] = useState(false);
+    const likeAnimRef = useRef<LottieView>(null);
+
+    const handleLikeStatus = useCallback(async () => {
+        setShowLikeAnim(true);
+        likeAnimRef.current?.play();
+        try {
+            await sendStatusReplyMessage('❤️');
+        } catch {}
+    }, [sendStatusReplyMessage]);
+    if (!statusGroup || !currentStatus) return <View style={styles.black} />;
 
     return (
         <GestureHandlerRootView style={styles.black}>
@@ -351,10 +417,10 @@ export default function ViewStatusScreen() {
                 <Animated.View style={[StyleSheet.absoluteFill, uiAnimatedStyle]} pointerEvents="box-none">
                     <View style={[styles.overlay, { paddingTop: insets.top + 20 }]}>
                         {/* Progress Bars */}
-                        <View style={[styles.progressRow, { marginBottom: 12 }]}>
-                            {statusGroup.statuses.map((_, i) => (
+                            <View style={[styles.progressRow, { marginBottom: 12 }]}>
+                            {statusGroup.statuses.map((statusItem, i) => (
                                 <StatusProgressBar 
-                                    key={i} 
+                                    key={statusItem.id} 
                                     idx={i} 
                                     currentIndex={currentIndex} 
                                     progress={progress} 
@@ -393,17 +459,50 @@ export default function ViewStatusScreen() {
 
                         {!statusGroup.isMine ? (
                             <View style={styles.replyRow}>
-                                <View style={styles.replyInputBox}>
+                                <View style={[
+                                    styles.replyInputBox,
+                                    isReplyComposerActive && styles.replyInputBoxActive
+                                ]}>
                                     <TextInput 
+                                        ref={replyInputRef}
                                         style={styles.replyInput}
                                         placeholder="Reply..."
                                         placeholderTextColor="rgba(255,255,255,0.6)"
                                         value={replyText}
                                         onChangeText={setReplyText}
+                                        onFocus={() => {
+                                            setIsReplyComposerActive(true);
+                                            pauseStatusPlayback();
+                                        }}
+                                        onBlur={() => {
+                                            resumeStatusPlayback();
+                                            if (!replyText.trim()) {
+                                                setIsReplyComposerActive(false);
+                                            }
+                                        }}
+                                        returnKeyType="send"
+                                        onSubmitEditing={handleSendReply}
                                     />
                                 </View>
-                                <Pressable style={styles.iconBtn}>
-                                    <Ionicons name="send" size={24} color="#fff" />
+                                <Pressable
+                                    style={[
+                                        styles.iconBtn,
+                                        showSendAction ? [styles.iconBtnSend, { backgroundColor: themeAccent }] : styles.iconBtnLike,
+                                        isReplyActionLoading && styles.iconBtnDisabled,
+                                        showSendAction && !trimmedReplyText && styles.iconBtnDisabled,
+                                    ]}
+                                    onPress={showSendAction ? handleSendReply : handleLikeStatus}
+                                    disabled={isReplyActionLoading || (showSendAction && !trimmedReplyText)}
+                                >
+                                    {isReplyActionLoading ? (
+                                        <ActivityIndicator color="#fff" />
+                                    ) : (
+                                        <Ionicons
+                                            name={showSendAction ? "send" : "heart"}
+                                            size={24}
+                                            color="#fff"
+                                        />
+                                    )}
                                 </Pressable>
                             </View>
                         ) : (
@@ -427,7 +526,7 @@ export default function ViewStatusScreen() {
                         </View>
                         <ScrollView contentContainerStyle={styles.modalList}>
                             {viewers.map((v, i) => (
-                                <View key={i} style={styles.viewerItem}>
+                                <View key={v.id || v.viewer_id || `viewer-${i}`} style={styles.viewerItem}>
                                     <SoulAvatar
                                         uri={proxySupabaseUrl(v.profiles?.avatar_url)}
                                         size={40}
@@ -438,6 +537,20 @@ export default function ViewStatusScreen() {
                         </ScrollView>
                     </GlassView>
                 </Modal>
+
+                {/* Like burst animation */}
+                {showLikeAnim && (
+                    <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                        <LottieView
+                            ref={likeAnimRef}
+                            source={require('../assets/animations/status-like.json')}
+                            autoPlay
+                            loop={false}
+                            style={{ flex: 1 }}
+                            onAnimationFinish={() => setShowLikeAnim(false)}
+                        />
+                    </View>
+                )}
             </Animated.View>
         </GestureHandlerRootView>
     );
@@ -462,9 +575,13 @@ const styles = StyleSheet.create({
     captionBox: { backgroundColor: 'rgba(0,0,0,0.5)', padding: 12, borderRadius: 12, marginBottom: 20 },
     captionText: { color: '#fff', fontSize: 16, textAlign: 'center' },
     replyRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-    replyInputBox: { flex: 1, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 25, height: 50, justifyContent: 'center', paddingHorizontal: 20 },
+    replyInputBox: { flex: 1, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 25, height: 50, justifyContent: 'center', paddingHorizontal: 20, borderWidth: 1, borderColor: 'transparent' },
+    replyInputBoxActive: { backgroundColor: 'rgba(255,255,255,0.18)', borderColor: 'rgba(255,255,255,0.22)' },
     replyInput: { color: '#fff', fontSize: 15 },
-    iconBtn: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#8C0016', justifyContent: 'center', alignItems: 'center' },
+    iconBtn: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center' },
+    iconBtnSend: { backgroundColor: '#8C0016' },
+    iconBtnLike: { backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)' },
+    iconBtnDisabled: { opacity: 0.45 },
     viewersRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10 },
     viewersText: { color: '#fff', fontWeight: '600' },
     modal: { flex: 1, marginTop: 100, borderTopLeftRadius: 30, borderTopRightRadius: 30, overflow: 'hidden' },
@@ -494,4 +611,3 @@ const styles = StyleSheet.create({
 
 
 });
-

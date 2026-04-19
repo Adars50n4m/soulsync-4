@@ -5,12 +5,15 @@ import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, interpolate, Extrapolation, SharedValue } from 'react-native-reanimated';
 import ProgressiveBlur from './chat/ProgressiveBlur';
 import GlassView from './ui/GlassView';
+import { proxySupabaseUrl } from '../config/api';
 
 interface ProfileHeaderProps {
     image: string | any;
     name: string;
     subtitle?: string;
     username: string;
+    avatarType?: 'default' | 'teddy' | 'memoji' | 'custom';
+    teddyVariant?: 'boy' | 'girl';
     onEditPress?: () => void;
     heroRef?: React.Ref<View>;
     hidden?: boolean;
@@ -27,6 +30,8 @@ const ProfileHeader = ({
     name,
     subtitle,
     username,
+    avatarType = 'default',
+    teddyVariant = 'boy',
     onEditPress,
     heroRef,
     hidden = false,
@@ -55,6 +60,19 @@ const ProfileHeader = ({
         };
     });
 
+    const resolvedImageSource = React.useMemo(() => {
+        if (typeof image !== 'string') return image;
+
+        if (avatarType === 'teddy' || avatarType === 'memoji') {
+            const variant = avatarType === 'memoji' ? 'girl' : teddyVariant;
+            const fallbackId = username || name || 'soul';
+            return { uri: `https://avatar.iran.liara.run/public/${variant}?username=${fallbackId}` };
+        }
+
+        const resolvedUri = proxySupabaseUrl(image);
+        return resolvedUri ? { uri: resolvedUri } : null;
+    }, [avatarType, image, name, teddyVariant, username]);
+
     return (
         <View style={styles.container}>
             <View
@@ -65,12 +83,16 @@ const ProfileHeader = ({
                 style={[styles.imageContainer, hidden && styles.imageContainerHidden]}
             >
                 <Animated.View style={[styles.imageWrapper, animatedImageStyle as any]}>
-                    <Image
-                        source={typeof image === 'string' ? { uri: image } : image}
-                        style={styles.image}
-                        contentFit="cover"
-                        transition={0}
-                    />
+                    {resolvedImageSource ? (
+                        <Image
+                            source={resolvedImageSource}
+                            style={styles.image}
+                            contentFit="cover"
+                            transition={0}
+                        />
+                    ) : (
+                        <View style={[styles.image, styles.imageFallback]} />
+                    )}
                 </Animated.View>
                 
                 {/* iOS-style progressive blur — fades from clear (top) to blurred (bottom) */}
@@ -133,6 +155,9 @@ const styles = StyleSheet.create({
     image: {
         width: '100%',
         height: '100%',
+    },
+    imageFallback: {
+        backgroundColor: '#1a1a1a',
     },
     contentOverlay: {
         ...StyleSheet.absoluteFillObject,

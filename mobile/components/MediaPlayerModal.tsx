@@ -16,6 +16,7 @@ import GlassView from './ui/GlassView';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Video, AVPlaybackStatus, ResizeMode } from 'expo-av';
+import { useApp } from '../context/AppContext';
 
 interface MediaPlayerModalProps {
   visible: boolean;
@@ -32,6 +33,9 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
   caption,
   onClose,
 }) => {
+  const { activeTheme } = useApp();
+  const themeAccent = activeTheme?.primary || '#BC002A';
+  
   const fadeAnim = useMemo(() => new Animated.Value(0), []);
   const videoRef = useRef<Video>(null);
   const [isPlaying, setIsPlaying] = useState(mediaType === 'image' ? false : true);
@@ -197,7 +201,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                     <MaterialIcons
                       name={isPlaying ? 'pause-circle-filled' : 'play-circle-filled'}
                       size={64}
-                      color="#BC002A"
+                      color={themeAccent}
                     />
                   </Pressable>
                 </View>
@@ -210,7 +214,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
                   >
                     <View style={styles.progressBarBackground}>
                       <LinearGradient
-                        colors={['#BC002A', '#c40046']}
+                        colors={[themeAccent, themeAccent]}
                         start={{ x: 0, y: 0 }}
                         end={{ x: 1, y: 0 }}
                         style={[
@@ -243,14 +247,14 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
 
         {mediaType === 'audio' && (
           <GlassView intensity={100} tint="dark" style={styles.audioContainer} >
-            <MaterialIcons name="graphic-eq" size={120} color="#BC002A" />
+            <MaterialIcons name="graphic-eq" size={120} color={themeAccent} />
 
             {/* Play Button */}
             <Pressable onPress={togglePlayPause} style={styles.playButton}>
               <MaterialIcons
                 name={isPlaying ? 'pause-circle-filled' : 'play-circle-filled'}
                 size={80}
-                color="#BC002A"
+                color={themeAccent}
               />
             </Pressable>
 
@@ -262,7 +266,7 @@ export const MediaPlayerModal: React.FC<MediaPlayerModalProps> = ({
               >
                 <View style={styles.progressBarBackground}>
                   <LinearGradient
-                    colors={['#BC002A', '#c40046']}
+                    colors={[themeAccent, themeAccent]}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 0 }}
                     style={[

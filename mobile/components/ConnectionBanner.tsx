@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Text, StyleSheet, Platform } from 'react-native';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import { View, Text, StyleSheet, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 
 interface ConnectionBannerProps {
@@ -64,9 +63,7 @@ export default function ConnectionBanner({ connectivity, mode = 'inline' }: Conn
       : { bg: '#16a34a', icon: 'check-circle' as const, text: 'Connected' };
 
   return (
-    <Animated.View
-      entering={FadeIn.duration(200)}
-      exiting={FadeOut.duration(200)}
+    <View
       style={[
         styles.banner,
         { backgroundColor: config.bg },
@@ -75,7 +72,7 @@ export default function ConnectionBanner({ connectivity, mode = 'inline' }: Conn
     >
       <MaterialIcons name={config.icon} size={13} color="#fff" style={{ marginRight: 5 }} />
       <Text style={styles.text}>{config.text}</Text>
-    </Animated.View>
+    </View>
   );
 }
 

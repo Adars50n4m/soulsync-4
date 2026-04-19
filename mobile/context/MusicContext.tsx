@@ -45,7 +45,7 @@ let TrackPlayerHooks: any = {
 
 try {
     // Only attempt to load if the native module exists
-    const hasNativeModule = !!NativeModules.TrackPlayerModule;
+    const hasNativeModule = !!(NativeModules.TrackPlayerModule || NativeModules.RNTrackPlayer);
     console.log('[MusicContext] Native TrackPlayer detected:', hasNativeModule);
     
     if (hasNativeModule || Platform.OS === 'web') {
@@ -139,6 +139,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                     console.log('[MusicContext] Initializing TrackPlayer...');
                     await TrackPlayer.setupPlayer({
                         waitForBuffer: true,
+                        iosCategory: 'playback', // Explicitly set for background play
+                        iosCategoryMode: 'default',
+                        iosCategoryOptions: ['allowBluetooth', 'allowBluetoothA2DP', 'allowAirPlay'],
                     });
                 }
 
@@ -188,17 +191,28 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         TrackPlayerEvents.Event.RemotePause,
         TrackPlayerEvents.Event.RemoteNext,
         TrackPlayerEvents.Event.RemotePrevious,
+        TrackPlayerEvents.Event.PlaybackError,
     ], async (event: any) => {
         if (!TrackPlayer) return;
+        
+        if (event.type === TrackPlayerEvents.Event.PlaybackError) {
+            console.error('[MusicContext] ❌ Native Playback Error:', event.message || event.code || event);
+            Alert.alert(
+                'Playback Error',
+                'Could not load this track. Please check your internet connection or try another song.'
+            );
+            return;
+        }
+
         console.log('[MusicContext] Remote event received:', event.type);
         if (event.type === TrackPlayerEvents.Event.RemotePlay) {
             TrackPlayer.play();
         } else if (event.type === TrackPlayerEvents.Event.RemotePause) {
             TrackPlayer.pause();
         } else if (event.type === TrackPlayerEvents.Event.RemoteNext) {
-            TrackPlayer.skipToNext();
+            playNext();
         } else if (event.type === TrackPlayerEvents.Event.RemotePrevious) {
-            TrackPlayer.skipToPrevious();
+            playPrevious();
         }
     });
 
@@ -270,9 +284,20 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }, [currentUser]);
 
     const playSong = useCallback(async (song: Song, broadcast = true) => {
-        if (!isPlayerReady || !TrackPlayer) return;
+        if (!isPlayerReady || !TrackPlayer) {
+            console.warn('[MusicContext] Cannot play: Player not ready or module missing');
+            return;
+        }
         try {
-            console.log('[MusicContext] Playing song:', song.name);
+            console.log(`[MusicContext] 🎵 Playing song: "${song.name}"`);
+            console.log(`[MusicContext] 🔗 Trace URL: ${song.url}`);
+            
+            // Check if URL is valid
+            if (!song.url || (!song.url.startsWith('http') && !song.url.startsWith('file'))) {
+                console.error('[MusicContext] ❌ Invalid song URL:', song.url);
+                return;
+            }
+
             await TrackPlayer.reset();
             
             // Re-apply options just before play to wake up iOS media center
@@ -319,16 +344,30 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }, [isPlayerReady]);
 
     const togglePlayMusic = useCallback(async () => {
-        if (!isPlayerReady || !TrackPlayer) return;
+        if (!TrackPlayer) {
+            console.warn('[MusicContext] togglePlayMusic: TrackPlayer module is missing');
+            return;
+        }
+        if (!isPlayerReady) {
+            console.warn('[MusicContext] togglePlayMusic: Player is not ready yet');
+            // Try to set it to ready if we have the module
+            setIsPlayerReady(true);
+        }
+
         const state = await TrackPlayer.getState();
-        const wasPlaying = state === (TrackPlayerEvents.State?.Playing || 'playing');
+        const isPlayingState = (s: any) => 
+            s === (TrackPlayerEvents.State?.Playing || 'playing') || 
+            s === (TrackPlayerEvents.State?.Buffering || 'buffering');
+            
+        const wasPlaying = isPlayingState(state);
         if (wasPlaying) {
             await TrackPlayer.pause();
         } else {
             await TrackPlayer.play();
         }
         const nowPlaying = !wasPlaying;
-        setMusicState(prev => ({ ...prev, isPlaying: nowPlaying }));
+        // We rely on the usePlaybackState hook in effectively updating isPlaying 
+        // to avoid conflicts between manual state setting and actual player state.
         const pos = await TrackPlayer.getPosition();
         musicSyncService.broadcastUpdate({
             currentSong: musicStateRef.current.currentSong,

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     View, Text, StyleSheet, Pressable, StatusBar, ScrollView,
-    Image, Dimensions, Platform, Alert, ActivityIndicator,
+    Image, Platform, Alert, ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import GlassView from '../components/ui/GlassView';
@@ -54,6 +54,26 @@ interface MediaItem {
     mediaName?: string;
     timestamp: string;
 }
+
+const SQLITE_DIR = `${documentDirectory}SQLite/`;
+const PRIMARY_DB_PATH = `${SQLITE_DIR}soul_messages.db`;
+const LEGACY_DB_PATH = `${SQLITE_DIR}soul.db`;
+
+const getExistingDbPaths = async (): Promise<string[]> => {
+    const candidates = [PRIMARY_DB_PATH, LEGACY_DB_PATH];
+    const existing: string[] = [];
+
+    for (const dbPath of candidates) {
+        try {
+            const info = await getInfoAsync(dbPath);
+            if (info.exists) {
+                existing.push(dbPath);
+            }
+        } catch {}
+    }
+
+    return existing;
+};
 
 const formatBytes = (bytes: number, decimals = 1): string => {
     if (bytes === 0) return '0 B';
@@ -108,11 +128,13 @@ export default function StorageManagementScreen() {
             let appCacheSize = 0;
 
             // SQLite DB size
-            const dbPath = `${documentDirectory}SQLite/soulsync.db`;
             try {
-                const dbInfo = await getInfoAsync(dbPath);
-                if (dbInfo.exists && 'size' in dbInfo) {
-                    dbSize = dbInfo.size || 0;
+                const dbPaths = await getExistingDbPaths();
+                for (const dbPath of dbPaths) {
+                    const dbInfo = await getInfoAsync(dbPath);
+                    if (dbInfo.exists && 'size' in dbInfo) {
+                        dbSize += dbInfo.size || 0;
+                    }
                 }
             } catch {}
 
@@ -302,8 +324,10 @@ export default function StorageManagementScreen() {
                                     )
                                 );
                             }
-                            const dbPath = `${documentDirectory}SQLite/soulsync.db`;
-                            await deleteAsync(dbPath, { idempotent: true });
+                            const dbPaths = await getExistingDbPaths();
+                            await Promise.all(
+                                dbPaths.map((dbPath) => deleteAsync(dbPath, { idempotent: true }))
+                            );
                             Alert.alert('Done', 'All data cleared. Please restart the app.');
                         } catch {
                             Alert.alert('Error', 'Failed to clear data');

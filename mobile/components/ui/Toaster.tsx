@@ -1,14 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, Dimensions, TouchableOpacity, Platform } from 'react-native';
-import Animated, { 
-  FadeInUp, 
-  FadeOutUp, 
-  Layout, 
-  SlideInUp, 
-  SlideOutUp,
-  useAnimatedStyle,
-  withSpring
-} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { GlassView } from './GlassView';
@@ -30,12 +21,7 @@ const Toast = ({ item }: { item: ToastItem }) => {
   const config = STATE_CONFIG[item.type];
   
   return (
-    <Animated.View
-      entering={Platform.OS === 'ios' ? FadeInUp.springify() : SlideInUp.duration(400)}
-      exiting={Platform.OS === 'ios' ? FadeOutUp.duration(300) : SlideOutUp.duration(300)}
-      layout={Layout.springify()}
-      style={styles.toastWrapper}
-    >
+    <View style={styles.toastWrapper}>
       <GlassView intensity={95} tint="dark" style={styles.toastContainer}>
         <View style={styles.header}>
           <View style={[styles.badge, { backgroundColor: config.bgColor }]}>
@@ -63,7 +49,7 @@ const Toast = ({ item }: { item: ToastItem }) => {
             </TouchableOpacity>
         )}
       </GlassView>
-    </Animated.View>
+    </View>
   );
 };
 

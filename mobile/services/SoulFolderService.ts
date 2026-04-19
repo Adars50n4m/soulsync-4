@@ -102,21 +102,23 @@ export const soulFolderService = {
     if (_initPromise) return _initPromise;
 
     _initPromise = (async () => {
-      console.log('[SoulFolder] Initializing folder structure in Private space...');
-
-      // Create folders
-      for (const [key, path] of Object.entries(FOLDERS)) {
-        try {
-          const info = await getInfoAsync(path);
-          if (!info.exists) {
-            await makeDirectoryAsync(path, { intermediates: true });
-          }
-        } catch (e) {
-          console.warn(`[SoulFolder] Failed to create folder ${key}:`, e);
-        }
+      const start = Date.now();
+      try {
+        // Parallelize all folder checks/creations
+        await Promise.all(
+          Object.values(FOLDERS).map(async (folder) => {
+            const info = await getInfoAsync(folder);
+            if (!info.exists) {
+              await makeDirectoryAsync(folder, { intermediates: true });
+            }
+          })
+        );
+        
+        _initialized = true;
+        console.log(`[SoulFolderService] Storage initialized in ${Date.now() - start}ms`);
+      } catch (error) {
+        console.error('[SoulFolderService] Init failed:', error);
       }
-
-      _initialized = true;
     })();
 
     return _initPromise;

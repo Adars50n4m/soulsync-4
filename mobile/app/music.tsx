@@ -25,7 +25,7 @@ import { lyricsService, LyricLine } from '../services/LyricsService';
 
 
 
-// Constants from Mockup
+// Constants
 const MAGENTA = '#ff0080';
 const BG_DARK = '#050505';
 
@@ -110,6 +110,7 @@ const ListHeader = memo(({
     lyricsLoading,
     currentLyricIndex,
     onSeekLyric,
+    magentaColor,
 }: any) => {
     return (
         <View style={[styles.overlayHeader, isKeyboardVisible && { paddingBottom: 0 }]}>
@@ -119,7 +120,7 @@ const ListHeader = memo(({
                     {/* Compact song name + close */}
                     <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
                         <View style={{ flex: 1 }}>
-                            <Text style={{ color: '#ff0080', fontSize: 11, fontWeight: '700', letterSpacing: 1 }}>LYRICS</Text>
+                            <Text style={{ color: magentaColor, fontSize: 11, fontWeight: '700', letterSpacing: 1 }}>LYRICS</Text>
                             <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600', marginTop: 1 }} numberOfLines={1}>
                                 {currentSong.name} — {currentSong.artist}
                             </Text>
@@ -143,7 +144,7 @@ const ListHeader = memo(({
                     {/* Scrollable lyrics */}
                     {lyricsLoading ? (
                         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                            <ActivityIndicator color="#ff0080" size="small" />
+                            <ActivityIndicator color={magentaColor} size="small" />
                         </View>
                     ) : lyricsLines.length === 0 ? (
                         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -209,7 +210,7 @@ const ListHeader = memo(({
             {!isKeyboardVisible && (
                 <View style={styles.controlsRow}>
                     <Pressable onPress={onToggleShuffle} hitSlop={8}>
-                        <MaterialIcons name="shuffle" size={20} color={shuffle ? '#ff0080' : 'rgba(255,255,255,0.3)'} />
+                        <MaterialIcons name="shuffle" size={20} color={shuffle ? magentaColor : 'rgba(255,255,255,0.3)'} />
                     </Pressable>
                     <Pressable onPress={onPrevious} hitSlop={8}>
                         <MaterialIcons name="skip-previous" size={34} color="rgba(255,255,255,0.7)" />
@@ -227,18 +228,21 @@ const ListHeader = memo(({
                         <MaterialIcons
                             name={repeatMode === 'one' ? 'repeat-one' : 'repeat'}
                             size={20}
-                            color={repeatMode !== 'off' ? '#ff0080' : 'rgba(255,255,255,0.3)'}
+                            color={repeatMode !== 'off' ? magentaColor : 'rgba(255,255,255,0.3)'}
                         />
                     </Pressable>
                     {currentSong && (
                         <Pressable onPress={onToggleLyrics} hitSlop={8}>
-                            <MaterialIcons name="lyrics" size={20} color={showLyrics ? '#ff0080' : 'rgba(255,255,255,0.3)'} />
+                            <MaterialIcons name="lyrics" size={20} color={showLyrics ? magentaColor : 'rgba(255,255,255,0.3)'} />
                         </Pressable>
                     )}
                 </View>
             )}
 
-            <View style={[styles.searchSection, isKeyboardVisible && { marginBottom: 12 }]}>
+            <View style={[
+                styles.searchSection,
+                isKeyboardVisible && styles.searchSectionKeyboard
+            ]}>
                 <GlassView intensity={35} tint="dark" style={styles.searchBar}>
                     <MaterialIcons name="search" size={20} color="rgba(255,0,128,0.8)" />
                     <TextInput
@@ -273,7 +277,8 @@ const ListHeader = memo(({
 export default function MusicScreen() {
     const { width, height } = useWindowDimensions();
     const router = useRouter();
-    const { musicState, currentUser, playSong, togglePlayMusic, toggleFavoriteSong, startCall, getPlaybackPosition, seekTo, repeatMode, toggleRepeat, shuffle, toggleShuffle, queue, addToQueue, playNext, playPrevious, sleepTimerMinutes, setSleepTimer } = useApp() as any;
+    const { activeTheme, musicState, currentUser, playSong, togglePlayMusic, toggleFavoriteSong, startCall, getPlaybackPosition, seekTo, repeatMode, toggleRepeat, shuffle, toggleShuffle, queue, addToQueue, playNext, playPrevious, sleepTimerMinutes, setSleepTimer } = useApp() as any;
+    const themeAccent = activeTheme?.primary || MAGENTA;
 
     const [activeTab, setActiveTab] = useState<'music' | 'favorites' | 'lyrics' | 'queue'>('music');
     const [searchQuery, setSearchQuery] = useState('');
@@ -476,7 +481,10 @@ export default function MusicScreen() {
 
             const currentPage = newSearch ? 1 : page;
             const limit = 40;
-            const url = `${getSaavnApiUrl()}/search/songs?query=${encodeURIComponent(query)}&page=${currentPage}&limit=${limit}`;
+            const apiUrl = getSaavnApiUrl();
+            const cleanBaseUrl = apiUrl.replace(/\/$/, '');
+            const baseApiUrl = cleanBaseUrl.endsWith('/api') ? cleanBaseUrl : `${cleanBaseUrl}/api`;
+            const url = `${baseApiUrl}/search/songs?query=${encodeURIComponent(query)}&page=${currentPage}&limit=${limit}`;
 
             console.log(`[Music] Searching URL: ${url}`);
 
@@ -642,7 +650,7 @@ export default function MusicScreen() {
         return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-    const memoizedHeader = useMemo(() => (
+    const memoizedTopPanel = useMemo(() => (
         <ListHeader
             currentSong={musicState.currentSong}
             isPlaying={musicState.isPlaying}
@@ -668,8 +676,9 @@ export default function MusicScreen() {
             lyricsLoading={lyricsLoading}
             currentLyricIndex={currentLyricIndex}
             onSeekLyric={seekTo}
+            magentaColor={themeAccent}
         />
-    ), [musicState.currentSong, musicState.isPlaying, progress, playbackMs, searchQuery, activeTab, keyboardVisible, repeatMode, shuffle, showLyrics, lyrics, lyricsLoading, currentLyricIndex]);
+    ), [musicState.currentSong, musicState.isPlaying, progress, playbackMs, searchQuery, activeTab, keyboardVisible, repeatMode, shuffle, showLyrics, lyrics, lyricsLoading, currentLyricIndex, themeAccent]);
 
     const handleSongLongPress = useCallback((song: Song) => {
         addToQueue(song);
@@ -682,7 +691,7 @@ export default function MusicScreen() {
             isFavorite={isFavorite(item.id)}
             onPress={handleSongInteraction}
             onLongPress={handleSongLongPress}
-            magentaColor={MAGENTA}
+            magentaColor={themeAccent}
         />
     ), [musicState.currentSong?.id, musicState.favorites, handleSongInteraction, handleSongLongPress]);
 
@@ -708,6 +717,7 @@ export default function MusicScreen() {
                 >
                     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
                         <View style={styles.dragHandle} />
+                        {memoizedTopPanel}
 
                         {FlashList ? (
                             <FlashList
@@ -716,7 +726,6 @@ export default function MusicScreen() {
                                 // @ts-ignore - TS incorrectly complains about missing estimatedItemSize in FlashListProps
                                 estimatedItemSize={80}
                                 keyExtractor={(item) => item.id}
-                                ListHeaderComponent={memoizedHeader}
                                 contentContainerStyle={styles.listContent}
                                 showsVerticalScrollIndicator={false}
                                 keyboardShouldPersistTaps="handled"
@@ -726,7 +735,7 @@ export default function MusicScreen() {
                                 ListFooterComponent={
                                     <View style={{ paddingBottom: 120 }}>
                                         {isLoading && activeTab === 'music' && songs.length > 0 && (
-                                            <ActivityIndicator color={MAGENTA} style={{ marginVertical: 20 }} />
+                                            <ActivityIndicator color={themeAccent} style={{ marginVertical: 20 }} />
                                         )}
                                         {/* Recommended Songs Section */}
                                         {recommendedSongs.length > 0 && activeTab === 'music' && !searchQuery && (
@@ -759,7 +768,7 @@ export default function MusicScreen() {
                                     </View>
                                 }
                                 ListEmptyComponent={isLoading && activeTab === 'music' && songs.length === 0 ? (
-                                    <ActivityIndicator color={MAGENTA} style={{ marginTop: 20 }} />
+                                    <ActivityIndicator color={themeAccent} style={{ marginTop: 20 }} />
                                 ) : activeTab === 'queue' && queue.length === 0 ? (
                                     <View style={{ alignItems: 'center', marginTop: 40 }}>
                                         <MaterialIcons name="queue-music" size={40} color="rgba(255,255,255,0.1)" />
@@ -788,22 +797,22 @@ export default function MusicScreen() {
                                         onPress={() => setActiveTab('favorites')}
                                         style={[styles.tabBtn, activeTab === 'favorites' && styles.tabBtnActive]}
                                     >
-                                        <MaterialIcons name="favorite" size={18} color={activeTab === 'favorites' ? MAGENTA : 'rgba(255,255,255,0.4)'} />
-                                        <Text style={[styles.tabText, activeTab === 'favorites' && styles.tabTextActive]}>Favs</Text>
+                                        <MaterialIcons name="favorite" size={18} color={activeTab === 'favorites' ? themeAccent : 'rgba(255,255,255,0.4)'} />
+                                        <Text style={[styles.tabText, activeTab === 'favorites' && { color: themeAccent }]}>Favs</Text>
                                     </Pressable>
                                     <Pressable
                                         onPress={() => setActiveTab('queue')}
                                         style={[styles.tabBtn, activeTab === 'queue' && styles.tabBtnActive]}
                                     >
-                                        <MaterialIcons name="queue-music" size={18} color={activeTab === 'queue' ? MAGENTA : 'rgba(255,255,255,0.4)'} />
-                                        <Text style={[styles.tabText, activeTab === 'queue' && styles.tabTextActive]}>Queue</Text>
+                                        <MaterialIcons name="queue-music" size={18} color={activeTab === 'queue' ? themeAccent : 'rgba(255,255,255,0.4)'} />
+                                        <Text style={[styles.tabText, activeTab === 'queue' && { color: themeAccent }]}>Queue</Text>
                                     </Pressable>
                                     <Pressable
                                         onPress={() => setActiveTab('music')}
                                         style={[styles.tabBtn, activeTab === 'music' && styles.tabBtnActive]}
                                     >
-                                        <MaterialIcons name="library-music" size={18} color={activeTab === 'music' ? MAGENTA : 'rgba(255,255,255,0.4)'} />
-                                        <Text style={[styles.tabText, activeTab === 'music' && styles.tabTextActive]}>Music</Text>
+                                        <MaterialIcons name="library-music" size={18} color={activeTab === 'music' ? themeAccent : 'rgba(255,255,255,0.4)'} />
+                                        <Text style={[styles.tabText, activeTab === 'music' && { color: themeAccent }]}>Music</Text>
                                     </Pressable>
                                 </GlassView>
                             </View>
@@ -822,28 +831,29 @@ const styles = StyleSheet.create({
     musicOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '82%', zIndex: 60, borderTopLeftRadius: 40, borderTopRightRadius: 40, overflow: 'hidden' },
     overlayGlass: { flex: 1, backgroundColor: 'transparent', borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)' },
     dragHandle: { width: 48, height: 6, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 3, alignSelf: 'center', marginTop: 12, marginBottom: 24 },
-    listContent: { paddingHorizontal: 24 },
+    listContent: { paddingHorizontal: 24, paddingBottom: 120 },
     overlayHeader: { width: '100%', alignItems: 'center' },
     
-    playerInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 20, width: '100%', marginBottom: 32 },
-    artworkWrapper: { width: 112, height: 112, borderRadius: 20, position: 'relative', overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', shadowColor: MAGENTA, shadowOpacity: 0.3, shadowRadius: 20, shadowOffset: { width: 0, height: 10 } },
+    playerInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 20, width: '100%', marginBottom: 16 },
+    artworkWrapper: { width: 112, height: 112, borderRadius: 20, position: 'relative', overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', shadowColor: '#fff', shadowOpacity: 0.3, shadowRadius: 20, shadowOffset: { width: 0, height: 10 } },
     artwork: { width: '100%', height: '100%' },
-    artworkBadge: { position: 'absolute', bottom: -5, right: -5, width: 32, height: 32, borderRadius: 16, backgroundColor: MAGENTA, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#0f0f0f' },
+    artworkBadge: { position: 'absolute', bottom: -5, right: -5, width: 32, height: 32, borderRadius: 16, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#0f0f0f' },
     playerTextContainer: { flex: 1 },
     overlayTrackTitle: { color: '#fff', fontSize: 20, fontWeight: '700', letterSpacing: -0.5 },
-    overlayTrackArtist: { color: MAGENTA, fontSize: 14, fontWeight: '600', marginTop: 2 },
+    overlayTrackArtist: { color: '#fff', fontSize: 14, fontWeight: '600', marginTop: 2 },
     
     progressBarWrapper: { width: '100%', marginTop: 16 },
     progressBarBg: { width: '100%', height: 6, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow: 'hidden' },
-    progressBarFill: { height: '100%', backgroundColor: MAGENTA, borderRadius: 3, shadowColor: MAGENTA, shadowOpacity: 0.8, shadowRadius: 10 },
+    progressBarFill: { height: '100%', backgroundColor: '#fff', borderRadius: 3, shadowColor: '#fff', shadowOpacity: 0.8, shadowRadius: 10 },
     timeLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
     timeText: { color: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: '600' },
 
-    controlsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 24, marginBottom: 24, width: '100%', paddingHorizontal: 8 },
+    controlsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 24, marginBottom: 12, width: '100%', paddingHorizontal: 8 },
     playButton: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#fff', shadowOpacity: 0.2, shadowRadius: 15 },
 
-    searchSection: { width: '100%', marginBottom: 24 },
-    searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'transparent', borderRadius: 25, paddingHorizontal: 16, height: 50, borderWidth: 1.2, borderColor: 'rgba(255,255,255,0.22)', shadowColor: MAGENTA, shadowOpacity: 0.1, shadowRadius: 10, overflow: 'hidden' },
+    searchSection: { width: '100%', marginBottom: 12 },
+    searchSectionKeyboard: { marginBottom: 12 },
+    searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'transparent', borderRadius: 25, paddingHorizontal: 16, height: 50, borderWidth: 1.2, borderColor: 'rgba(255,255,255,0.22)', shadowColor: '#fff', shadowOpacity: 0.1, shadowRadius: 10, overflow: 'hidden' },
     searchInput: { flex: 1, color: '#fff', marginLeft: 12, fontSize: 14, fontWeight: '500' },
 
     listHeader: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginBottom: 16, paddingHorizontal: 8 },

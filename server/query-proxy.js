@@ -2,7 +2,7 @@ require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
 
 // Connect to Supabase THROUGH THE PROXY
-const proxyUrl = 'https://soulsync-supabase-proxy.adarshark.workers.dev';
+const proxyUrl = 'https://soul-supabase-proxy.adarshark.workers.dev';
 const supabaseKey = process.env.SUPABASE_ANON_KEY || 'sb_publishable_9cVY_6oQHMZnV9CaxmMs9Q_7QlUxqlD'; // Must use anon key since it's proxy
 
 console.log('Querying via Proxy URL:', proxyUrl);

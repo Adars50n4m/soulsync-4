@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ⬆️  Bump this number every time you change the schema.
-const DB_TARGET_VERSION = 29;
+const DB_TARGET_VERSION = 34;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper — read the stored schema version (returns 0 if brand-new install)
@@ -947,6 +947,91 @@ async function migration_v29(db: any): Promise<void> {
     console.log('[SQLite] Migration v29: Persistent job queue');
 }
 
+// MIGRATION v30 — Add avatar metadata to cached_users
+async function migration_v30(db: any): Promise<void> {
+    const safeAlter = async (sql: string) => {
+        try { await db.execAsync(sql); } catch (e: any) {
+            if (e?.message?.includes('duplicate column')) return;
+        }
+    };
+    await safeAlter(`ALTER TABLE cached_users ADD COLUMN avatar_type TEXT DEFAULT 'default';`);
+    await safeAlter(`ALTER TABLE cached_users ADD COLUMN teddy_variant TEXT;`);
+    console.log('[SQLite] Migration v30: Added avatar metadata to cached_users');
+}
+
+// MIGRATION v31 — Add avatar metadata to contacts
+async function migration_v31(db: any): Promise<void> {
+    const safeAlter = async (sql: string) => {
+        try { await db.execAsync(sql); } catch (e: any) {
+            if (e?.message?.includes('duplicate column')) return;
+        }
+    };
+    await safeAlter(`ALTER TABLE contacts ADD COLUMN avatar_type TEXT DEFAULT 'default';`);
+    await safeAlter(`ALTER TABLE contacts ADD COLUMN teddy_variant TEXT;`);
+    console.log('[SQLite] Migration v31: Added avatar metadata to contacts');
+}
+
+// MIGRATION v32 — Add is_group to contacts
+async function migration_v32(db: any): Promise<void> {
+    const safeAlter = async (sql: string) => {
+        try { await db.execAsync(sql); } catch (e: any) {
+            if (e?.message?.includes('duplicate column')) return;
+        }
+    };
+    await safeAlter(`ALTER TABLE contacts ADD COLUMN is_group INTEGER DEFAULT 0;`);
+    console.log('[SQLite] Migration v32: Added is_group column to contacts');
+}
+
+async function migration_v33(db: any): Promise<void> {
+    const safeAlter = async (sql: string) => {
+        try { await db.execAsync(sql); } catch (e: any) {
+            if (e.message.includes('duplicate column')) return;
+            throw e;
+        }
+    };
+
+    // 1. Create groups table
+    await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS groups (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            avatar_url TEXT,
+            created_by TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        );
+    `);
+
+    // 2. Create group_members table
+    await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS group_members (
+            id TEXT PRIMARY KEY,
+            group_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            role TEXT DEFAULT 'member',
+            joined_at TEXT,
+            UNIQUE(group_id, user_id)
+        );
+    `);
+
+    // 3. Add group_id to messages
+    await safeAlter(`ALTER TABLE messages ADD COLUMN group_id TEXT;`);
+    
+    console.log('[SQLite] Migration v33: Added groups, group_members and group_id to messages');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION v34 — Add `sender_name` to `messages` for group chat display
+// ─────────────────────────────────────────────────────────────────────────────
+async function migration_v34(db: any): Promise<void> {
+    const safeAlter = async (sql: string) => {
+        try { await db.execAsync(sql); } catch (_) { /* already exists */ }
+    };
+    await safeAlter(`ALTER TABLE messages ADD COLUMN sender_name TEXT;`);
+    console.log('[SQLite] Migration v34: Added sender_name to messages');
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN EXPORT — call this once in your app's DB initialisation
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1001,6 +1086,11 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
         case 27: /* placeholder */ break;
         case 28: await migration_v28(db); break;
         case 29: await migration_v29(db); break;
+        case 30: await migration_v30(db); break;
+        case 31: await migration_v31(db); break;
+        case 32: await migration_v32(db); break;
+        case 33: await migration_v33(db); break;
+        case 34: await migration_v34(db); break;
         default:
           console.error(`[SQLite] No migration logic for v${nextVersion}!`);
       }

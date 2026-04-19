@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Lightweight reliability load test for SoulSync server APIs.
+ * Lightweight reliability load test for Soul server APIs.
  *
  * Defaults:
  * - base URL: http://127.0.0.1:3100

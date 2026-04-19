@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = 'https://soulsync-supabase-proxy.adarshark.workers.dev';
+const supabaseUrl = 'https://soul-supabase-proxy.adarshark.workers.dev';
 const supabaseKey = 'sb_publishable_9cVY_6oQHMZnV9CaxmMs9Q_7QlUxqlD';
 
 const supabase = createClient(supabaseUrl, supabaseKey);

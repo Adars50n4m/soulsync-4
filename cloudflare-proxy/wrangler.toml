@@ -1,4 +1,4 @@
-name = "soulsync-supabase-proxy"
+name = "soul-supabase-proxy"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 

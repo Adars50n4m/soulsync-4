@@ -4,7 +4,7 @@
  * Sends push notifications to wake the callee's device for an incoming call.
  * 
  * iOS:  Sends a VoIP push via Apple Push Notification service (APNs)
- *       - Uses PushKit topic (com.soulsync4.mobile.voip)
+ *       - Uses PushKit topic (com.soul4.mobile.voip)
  *       - VoIP pushes have highest priority and wake the app even when killed
  *       - Apple REQUIRES that a CallKit UI is shown upon receiving a VoIP push
  * 
@@ -18,7 +18,7 @@
  *   - APNS_KEY_ID: Apple Push Notification Key ID
  *   - APNS_TEAM_ID: Apple Developer Team ID
  *   - APNS_AUTH_KEY: Apple Push Notification Auth Key (.p8 contents, base64 encoded)
- *   - APNS_BUNDLE_ID: iOS app bundle identifier (com.soulsync4.mobile)
+ *   - APNS_BUNDLE_ID: iOS app bundle identifier (com.soul4.mobile)
  *   - APNS_PRODUCTION: "true" for production, "false" for sandbox
  *   - FCM_SERVER_KEY: Firebase Cloud Messaging server key (legacy) OR
  *   - GOOGLE_SERVICE_ACCOUNT_JSON: Google service account JSON for FCM v1 API
@@ -159,7 +159,7 @@ async function sendAPNsVoIPPush(
   const keyId = Deno.env.get('APNS_KEY_ID');
   const teamId = Deno.env.get('APNS_TEAM_ID');
   const authKeyBase64 = Deno.env.get('APNS_AUTH_KEY');
-  const bundleId = Deno.env.get('APNS_BUNDLE_ID') || 'com.soulsync4.mobile';
+  const bundleId = Deno.env.get('APNS_BUNDLE_ID') || 'com.soul4.mobile';
   const isProduction = Deno.env.get('APNS_PRODUCTION') === 'true';
 
   if (!keyId || !teamId || !authKeyBase64) {

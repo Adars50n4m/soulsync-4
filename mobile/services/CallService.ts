@@ -31,6 +31,8 @@ export interface CallSignal {
     payload?: any;
     timestamp: string;
     roomId?: string;
+    groupId?: string;
+    participants?: string[];
     signalId?: string; // Unique ID for cross-path deduplication (Broadcast + DB)
     callerName?: string;
     callerAvatar?: string;
@@ -77,7 +79,8 @@ class CallService {
     private statusListeners: Set<(connected: boolean) => void> = new Set();
     private currentRoomId: string | null = null;
     private currentPartnerId: string | null = null;
-    private currentCallType: 'audio' | 'video' = 'audio';
+    private currentGroupId: string | null = null;
+    private currentParticipants: Set<string> = new Set();
     private roomSubscribed: boolean = false;
     private isJoiningRoom: boolean = false;
     private roomSubscribeCallbacks: (() => void)[] = [];
@@ -720,7 +723,7 @@ class CallService {
 
     // ── PUBLIC: startCall() ────────────────────────────────────────────
 
-    async startCall(partnerId: string, callType: 'audio' | 'video'): Promise<string | null> {
+    async startCall(partnerId: string, callType: 'audio' | 'video', groupId?: string): Promise<string | null> {
         if (!this.userId) return null;
 
         // Check for basic network connectivity first
@@ -739,19 +742,22 @@ class CallService {
 
         const roomId = Crypto.randomUUID();
         this.currentRoomId = roomId;
-        this.currentPartnerId = partnerId;
+        this.currentPartnerId = groupId ? null : partnerId;
+        this.currentGroupId = groupId || null;
         this.currentCallType = callType;
+        this.currentParticipants = new Set([this.userId]);
 
         // Persist call state for crash recovery
         this.persistCallState();
 
-        console.log(`[CallService] Initiating Supabase call to ${partnerId} in room ${roomId}`);
+        console.log(`[CallService] Initiating Supabase call to ${groupId ? 'Group ' + groupId : partnerId} in room ${roomId}`);
 
         const signal: CallSignal = {
             type: 'call-request',
             callId: roomId,
             callerId: this.userId!,
-            calleeId: partnerId,
+            calleeId: groupId ? '' : partnerId,
+            groupId: groupId,
             callType,
             roomId,
             callerName: this.currentUser?.name || '',
@@ -770,35 +776,48 @@ class CallService {
             this.cleanup('timeout');
         });
 
-        // Do not block the UI on signaling delivery or diagnostic reads.
-        // Returning the roomId quickly lets the caller mount the call screen
-        // before a fast `call-accept` races back from the callee.
+        // For groups, we might want to broadcast to the room immediately
+        // but for now we rely on individual call-requests for push notifications
         void (async () => {
             try {
-                await this.sendSignal(signal);
+                if (groupId) {
+                    // Fetch group members to send individual requests (for push)
+                    const { data: members } = await supabase
+                        .from('group_members')
+                        .select('user_id')
+                        .eq('group_id', groupId);
+                    
+                    if (members) {
+                        for (const m of members) {
+                            if (m.user_id !== this.userId) {
+                                this.sendSignal({ ...signal, calleeId: m.user_id }).catch(console.error);
+                            }
+                        }
+                    }
+                } else {
+                    await this.sendSignal(signal);
+                }
 
                 // DIAGNOSTIC: Verify signal was persisted — read it back
-                try {
-                    const { data: verifyData, error: verifyErr } = await supabase
-                        .from('call_signals')
-                        .select('id, type, receiver_id')
-                        .eq('receiver_id', partnerId)
-                        .order('created_at', { ascending: false })
-                        .limit(1);
+                if (!groupId) {
+                    try {
+                        const { data: verifyData, error: verifyErr } = await supabase
+                            .from('call_signals')
+                            .select('id, type, receiver_id')
+                            .eq('receiver_id', partnerId)
+                            .order('created_at', { ascending: false })
+                            .limit(1);
 
-                    if (verifyErr) {
-                        console.error(`[CallService] 🔴 DIAG: DB read-back FAILED: ${verifyErr.message}`);
-                        const { Alert } = require('react-native');
-                        Alert.alert('Call Signal Debug', `DB read FAILED: ${verifyErr.message}\n\nSignal may not reach the other device.`);
-                    } else if (!verifyData || verifyData.length === 0) {
-                        console.error('[CallService] 🔴 DIAG: Signal NOT found in DB after persist!');
-                        const { Alert } = require('react-native');
-                        Alert.alert('Call Signal Debug', 'Signal was NOT saved to DB!\n\nBroadcast is the only path. Check Realtime connection.');
-                    } else {
-                        console.log(`[CallService] 🟢 DIAG: Signal verified in DB: ${JSON.stringify(verifyData[0])}`);
+                        if (verifyErr) {
+                            console.error(`[CallService] 🔴 DIAG: DB read-back FAILED: ${verifyErr.message}`);
+                        } else if (!verifyData || verifyData.length === 0) {
+                            console.error('[CallService] 🔴 DIAG: Signal NOT found in DB after persist!');
+                        } else {
+                            console.log(`[CallService] 🟢 DIAG: Signal verified in DB: ${JSON.stringify(verifyData[0])}`);
+                        }
+                    } catch (diagErr: any) {
+                        console.error('[CallService] 🔴 DIAG exception:', diagErr?.message);
                     }
-                } catch (diagErr: any) {
-                    console.error('[CallService] 🔴 DIAG exception:', diagErr?.message);
                 }
             } catch (sendErr: any) {
                 console.error('[CallService] ❌ call-request send failed:', sendErr?.message || sendErr);
@@ -815,8 +834,11 @@ class CallService {
 
         console.log(`[CallService] Accepting call from ${signal.callerId} (Supabase)`);
         this.currentRoomId = signal.roomId;
-        this.currentPartnerId = signal.callerId;
+        this.currentPartnerId = signal.groupId ? null : signal.callerId;
+        this.currentGroupId = signal.groupId || null;
         this.currentCallType = signal.callType;
+        if (this.userId) this.currentParticipants.add(this.userId);
+        this.currentParticipants.add(signal.callerId);
 
         // Clear timeout since call was accepted
         this.clearCallTimeout();
@@ -1140,6 +1162,7 @@ class CallService {
     }
 
     private getRecipientId(signal: CallSignal): string {
+        if (signal.calleeId && signal.calleeId.length > 0) return signal.calleeId;
         if (signal.type === 'call-request') return signal.calleeId;
         const myId = normalizeId(this.userId || '');
         const callerId = normalizeId(signal.callerId);
@@ -1149,13 +1172,13 @@ class CallService {
 
     // ── WebRTC signal helpers ────────────────────────────────────────────
 
-    async sendOffer(offer: any): Promise<void> {
+    async sendOffer(offer: any, recipientId?: string): Promise<void> {
         if (this.currentRoomId) {
             await this.sendSignal({
                 type: 'offer',
                 callId: this.currentRoomId,
                 callerId: this.userId || '',
-                calleeId: this.currentPartnerId || '',
+                calleeId: recipientId || this.currentPartnerId || '',
                 callType: this.currentCallType,
                 payload: offer,
                 timestamp: new Date().toISOString(),
@@ -1164,13 +1187,13 @@ class CallService {
         }
     }
 
-    async sendAnswer(answer: any): Promise<void> {
+    async sendAnswer(answer: any, recipientId?: string): Promise<void> {
         if (this.currentRoomId) {
             await this.sendSignal({
                 type: 'answer',
                 callId: this.currentRoomId,
                 callerId: this.userId || '',
-                calleeId: this.currentPartnerId || '',
+                calleeId: recipientId || this.currentPartnerId || '',
                 callType: this.currentCallType,
                 payload: answer,
                 timestamp: new Date().toISOString(),
@@ -1179,13 +1202,13 @@ class CallService {
         }
     }
 
-    async sendIceCandidate(candidate: any): Promise<void> {
+    async sendIceCandidate(candidate: any, recipientId?: string): Promise<void> {
         if (this.currentRoomId) {
             await this.sendSignal({
                 type: 'ice-candidate',
                 callId: this.currentRoomId,
                 callerId: this.userId || '',
-                calleeId: this.currentPartnerId || '',
+                calleeId: recipientId || this.currentPartnerId || '',
                 callType: this.currentCallType,
                 payload: candidate ? (candidate.toJSON ? candidate.toJSON() : candidate) : null,
                 timestamp: new Date().toISOString(),
@@ -1427,7 +1450,7 @@ class CallService {
                 callType: this.currentCallType,
                 persistedAt: new Date().toISOString(),
             };
-            await AsyncStorage.setItem('soulsync_active_call', JSON.stringify(state));
+            await AsyncStorage.setItem('soul_active_call', JSON.stringify(state));
         } catch (error) {
             console.warn('[CallService] Failed to persist call state:', error);
         }
@@ -1436,7 +1459,7 @@ class CallService {
     private async clearPersistedCallState(): Promise<void> {
         try {
             const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-            await AsyncStorage.removeItem('soulsync_active_call');
+            await AsyncStorage.removeItem('soul_active_call');
         } catch (error) {
             console.warn('[CallService] Failed to clear persisted call state:', error);
         }
@@ -1445,7 +1468,7 @@ class CallService {
     async checkAndRecoverCall(): Promise<{ roomId: string; partnerId: string; callType: 'audio' | 'video' } | null> {
         try {
             const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-            const stateStr = await AsyncStorage.getItem('soulsync_active_call');
+            const stateStr = await AsyncStorage.getItem('soul_active_call');
             if (!stateStr) return null;
 
             const state = JSON.parse(stateStr);

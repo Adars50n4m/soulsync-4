@@ -35,7 +35,7 @@
 //   ✅ Google (add OAuth client ID + secret)
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { supabase } from '../config/supabase';
+import { supabase, SHRI_ID, HARI_ID } from '../config/supabase';
 
 import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
@@ -103,104 +103,18 @@ class AuthService {
       const isHari = input === 'hari' && password.toLowerCase() === 'shri';
 
       if (isShri || isHari) {
-        const bypassEmail = isShri
-          ? 'shri.internal@soulsync.dev'
-          : 'hari.internal@soulsync.dev';
-        const bypassPassword = 'soulsync_internal_bypass_2026';
-        const bypassUsername = isShri ? 'shri' : 'hari';
-        const legacyBypassId = isShri
-          ? 'f00f00f0-0000-0000-0000-000000000002'
-          : 'f00f00f0-0000-0000-0000-000000000001';
-        const bypassCooldownKey = `ss_bypass_real_auth_cooldown_${bypassUsername}`;
-
-        const isRateLimitError = (message?: string) => {
-          const msg = (message || '').toLowerCase();
-          return msg.includes('rate limit')
-            || msg.includes('over_email_send_rate_limit')
-            || msg.includes('email rate limit');
-        };
-
-        const getMockBypassResult = (): AuthResult => ({
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => supabase.auth.signOut().catch(() => {}));
+        return {
           success: true,
           isNewUser: false,
           user: {
-            id: legacyBypassId,
-            username: bypassUsername,
-            displayName: isShri ? 'Shri Account' : 'Hari Account',
-            email: bypassEmail,
+            id: isShri ? SHRI_ID : HARI_ID,
+            username: isShri ? 'shri' : 'hari',
+            displayName: isShri ? 'Shri' : 'Hari',
+            email: isShri ? 'shri@internal' : 'hari@internal',
             createdAt: new Date().toISOString(),
           } as any,
-        });
-
-        console.log(`[Auth] Establishing real Supabase session for bypass: ${bypassEmail}`);
-        
-        try {
-          const cooldownUntil = Number(await AsyncStorage.getItem(bypassCooldownKey) || '0');
-          if (cooldownUntil > Date.now()) {
-            console.log('[Auth] Bypass real-auth cooldown active. Using local bypass session.');
-            return getMockBypassResult();
-          }
-
-          const signInBypass = () => supabase.auth.signInWithPassword({
-            email: bypassEmail,
-            password: bypassPassword
-          });
-
-          let { data: bypassData, error: bypassError } = await signInBypass();
-
-          if (bypassError) {
-              // If account doesn't exist, create it silently
-              if (bypassError.message.includes('Invalid login credentials')) {
-                  console.log(`[Auth] Bypass account ${bypassEmail} missing. Creating...`);
-                  const { error: signUpError } = await supabase.auth.signUp({
-                      email: bypassEmail,
-                      password: bypassPassword,
-                      options: { data: { username: bypassUsername } }
-                  });
-
-                  if (signUpError && !signUpError.message.toLowerCase().includes('already registered')) {
-                    if (isRateLimitError(signUpError.message)) {
-                      await AsyncStorage.setItem(bypassCooldownKey, String(Date.now() + 60_000));
-                      return getMockBypassResult();
-                    }
-                    throw signUpError;
-                  }
-
-                  // One re-attempt only
-                  const retry = await signInBypass();
-                  bypassData = retry.data;
-                  bypassError = retry.error;
-
-                  if (bypassError) {
-                    if (isRateLimitError(bypassError.message)) {
-                      await AsyncStorage.setItem(bypassCooldownKey, String(Date.now() + 60_000));
-                      return getMockBypassResult();
-                    }
-                    throw bypassError;
-                  }
-              } else {
-                throw bypassError;
-              }
-          }
-
-          if (bypassData.user) {
-              await AsyncStorage.removeItem(bypassCooldownKey);
-              const profile = await this.getProfile(bypassData.user.id);
-              return { success: true, isNewUser: false, user: profile ?? undefined };
-          }
-
-          throw new Error('Bypass sign-in did not return a user.');
-        } catch (e: any) {
-            const isNetworkError = e?.message?.includes('Network request failed') || e?.message?.includes('fetch');
-            if (isRateLimitError(e?.message) || isNetworkError) {
-              // On network failures or rate limits, cool down the "real session" attempts for 1 minute
-              await AsyncStorage.setItem(bypassCooldownKey, String(Date.now() + 60_000));
-              console.warn(`[Auth] Real session establishment for bypass ${isNetworkError ? 'blocked by network' : 'rate limited'}. Using local mock.`);
-            } else {
-              console.warn('[Auth] Real session establishment for bypass failed, using local bypass session:', e.message);
-            }
-            return getMockBypassResult();
-        }
+        };
       }
 
       // Resolve username → email if needed
@@ -502,9 +416,11 @@ class AuthService {
   // ── STEP 1C: Google Sign-In ───────────────────────────────────────────────
   //
   // Uses expo-auth-session and Supabase OAuth.
+  // Supports both standard Implicit Flow and modern PKCE (code exchange)
   // ─────────────────────────────────────────────────────────────────────────────
   async signInWithGoogle(): Promise<AuthResult> {
     try {
+      // Changed to a more generic callback path to avoid expo-router collisions
       const redirectUri = makeRedirectUri({
         scheme: 'mobile',
         path: 'auth/callback',
@@ -539,32 +455,48 @@ class AuthService {
       }
 
       if (result.type !== 'success') {
-        return { success: false, error: 'Google sign-in was cancelled.' };
+        const errTypeStr = result.type;
+        return { success: false, error: `Google sign-in was cancelled: ${errTypeStr}` };
       }
 
-      // Supabase returns tokens in the URL fragment (#)
-      const fragment = result.url.split('#')[1];
-      if (!fragment) {
-        // Check if tokens are in query params instead? (Sometimes happens with proxy)
-        const queryParams = new URL(result.url).searchParams;
-        const access = queryParams.get('access_token');
-        const refresh = queryParams.get('refresh_token');
-        
-        if (access && refresh) {
-          return await this.establishSession(access, refresh);
-        }
-        return { success: false, error: 'No auth tokens found in redirect URL.' };
+      // ── EXTRACT TOKENS OR CODE ──
+      // The returning URL might look like:
+      // mobile://auth/callback#access_token=...&refresh_token=... (Implicit)
+      // OR mobile://auth/callback?code=... (PKCE)
+      const urlString = result.url;
+      
+      const extractToken = (name: string) => {
+        // Look in both query params (?) and fragments (#)
+        const regex = new RegExp(`[#?&]${name}=([^&]*)`);
+        const match = urlString.match(regex);
+        return match ? decodeURIComponent(match[1]) : null;
+      };
+
+      const code = extractToken('code');
+      const access = extractToken('access_token');
+      const refresh = extractToken('refresh_token');
+      const oauthError = extractToken('error');
+      const oauthErrorDesc = extractToken('error_description');
+
+      if (oauthError) {
+        console.error(`[Auth] Google OAuth returned an error: ${oauthError} - ${oauthErrorDesc}`);
+        return { success: false, error: `Google Auth Error: ${oauthErrorDesc || oauthError}` };
       }
 
-      const params = new URLSearchParams(fragment);
-      const access = params.get('access_token');
-      const refresh = params.get('refresh_token');
-
-      if (!access || !refresh) {
-        return { success: false, error: 'Could not retrieve tokens from Google redirect.' };
+      // Priority 1: PKCE Code flow (Modern Supabase default)
+      if (code) {
+        console.log('[Auth] Google OAuth returned a PKCE code. Exchanging for session...');
+        return await this.exchangeCodeForSession(code);
       }
 
-      return await this.establishSession(access, refresh);
+      // Priority 2: Implicit Flow
+      if (access && refresh) {
+        console.log('[Auth] Google OAuth returned an access token. Establishing session directly...');
+        return await this.establishSession(access, refresh);
+      }
+
+      console.error('[Auth] Failed to extract tokens or code from redirect URL. The URL was:', urlString);
+      return { success: false, error: `Auth missing from URL: ${urlString.substring(0, 50)}...` };
 
     } catch (err: any) {
       console.error('[Auth] signInWithGoogle error:', err);
@@ -575,7 +507,24 @@ class AuthService {
     }
   }
 
-  // Helper to establish session and determine if it's a new user
+  // Helper to exchange PKCE code for a proper auth session
+  private async exchangeCodeForSession(code: string): Promise<AuthResult> {
+    const { data: sessionData, error: sessionError } = await supabase.auth.exchangeCodeForSession(code);
+    
+    if (sessionError) {
+      console.error('[Auth] Code exchange error:', sessionError);
+      return { success: false, error: `Code Exchange Error: ${sessionError.message}` } as any; // Temporary cast due to strict types, throwing might crash it silently later
+    }
+    
+    if (!sessionData.user) {
+      return { success: false, error: 'Failed to exchange code for a user session.' };
+    }
+    
+    console.log(`[Auth] Session established via code exchange for user: ${sessionData.user.id}`);
+    return await this.finalizeSocialLogin(sessionData.user);
+  }
+
+  // Helper to establish session via direct access/refresh tokens
   private async establishSession(access: string, refresh: string): Promise<AuthResult> {
     console.log('[Auth] Establishing session with tokens...');
     const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
@@ -593,13 +542,29 @@ class AuthService {
     }
 
     console.log(`[Auth] Session established for user: ${sessionData.user.id}`);
+    return await this.finalizeSocialLogin(sessionData.user);
+  }
 
-    const profile = await this.getProfile(sessionData.user.id);
-    const isNewUser = !profile || !profile.username;
-
-    // Auto-create basic profile for Google users if it doesn't exist
+  // Unified post-login processing for all social connections
+  private async finalizeSocialLogin(user: any): Promise<AuthResult> {
+    let profile = await this.getProfile(user.id);
+    
+    // Safety Retry: Database trigger might be slow on first signup
     if (!profile) {
-      await this.ensureBasicProfile(sessionData.user);
+      console.log('[Auth] Profile not found immediately after social signup, waiting for trigger...');
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      profile = await this.getProfile(user.id);
+    }
+    
+    // NEW USER LOGIC: 
+    // They are new if they have no profile, no username, OR if they have the system-generated temp username
+    const isNewUser = !profile || !profile.username || profile.username.startsWith('temp_') || profile.username.startsWith('user_');
+
+    // Auto-create basic profile row if one doesn't exist at all yet (safety fallback for the database trigger)
+    if (!profile) {
+      console.log('[Auth] Database trigger fallback: Manual profile creation');
+      await this.ensureBasicProfile(user);
+      profile = await this.getProfile(user.id);
     }
 
     return { success: true, isNewUser, user: profile ?? undefined };
@@ -608,16 +573,37 @@ class AuthService {
   // Ensure a profile row exists even for social logins
   private async ensureBasicProfile(user: any) {
     try {
+      const email = user.email || '';
+      const isInternalEmail = email.includes('.internal@soul.dev');
+      
+      let defaultName = user.user_metadata?.full_name || email.split('@')[0] || 'User';
+      let defaultUsername = `user_${user.id.substring(0, 8)}`;
+      
+      // If it's an internal bypass account, set a nice name and username
+      if (isInternalEmail) {
+        if (email.startsWith('shri')) {
+          defaultName = 'Shri';
+          defaultUsername = 'shri';
+        } else if (email.startsWith('hari')) {
+          defaultName = 'Hari';
+          defaultUsername = 'hari';
+        }
+      }
+
       const { error } = await supabase.from('profiles').upsert({
         id: user.id,
-        display_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User',
+        username: defaultUsername,
+        display_name: defaultName,
         avatar_url: user.user_metadata?.avatar_url || null,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'id' });
       
-      if (error) console.warn('[Auth] Error creating basic profile:', error.message);
+      if (error) {
+        console.warn('[Auth] Error creating basic profile:', error.message);
+        throw error;
+      }
     } catch (e) {
-      console.error('[Auth] ensureBasicProfile failed:', e);
+      console.error('[Auth] ensureBasicProfile failed after retries:', e);
     }
   }
 
@@ -749,7 +735,7 @@ class AuthService {
       }
 
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: makeRedirectUri({ scheme: 'soulsync', path: 'forgot-password' }),
+        redirectTo: makeRedirectUri({ scheme: 'soul', path: 'forgot-password' }),
       });
 
       if (error) throw error;
@@ -840,23 +826,51 @@ class AuthService {
 
   async getProfile(userId: string): Promise<UserProfile | null> {
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const sessionUser = sessionData.session?.user;
+      const sessionUserMeta = sessionUser?.user_metadata || {};
+
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', userId)
         .maybeSingle();
 
+      // For Super Users (Shri/Hari), if no DB record exists, return hardcoded bypass profile
+      if ((!data || error) && (userId === SHRI_ID || userId === HARI_ID)) {
+        const isShri = userId === SHRI_ID;
+        return {
+          id: userId,
+          username: isShri ? 'shri' : 'hari',
+          displayName: isShri ? 'Shri' : 'Hari',
+          avatarUrl: null,
+          bio: isShri ? 'SoulSync Founder | Jai Shree Ram' : 'SoulSync Dev | Om Namah Shivay',
+          email: isShri ? 'shri@internal' : 'hari@internal',
+          createdAt: new Date(0).toISOString(),
+          birthdate: null,
+          lastUsernameChange: null,
+          avatarType: 'teddy',
+          teddyVariant: isShri ? 'boy' : 'boy', // Defaulting Shri back to boy as well
+        };
+      }
+
       if (error || !data) return null;
 
-      const { data: { user } } = await supabase.auth.getUser();
+      const fallbackDisplayName =
+        data.display_name ||
+        sessionUserMeta?.full_name ||
+        sessionUserMeta?.name ||
+        sessionUser?.email?.split('@')[0] ||
+        data.username ||
+        '';
 
       return {
         id:          data.id,
         username:    data.username || '',
-        displayName: data.display_name || '',
+        displayName: fallbackDisplayName,
         avatarUrl:   data.avatar_url,
         bio:         data.bio,
-        email:       user?.email ?? '',
+        email:       sessionUser?.email ?? '',
         createdAt:   data.created_at,
         birthdate:   data.birthdate,
         lastUsernameChange: data.last_username_change,

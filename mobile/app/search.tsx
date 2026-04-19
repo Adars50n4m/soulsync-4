@@ -3,7 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator,
 import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { SERVER_URL, proxySupabaseUrl } from '../config/api';
-import { supabase } from '../config/supabase';
+import { supabase, LEGACY_TO_UUID } from '../config/supabase';
 import { useApp } from '../context/AppContext';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import GlassView from '../components/ui/GlassView';
@@ -12,7 +12,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
 export default function SearchScreen() {
-    const { currentUser, activeTheme } = useApp();
+    const { currentUser, activeTheme, unfriendContact } = useApp();
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
@@ -62,11 +62,24 @@ export default function SearchScreen() {
 
             if (sbError) throw sbError;
 
+            // Manually inject superusers if they match the query
+            const searchLower = text.toLowerCase();
+            const superusers = [
+                { id: LEGACY_TO_UUID['shri'], username: 'shri', display_name: 'Shri', avatar_url: 'https://avatar.iran.liara.run/public/boy?username=shri' },
+                { id: LEGACY_TO_UUID['hari'], username: 'hari', display_name: 'Hari', avatar_url: 'https://avatar.iran.liara.run/public/boy?username=hari' }
+            ].filter(u => 
+                u.id !== userId && 
+                (u.username.includes(searchLower) || u.display_name.toLowerCase().includes(searchLower)) &&
+                !(profiles || []).some(p => p.id === u.id)
+            );
+
+            const allProfiles = [...superusers, ...(profiles || [])];
+            const allUserIds = allProfiles.map(p => p.id);
+
             // Enrich with connection status (parallel queries)
-            const userIds = (profiles || []).map((p: any) => p.id);
             let statusMap: Record<string, string> = {};
 
-            if (userIds.length > 0) {
+            if (allUserIds.length > 0) {
                 const [connRes, reqRes] = await Promise.all([
                     supabase.from('connections').select('user_1_id, user_2_id')
                         .or(`user_1_id.eq.${userId},user_2_id.eq.${userId}`),
@@ -77,18 +90,39 @@ export default function SearchScreen() {
 
                 (connRes.data || []).forEach((c: any) => {
                     const otherId = c.user_1_id === userId ? c.user_2_id : c.user_1_id;
-                    if (userIds.includes(otherId)) statusMap[otherId] = 'connected';
+                    if (allUserIds.includes(otherId)) statusMap[otherId] = 'connected';
                 });
                 (reqRes.data || []).forEach((r: any) => {
-                    if (r.sender_id === userId && userIds.includes(r.receiver_id) && !statusMap[r.receiver_id]) {
+                    if (r.sender_id === userId && allUserIds.includes(r.receiver_id) && !statusMap[r.receiver_id]) {
                         statusMap[r.receiver_id] = 'request_sent';
-                    } else if (r.receiver_id === userId && userIds.includes(r.sender_id) && !statusMap[r.sender_id]) {
+                    } else if (r.receiver_id === userId && allUserIds.includes(r.sender_id) && !statusMap[r.sender_id]) {
                         statusMap[r.sender_id] = 'request_received';
                     }
                 });
+
+                // 🌟 AUTO-CONNECT SUPERUSERS (Hari & Shri)
+                const superUserIds = [LEGACY_TO_UUID['shri'], LEGACY_TO_UUID['hari']];
+                const isMeSuper = superUserIds.includes(userId) || 
+                                 currentUser?.username === 'hari' || 
+                                 currentUser?.username === 'shri' ||
+                                 userId?.startsWith('f00f00f0');
+
+                if (isMeSuper) {
+                    allUserIds.forEach(targetId => {
+                        const targetProfile = allProfiles.find(ap => ap.id === targetId);
+                        const isTargetSuper = superUserIds.includes(targetId) || 
+                                           targetProfile?.username === 'hari' || 
+                                           targetProfile?.username === 'shri' ||
+                                           targetId?.startsWith('f00f00f0');
+                        
+                        if (isTargetSuper) {
+                            statusMap[targetId] = 'connected';
+                        }
+                    });
+                }
             }
 
-            setResults((profiles || []).map((p: any) => ({
+            setResults(allProfiles.map((p: any) => ({
                 ...p,
                 connectionStatus: statusMap[p.id] || 'not_connected',
             })));
@@ -161,6 +195,31 @@ export default function SearchScreen() {
         }
     };
 
+    const handleUnfriend = async (partnerId: string) => {
+        Alert.alert(
+            'Unfriend',
+            'Are you sure you want to remove this friend?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                { 
+                    text: 'Unfriend', 
+                    style: 'destructive',
+                    onPress: async () => {
+                        // Optimistic UI
+                        setResults(prev => prev.map(u => u.id === partnerId ? { ...u, connectionStatus: 'not_connected' } : u));
+                        try {
+                            await unfriendContact(partnerId);
+                        } catch (err: any) {
+                            // Revert on failure
+                            setResults(prev => prev.map(u => u.id === partnerId ? { ...u, connectionStatus: 'connected' } : u));
+                            Alert.alert('Error', err?.message || 'Unfriend failed');
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
     const renderItem = useCallback(({ item, index }: { item: any; index: number }) => (
         <Animated.View entering={FadeInDown.delay(Math.min(index * 40, 200)).duration(300)}>
             <View style={styles.userCard}>
@@ -202,11 +261,16 @@ export default function SearchScreen() {
                     )}
 
                     {item.connectionStatus === 'connected' && (
-                        <TouchableOpacity style={styles.chatButton} onPress={() => router.push(`/chat/${item.id}`)}>
-                            <LinearGradient colors={[activeTheme.primary, activeTheme.accent]} style={styles.chatButtonGradient}>
-                                <MaterialIcons name="chat" size={20} color="#fff" />
-                            </LinearGradient>
-                        </TouchableOpacity>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                            <TouchableOpacity style={styles.chatButton} onPress={() => router.push(`/chat/${item.id}`)}>
+                                <LinearGradient colors={[activeTheme.primary, activeTheme.accent]} style={styles.chatButtonGradient}>
+                                    <MaterialIcons name="chat" size={20} color="#fff" />
+                                </LinearGradient>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.unfriendButton} onPress={() => handleUnfriend(item.id)}>
+                                <MaterialIcons name="person-remove" size={20} color="rgba(255,255,255,0.4)" />
+                            </TouchableOpacity>
+                        </View>
                     )}
                 </View>
             </View>
@@ -311,6 +375,12 @@ const styles = StyleSheet.create({
         shadowColor: '#3b82f6', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4
     },
     chatButtonGradient: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    unfriendButton: {
+        width: 44, height: 44, borderRadius: 22,
+        backgroundColor: 'rgba(255,255,255,0.05)',
+        justifyContent: 'center', alignItems: 'center',
+        borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)'
+    },
     emptyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: 100 },
     emptyText: { color: 'rgba(255,255,255,0.3)', textAlign: 'center', marginTop: 16, fontSize: 16, fontWeight: '500' },
     hintText: { color: 'rgba(255,255,255,0.2)', textAlign: 'center', fontSize: 15, fontWeight: '500' }

@@ -17,6 +17,37 @@ export const LEGACY_TO_UUID: Record<string, string> = {
 // Use DIRECT Supabase URL as base — Realtime WebSocket REQUIRES direct connection.
 // Cloudflare Workers CANNOT proxy WebSocket upgrade requests.
 // HTTP REST calls are routed through the proxy via custom fetch to bypass ISP blocks.
+/**
+ * State manager for tracking Supabase Proxy health.
+ * Prevents constant timeouts by skipping the proxy if it's recently failed.
+ */
+class ProxyHealthTracker {
+    private static isProxyDown = false;
+    private static lastFailureTime = 0;
+    private static SKIP_DURATION = 120000; // 2 minutes
+
+    static shouldTryProxy(): boolean {
+        if (!this.isProxyDown) return true;
+        
+        const now = Date.now();
+        if (now - this.lastFailureTime > this.SKIP_DURATION) {
+            console.log('[Supabase] 🔄 Proxy skip duration expired. Attempting to use proxy again...');
+            this.isProxyDown = false;
+            return true;
+        }
+        return false;
+    }
+
+    static markProxyDown() {
+        this.isProxyDown = true;
+        this.lastFailureTime = Date.now();
+    }
+
+    static markProxyUp() {
+        this.isProxyDown = false;
+    }
+}
+
 export const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
     auth: {
         storage: SupabaseSecureStorage,
@@ -29,49 +60,54 @@ export const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
             const urlString = typeof url === 'string' ? url : url.toString();
             
             // Logic to rewrite direct Supabase URL to match the Proxy Worker subdomain
-            // Example: https://xxx.supabase.co -> https://soulsync-supabase-proxy.adarshark.workers.dev
             const proxied = urlString.replace(Env.SUPABASE_URL, Env.SUPABASE_PROXY_URL);
             
-            try {
-                // TRY PROXY FIRST (Avoid ISP blocks)
-                const controller = new AbortController();
-                // Longer timeout for mutations (POST/PATCH/DELETE) that carry larger payloads
-                const method = (options?.method || 'GET').toUpperCase();
-                const isMutation = method === 'POST' || method === 'PATCH' || method === 'DELETE';
-                const timeoutMs = isMutation ? 30000 : 15000; // 30s for writes, 15s for reads
-                const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-                const response = await fetch(proxied, {
-                    ...options,
-                    signal: controller.signal
-                });
-                clearTimeout(timeoutId);
-                return response;
-            } catch (proxyError: any) {
-                const isTimeout = proxyError.name === 'AbortError' || proxyError.message?.includes('aborted');
-                
-                // If it's a known network failure (e.g. device is offline), log it simply as "Offline" rather than a full WARN.
-                const isOffline = proxyError.message?.includes('Network request failed');
-                
-                if (isOffline) {
-                    console.log(`[Supabase Connectivity] Device appear offline. Attempting direct fallback...`);
-                } else {
-                    console.warn(`[Supabase Connectivity] Proxy ${isTimeout ? 'timed out' : 'failed'}: ${proxyError.message}. Falling back directly.`);
-                }
-                
+            // 🛡️ CIRCUIT BREAKER: If proxy is down, skip it for 2 minutes and go direct
+            if (ProxyHealthTracker.shouldTryProxy()) {
                 try {
-                    // Try Direct Fallback (might be blocked by carrier, but worth a try)
-                    // We remove any signal that might have been aborted by the proxy try
-                    const fallbackOptions = { ...options };
-                    delete fallbackOptions.signal;
+                    const controller = new AbortController();
+                    const method = (options?.method || 'GET').toUpperCase();
+                    const isMutation = method === 'POST' || method === 'PATCH' || method === 'DELETE';
+                    const timeoutMs = isMutation ? 30000 : 10000; // Reduced read timeout to 10s for snappier fallback
+                    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-                    return await fetch(urlString, fallbackOptions);
-                } catch (directError: any) {
-                    // CRITICAL FIX: Use console.warn instead of console.error to prevent RedBox in React Native.
-                    // "Network request failed" is a common transient issue in mobile apps and shouldn't crash development.
-                    console.warn('[Supabase Connectivity] Both proxy and direct fetch failed:', directError.message);
-                    throw directError;
+                    const response = await fetch(proxied, {
+                        ...options,
+                        signal: controller.signal
+                    });
+                    
+                    clearTimeout(timeoutId);
+                    ProxyHealthTracker.markProxyUp();
+                    return response;
+                } catch (proxyError: any) {
+                    const isTimeout = proxyError.name === 'AbortError' || proxyError.message?.includes('aborted');
+                    const isOffline = proxyError.message?.includes('Network request failed') || proxyError.message?.includes('failed to fetch');
+                    
+                    if (isOffline) {
+                        // 🛡️ Also mark as down on network failure to stop the retries
+                        console.debug(`[Supabase Connectivity] Proxy unreachable. Marking down for 2 mins.`);
+                        ProxyHealthTracker.markProxyDown();
+                    } else if (isTimeout) {
+                        console.warn(`[Supabase Connectivity] Proxy timed out. Marking down for 2 mins.`);
+                        ProxyHealthTracker.markProxyDown();
+                    } else {
+                        console.warn(`[Supabase Connectivity] Proxy failed: ${proxyError.message}. Falling back.`);
+                    }
                 }
+            }
+
+            // Direct Fallback
+            try {
+                // console.debug(`[Supabase Connectivity] Direct fallback to: ${urlString}`);
+                const fallbackOptions = { ...options };
+                delete fallbackOptions.signal;
+                return await fetch(urlString, fallbackOptions);
+            } catch (directError: any) {
+                // If the circuit breaker is active, we don't want to flood the console with direct failures either
+                if (ProxyHealthTracker.shouldTryProxy()) {
+                    console.warn('[Supabase Connectivity] Direct fetch failed:', directError.message);
+                }
+                throw directError;
             }
         },
     },

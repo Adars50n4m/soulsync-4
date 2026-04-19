@@ -18,6 +18,8 @@ import PipOverlay from '../components/PipOverlay';
 import { IncomingCallModal } from '../components/IncomingCallModal';
 import { SecurityLockOverlay } from '../components/SecurityLockOverlay';
 import { Toaster } from '../components/ui/Toaster';
+import { SheetProvider } from 'react-native-sheet-transitions';
+
 
 // Error Boundary to catch rendering errors
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error?: Error }> {
@@ -60,7 +62,7 @@ export const unstable_settings = {
   initialRouteName: 'index',
 };
 
-const SPLASH_FAILSAFE_MS = 4500;
+const SPLASH_FAILSAFE_MS = 3500;
 
 function RootContent() {
   const context = useContext(AppContext);
@@ -69,7 +71,8 @@ function RootContent() {
 
   // Handle Splash Screen hiding separately to keep it outside the context switch if possible,
   // but since we need isReady, we must handle it carefully.
-  const { activeCall, currentUser, isReady } = context || { activeCall: null, currentUser: null, isReady: false };
+  const { activeCall, currentUser, isReady, activeTheme } = context || { activeCall: null, currentUser: null, isReady: false, activeTheme: null };
+  const themeAccent = activeTheme?.primary || '#BC002A';
   const [showSkip, setShowSkip] = useState(false);
   const splashHiddenRef = useRef(false);
   const hideSplashSafely = useCallback((reason: string) => {
@@ -107,8 +110,8 @@ function RootContent() {
   }, [hideSplashSafely]);
 
   useEffect(() => {
-    console.log(`[RootContent] isReady impact check: ${isReady}, Segments: ${segments.join('/')}`);
     if (isReady) {
+      console.log('[RootContent] isReady is now TRUE. Unblocking UI...');
       hideSplashSafely('auth-ready');
     }
     
@@ -130,16 +133,34 @@ function RootContent() {
     // --- AUTH GUARD ---
     useEffect(() => {
         if (!context || !isReady || !segments || (segments as any[]).length === 0) return;
-        const isCallActive = !!activeCall && (!activeCall.isIncoming || activeCall.isAccepted);
-        if (isCallActive) return;
+        
+        // A call is considered "blocking" for auth purposes ONLY if it's already accepted OR we are actively connecting
+        // and NOT on the call screen already. This prevents stale activeCall objects from blocking the /login redirect.
+        const isCallActive = !!activeCall && (activeCall.isAccepted || (!activeCall.isIncoming && activeCall.callId));
+        const inCallScreen = segments[0] === 'call';
+        
+        if (isCallActive && inCallScreen) return;
 
         const inAuthGroup = ['login', 'otp', 'username-setup', 'profile-setup', 'forgot-password'].includes(segments[0] as string);
+        const needsProfileSetup = !currentUser?.isSuperUser && !!currentUser?.username && (
+          currentUser.username.startsWith('temp_') ||
+          currentUser.username.startsWith('user_')
+        );
+
         if (!currentUser && !inAuthGroup) {
             router.replace('/login');
-        } else if (currentUser && inAuthGroup) {
+            return;
+        }
+
+        if (currentUser && needsProfileSetup && segments[0] !== 'username-setup' && segments[0] !== 'profile-setup') {
+            router.replace('/username-setup?oauthMode=true');
+            return;
+        }
+
+        if (currentUser && inAuthGroup && !needsProfileSetup) {
             router.replace('/(tabs)');
         }
-    }, [currentUser, isReady, segments, router, !!activeCall]);
+    }, [currentUser, isReady, segments, router, !!activeCall, activeCall?.isAccepted]);
 
     // --- TRAFFIC CONTROLLER FOR CALLS ---
     useEffect(() => {
@@ -147,14 +168,17 @@ function RootContent() {
         const handleNavigation = () => {
             const path = segments.join('/');
             const inCallScreen = path.includes('call') || path.includes('IncomingCallModal');
-            const shouldBeInCallScreen = !activeCall.isIncoming || activeCall.isAccepted;
+            
+            // Only push to call screen if the call is accepted OR it's an OUTGOING call that we just started.
+            // Stale/idle calls (Incoming=false, Accepted=false, but no active signaling) should NOT trigger navigation.
+            const shouldBeInCallScreen = activeCall.isAccepted || (!activeCall.isIncoming && (activeCall.roomId || activeCall.callId));
 
             if (shouldBeInCallScreen && !activeCall.isMinimized && !inCallScreen) {
-                console.log(`[RootLayout] 🚀 Navigating to /call (Accepted=${activeCall.isAccepted}, Incoming=${activeCall.isIncoming})`);
+                console.log(`[RootLayout] 🚀 Navigating to /call (Accepted=${activeCall.isAccepted}, Incoming=${activeCall.isIncoming}, Room=${activeCall.roomId || activeCall.callId})`);
                 const delay = Platform.OS === 'android' ? 300 : 100;
                 setTimeout(() => {
                     // Re-check state inside timeout to ensure we still need to navigate
-                    if (context?.activeCall && (!context.activeCall.isIncoming || context.activeCall.isAccepted) && !context.activeCall.isMinimized) {
+                    if (context?.activeCall && (context.activeCall.isAccepted || !context.activeCall.isIncoming) && !context.activeCall.isMinimized) {
                         router.push('/call');
                     }
                 }, delay);
@@ -210,12 +234,27 @@ function RootContent() {
           animation: 'fade',
           headerShown: false,
         }} />
-        <Stack.Screen name="profile/[id]" options={{
+        <Stack.Screen
+          name="profile/[id]"
+          options={({ route }: any) => {
+            const avatarTransition = route?.params?.avatarTransition === '1';
+            return {
+              animation: 'none',
+              presentation: 'transparentModal',
+              headerShown: false,
+              gestureEnabled: true,
+              contentStyle: { backgroundColor: 'transparent' },
+              detachPreviousScreen: false,
+            };
+          }}
+        />
+        <Stack.Screen name="group-info/[id]" options={{
+          presentation: 'transparentModal',
           animation: 'none',
           headerShown: false,
-          gestureEnabled: true,
-          contentStyle: { backgroundColor: '#000' },
+          contentStyle: { backgroundColor: 'transparent' },
         }} />
+
         <Stack.Screen name="theme" options={{
           animation: 'ios_from_right',
           headerShown: false,
@@ -252,12 +291,12 @@ function RootContent() {
         >
           {(!showSkip) ? (
             <>
-              <ActivityIndicator size="large" color="#BC002A" />
+              <ActivityIndicator size="large" color={themeAccent} />
               <Text style={{ color: '#666', marginTop: 20, fontSize: 12 }}>Initializing Soul...</Text>
             </>
           ) : (
             <View style={{ padding: 40, alignItems: 'center' }}>
-              <ActivityIndicator size="large" color="#BC002A" />
+              <ActivityIndicator size="large" color={themeAccent} />
               <Text style={{ color: '#fff', fontSize: 18, fontWeight: '600', marginTop: 30, textAlign: 'center' }}>Taking longer than usual...</Text>
               <Text style={{ color: '#999', fontSize: 14, marginTop: 10, textAlign: 'center', marginBottom: 40 }}>
                 We're having trouble connecting to the local database or sync server.
@@ -289,7 +328,7 @@ function RootContent() {
                 }}
                 style={{ marginTop: 20 }}
               >
-                <Text style={{ color: '#BC002A', fontSize: 14 }}>Try Again</Text>
+                <Text style={{ color: themeAccent, fontSize: 14 }}>Try Again</Text>
               </Pressable>
             </View>
           )}
@@ -318,11 +357,14 @@ export default function RootLayout() {
           <AppProvider>
             <PresenceProvider>
               <ThemeProvider value={DarkTheme}>
-                <RootContent />
+                <SheetProvider>
+                  <RootContent />
+                </SheetProvider>
                 <Toaster />
                 <StatusBar style="light" />
               </ThemeProvider>
             </PresenceProvider>
+
           </AppProvider>
         </ErrorBoundary>
       </SafeAreaProvider>

@@ -10,6 +10,7 @@ import {
   Alert,
   FlatList,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { Svg, Circle } from 'react-native-svg';
 // FlashList available but FlatList used for stability
@@ -42,7 +43,8 @@ import {
     documentDirectory,
     copyAsync,
 } from 'expo-file-system';
-import * as Haptics from 'expo-haptics';
+import { hapticService } from '../../services/HapticService';
+import * as Haptics from 'expo-haptics'; // Keeping for type styles if needed, but will swap calls
 // import { storageService } from '../../services/StorageService';
 import { proxySupabaseUrl } from '../../config/api';
 import { chatTransitionState } from '../../services/chatTransitionState';
@@ -54,6 +56,7 @@ import { usePresence } from '../../context/PresenceContext';
 import { useScrollMotion } from '../../components/navigation/ScrollMotionProvider';
 import { normalizeId, getSuperuserName, LEGACY_TO_UUID, UUID_TO_LEGACY } from '../../utils/idNormalization';
 
+import LottieView from 'lottie-react-native';
 import { SoulAvatar } from '../../components/SoulAvatar';
 import { StatusThumbnail } from '../../components/StatusThumbnail';
 import { MediaPreviewModal } from '../../components/MediaPreviewModal';
@@ -61,10 +64,11 @@ import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { Contact } from '../../types';
 import { NoteBubble } from '../../components/NoteBubble';
 import { NoteCreatorModal } from '../../components/NoteCreatorModal';
+import ChatListContextMenu from '../../components/chat/ChatListContextMenu';
 import { SUPPORT_SHARED_TRANSITIONS } from '../../constants/sharedTransitions';
 const DEFAULT_AVATAR = '';
 const ENABLE_SHARED_TRANSITIONS = SUPPORT_SHARED_TRANSITIONS;
-const HOME_MORPH_DURATION = 480;
+const HOME_MORPH_DURATION = 500;
 
 const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promise<string> => {
   let resolvedUri = asset.uri;
@@ -99,18 +103,18 @@ const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promi
 const typingStyle = { color: '#22c55e', fontWeight: '700' as const };
 const pillSharedTransition = SharedTransition.custom((values) => {
   'worklet';
-  const morph = {
-    duration: 520,
-    easing: Easing.bezier(0.22, 1, 0.36, 1),
+  const liquidMorph = {
+    duration: 500,
+    easing: Easing.bezier(0.5, 0, 0.1, 1),
   };
   return {
-    originX: withTiming(values.targetOriginX, morph),
-    originY: withTiming(values.targetOriginY, morph),
-    width: withTiming(values.targetWidth, morph),
-    height: withTiming(values.targetHeight, morph),
-    borderRadius: withTiming(values.targetBorderRadius, morph),
+    originX: withTiming(values.targetOriginX, liquidMorph),
+    originY: withTiming(values.targetOriginY, liquidMorph),
+    width: withTiming(values.targetWidth, liquidMorph),
+    height: withTiming(values.targetHeight, liquidMorph),
+    borderRadius: withTiming(values.targetBorderRadius, liquidMorph),
   };
-}).duration(520);
+}).duration(500);
 const formatTime = (ts: string) => {
   if (!ts) return '';
   try {
@@ -134,37 +138,45 @@ interface ChatListItemProps {
   index: number;
   lastMsg: { text?: string; timestamp?: string };
   onSelect: (contact: Contact, y: number) => void;
-  onLongPress: (contact: Contact) => void;
+  onLongPress: (contact: Contact, layout: any) => void;
   isTyping: boolean;
   getPresence: (userId: string) => { isOnline: boolean; lastSeen: string | null };
   connectivity: { isDeviceOnline: boolean; isServerReachable: boolean; isRealtimeConnected: boolean };
   homeMorphProgress: Animated.SharedValue<number>;
+  selectedPillId: Animated.SharedValue<string>;
   unreadCount: number;
   isPinned: boolean;
   isMuted: boolean;
+  isClone?: boolean;
 }
 
-const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, isTyping, getPresence, connectivity, homeMorphProgress, unreadCount, isPinned, isMuted }: ChatListItemProps) => {
+const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, isTyping, getPresence, connectivity, homeMorphProgress, selectedPillId, unreadCount, isPinned, isMuted, isClone }: ChatListItemProps) => {
   const scaleAnim = useSharedValue(1);
   const opacityAnim = useSharedValue(1);
   const itemRef = useRef<View>(null);
 
   const animatedStyle = useAnimatedStyle(() => {
-    // Android: skip morph interpolations entirely — they cause massive frame drops
-    // when applied to every list item. Only apply press scale.
+    // Only apply shifts and scales to UNSELECTED items to clear them out.
+    // The SELECTED item should stay perfectly still relative to its container for the Shared Transition.
+    const isItemSelected = selectedPillId.value === item.id;
+    
     if (Platform.OS === 'android') {
       return {
         transform: [{ scale: scaleAnim.value }],
-        opacity: opacityAnim.value,
+        opacity: isItemSelected ? 1 : opacityAnim.value * interpolate(homeMorphProgress.value, [0, 0.4], [1, 0], Extrapolation.CLAMP),
       };
     }
+
+    const translateShift = isItemSelected ? 0 : interpolate(homeMorphProgress.value, [0, 1], [0, 35 + (index % 5) * 20], Extrapolation.IDENTITY);
+    const scaleShift = isItemSelected ? 1 : interpolate(homeMorphProgress.value, [0, 1], [1, 0.92], Extrapolation.IDENTITY);
+
     return {
       transform: [
         { scale: scaleAnim.value } as any,
-        { translateY: interpolate(homeMorphProgress.value, [0, 1], [0, 35 + (index % 5) * 20], Extrapolation.IDENTITY) } as any,
-        { scale: interpolate(homeMorphProgress.value, [0, 1], [1, 0.92], Extrapolation.IDENTITY) } as any
+        { translateY: translateShift } as any,
+        { scale: scaleShift } as any
       ],
-      opacity: opacityAnim.value * interpolate(homeMorphProgress.value, [0, 0.7], [1, 0], Extrapolation.CLAMP),
+      opacity: isClone ? 1 : opacityAnim.value * interpolate(homeMorphProgress.value, [0, 0.7], [1, 0], Extrapolation.CLAMP),
     };
   });
 
@@ -188,14 +200,19 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
     <Pressable
       ref={itemRef}
       onPress={handlePress}
-      onLongPress={() => onLongPress(item)}
+      onLongPress={() => {
+        if (isClone) return;
+        itemRef.current?.measure((x, y, width, height, pageX, pageY) => {
+          onLongPress(item, { x: pageX, y: pageY, width, height });
+        });
+      }}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
       style={styles.chatItem}
     >
       {/* Outer morph target - ONLY handles the shared element transition */}
       <Animated.View 
-        {...(ENABLE_SHARED_TRANSITIONS
+        {...(ENABLE_SHARED_TRANSITIONS && !isClone
           ? {
               sharedTransitionTag: `pill-${item.id}`,
               sharedTransitionStyle: pillSharedTransition,
@@ -221,7 +238,7 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
         {/* Content rendered safely as an overlay, decoupled from Reanimated's snapshot engine */}
         <View style={[styles.pillContent, { position: 'absolute', width: '100%', height: '100%', paddingHorizontal: 16 }]} pointerEvents="box-none">
           <Animated.View 
-            {...(ENABLE_SHARED_TRANSITIONS
+            {...(ENABLE_SHARED_TRANSITIONS && !isClone
               ? {
                   sharedTransitionTag: `pill-avatar-${item.id}`,
                   sharedTransitionStyle: pillSharedTransition,
@@ -232,7 +249,7 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
             <SoulAvatar
               uri={proxySupabaseUrl(item.avatar) || DEFAULT_AVATAR}
               localUri={item.localAvatarUri}
-              size={40}
+              size={46}
               avatarType={item.avatarType}
               teddyVariant={item.teddyVariant}
               isOnline={getPresence(item.id).isOnline}
@@ -249,7 +266,7 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
 
           <View style={styles.chatContent}>
             <Animated.View
-              {...(ENABLE_SHARED_TRANSITIONS
+              {...(ENABLE_SHARED_TRANSITIONS && !isClone
                 ? {
                     sharedTransitionTag: `pill-name-${item.id}`,
                     sharedTransitionStyle: pillSharedTransition,
@@ -318,7 +335,7 @@ const AnimatedMoreMenu = ({ router, isSearching }: { router: any, isSearching: b
 
   const containerStyle = useAnimatedStyle(() => ({
     width: interpolate(progress.value, [0, 1], [40, 200]),
-    height: interpolate(progress.value, [0, 1], [40, 220]),
+    height: interpolate(progress.value, [0, 1], [40, 270]),
     borderRadius: interpolate(progress.value, [0, 1], [20, 16]),
     backgroundColor: expanded ? 'rgba(0,0,0,0.6)' : 'transparent',
   }));
@@ -363,6 +380,16 @@ const AnimatedMoreMenu = ({ router, isSearching }: { router: any, isSearching: b
 
              <Pressable 
                 style={styles.moreMenuItemMorph}
+                onPress={() => { setExpanded(false); router.push('/create-group'); }}
+              >
+                <MaterialIcons name="group-add" size={20} color="#fff" style={styles.moreMenuIconMorph} />
+                <Text style={styles.moreMenuTextMorph}>New Group</Text>
+              </Pressable>
+
+              <View style={styles.moreMenuDividerMorph} />
+
+             <Pressable 
+                style={styles.moreMenuItemMorph}
                 onPress={() => { setExpanded(false); router.push('/search'); }}
               >
                 <MaterialIcons name="person-search" size={20} color="#fff" style={styles.moreMenuIconMorph} />
@@ -377,6 +404,16 @@ const AnimatedMoreMenu = ({ router, isSearching }: { router: any, isSearching: b
               >
                 <MaterialIcons name="notifications-none" size={20} color="#fff" style={styles.moreMenuIconMorph} />
                 <Text style={styles.moreMenuTextMorph}>View Requests</Text>
+              </Pressable>
+
+              <View style={styles.moreMenuDividerMorph} />
+
+              <Pressable 
+                style={styles.moreMenuItemMorph}
+                onPress={() => { setExpanded(false); router.push('/archived'); }}
+              >
+                <MaterialIcons name="archive" size={20} color="#fff" style={styles.moreMenuIconMorph} />
+                <Text style={styles.moreMenuTextMorph}>Archived</Text>
               </Pressable>
 
               <View style={styles.moreMenuDividerMorph} />
@@ -450,6 +487,74 @@ const StatusProgressRing = ({ progress, size = 80, strokeWidth = 3, color = '#3b
     );
 };
 
+const FilterPill = React.memo(({ 
+  id, 
+  label, 
+  isActive, 
+  onPress,
+  activeTheme 
+}: { 
+  id: string, 
+  label: string, 
+  isActive: boolean, 
+  onPress: (id: any) => void,
+  activeTheme: any
+}) => {
+  const scale = useSharedValue(1);
+  const opacity = useSharedValue(1);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+    opacity: opacity.value,
+  }));
+
+  const handlePressIn = () => {
+    scale.value = withSpring(0.92, { damping: 12, stiffness: 300 });
+    opacity.value = withTiming(0.8, { duration: 100 });
+  };
+
+  const handlePressOut = () => {
+    scale.value = withSpring(1, { damping: 12, stiffness: 300 });
+    opacity.value = withTiming(1, { duration: 150 });
+  };
+
+  return (
+    <Pressable
+      onPress={() => onPress(id)}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+    >
+      <Animated.View
+        style={[
+          {
+            paddingHorizontal: 16,
+            paddingVertical: 8,
+            borderRadius: 20,
+            backgroundColor: isActive ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255,255,255,0.06)',
+            borderWidth: isActive ? 1 : 0,
+            borderColor: isActive ? activeTheme.primary : 'transparent',
+            justifyContent: 'center',
+            alignItems: 'center',
+          },
+          animatedStyle
+        ]}
+      >
+        <Text
+          style={{
+            color: isActive ? activeTheme.primary : 'rgba(255,255,255,0.5)',
+            fontSize: 13,
+            fontWeight: '600',
+          }}
+        >
+          {label}
+        </Text>
+      </Animated.View>
+    </Pressable>
+  );
+});
+
+FilterPill.displayName = 'FilterPill';
+
 export default function HomeScreen() {
   const {
     currentUser,
@@ -484,16 +589,33 @@ export default function HomeScreen() {
   const [isMediaPickerVisible, setIsMediaPickerVisible] = useState(false);
   const [statusMediaPreview, setStatusMediaPreview] = useState<{ uri: string; type: 'image' | 'video' } | null>(null);
   const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
+  const [contextMenuVisible, setContextMenuVisible] = useState(false);
+  const [selectedChatForMenu, setSelectedChatForMenu] = useState<Contact | null>(null);
+  const [menuLayout, setMenuLayout] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [chatFilter, setChatFilter] = useState<'all' | 'unread'>('all');
+  const [chatFilter, setChatFilter] = useState<'all' | 'unread' | 'favorites' | 'groups'>('all');
   const [pinnedChatIds, setPinnedChatIds] = useState<string[]>([]);
   const [mutedChatIds, setMutedChatIds] = useState<string[]>([]);
+  const [showWelcomeAnim, setShowWelcomeAnim] = useState(false);
+  const welcomeAnimRef = useRef<LottieView>(null);
 
   // Load persisted pin/mute on mount
   useEffect(() => {
     AsyncStorage.getItem('ss_pinned_chats').then(v => { if (v) setPinnedChatIds(JSON.parse(v)); });
     AsyncStorage.getItem('ss_muted_chats').then(v => { if (v) setMutedChatIds(JSON.parse(v)); });
   }, []);
+
+  // Show welcome animation once for new users who have completed setup
+  useEffect(() => {
+    if (!currentUser?.id || !currentUser?.username || !currentUser?.avatar_url) return;
+    const key = `ss_welcome_shown_${currentUser.id}`;
+    AsyncStorage.getItem(key).then(seen => {
+      if (!seen) {
+        AsyncStorage.setItem(key, '1');
+        setShowWelcomeAnim(true);
+      }
+    });
+  }, [currentUser?.id, currentUser?.username, currentUser?.avatar_url]);
 
   const togglePinChat = useCallback((chatId: string) => {
     setPinnedChatIds(prev => {
@@ -515,10 +637,11 @@ export default function HomeScreen() {
   const statusRailOpacity = useSharedValue(0); // Start at 0, fade in when ready/focused
   const statusRailOffset = useSharedValue(0);
   const homeMorphProgress = useSharedValue(0);
+  const selectedPillId = useSharedValue('');
   const scrollPosition = useSharedValue(0);
   const statusRefs = useRef<Record<string, any>>({});
   // Telegram-style: status rail collapses as user scrolls down
-  const RAIL_FULL_HEIGHT = 230;  // Full status rail height (cards + padding)
+  const RAIL_FULL_HEIGHT = 200;  // Full status rail height (cards + padding)
   const RAIL_COLLAPSED_HEIGHT = 75; // Collapsed: just circle avatars
   const COLLAPSE_SCROLL = 120;   // Scroll distance to fully collapse
 
@@ -585,6 +708,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
       
       chatTransitionState.setPhase('idle');
       homeMorphProgress.value = 1;
+      selectedPillId.value = ''; // Clear selection on return
       if (!hasFocusedOnce.current) {
         hasFocusedOnce.current = true;
         homeMorphProgress.value = 0;
@@ -594,7 +718,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
       }
       homeMorphProgress.value = withTiming(0, {
         duration: HOME_MORPH_DURATION,
-        easing: Easing.bezier(0.22, 1, 0.36, 1),
+        easing: Easing.bezier(0.5, 0, 0.1, 1),
       });
       // Smooth fade-in and downward motion for status rail on return
       statusRailOpacity.value = 0;
@@ -605,7 +729,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
       });
       statusRailOffset.value = withTiming(0, {
         duration: 520,
-        easing: Easing.bezier(0.22, 1, 0.36, 1),
+        easing: Easing.bezier(0.5, 0, 0.1, 1),
       });
     });
     return unsubscribe;
@@ -620,7 +744,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
         if (homeMorphProgress.value === 1 && !chatTransitionState.getPhase().includes('returning')) {
              homeMorphProgress.value = withTiming(0, {
                duration: 600,
-               easing: Easing.bezier(0.22, 1, 0.36, 1)
+               easing: Easing.bezier(0.5, 0, 0.1, 1)
              });
         }
     }
@@ -631,7 +755,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
       if (phase === 'entering') {
         homeMorphProgress.value = withTiming(1, {
           duration: HOME_MORPH_DURATION,
-          easing: Easing.bezier(0.22, 1, 0.36, 1),
+          easing: Easing.bezier(0.5, 0, 0.1, 1),
         });
         return;
       }
@@ -642,7 +766,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
         statusRailOffset.value = -30;
         homeMorphProgress.value = withTiming(0, {
           duration: HOME_MORPH_DURATION,
-          easing: Easing.bezier(0.22, 1, 0.36, 1),
+          easing: Easing.bezier(0.5, 0, 0.1, 1),
         });
         statusRailOpacity.value = withTiming(1, {
           duration: 400,
@@ -650,7 +774,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
         });
         statusRailOffset.value = withTiming(0, {
           duration: HOME_MORPH_DURATION,
-          easing: Easing.bezier(0.22, 1, 0.36, 1),
+          easing: Easing.bezier(0.5, 0, 0.1, 1),
         });
       }
     });
@@ -709,23 +833,30 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
           return false;
       }
 
-      const chatMsgs = messages?.[primaryId] || messages?.[altId] || [];
-      const hasMessages = chatMsgs.length > 0;
-      const hasMeaningfulLastMessage = !!contact.lastMessage && contact.lastMessage !== 'Start a conversation';
-
       const isArchived = contact.isArchived === true;
-      return (isSelfSuperUserInteraction || hasMessages || hasMeaningfulLastMessage) && !isArchived;
+      // Always show verified friends/connections in the list so that new chats can be initiated
+      return !isArchived;
     });
   }, [contacts, messages, statuses, currentUser]);
 
   const filteredVisibleContacts = useMemo(() => {
+    let list = [...visibleContacts];
+
+    if (chatFilter === 'unread') {
+      list = list.filter(c => (c.unreadCount || 0) > 0);
+    } else if (chatFilter === 'favorites') {
+      list = list.filter(c => pinnedChatIds.includes(c.id));
+    } else if (chatFilter === 'groups') {
+      list = list.filter(c => (c as any).isGroup === true);
+    }
+
     // Sort pinned chats to top (Signal/WhatsApp style)
-    return [...visibleContacts].sort((a, b) => {
+    return list.sort((a, b) => {
       const aPinned = pinnedChatIds.includes(a.id) ? 1 : 0;
       const bPinned = pinnedChatIds.includes(b.id) ? 1 : 0;
       return bPinned - aPinned; // pinned first
     });
-  }, [visibleContacts, pinnedChatIds]);
+  }, [visibleContacts, pinnedChatIds, chatFilter]);
 
   const contactsWithStories = useMemo(() => {
     return visibleContacts.filter(c => contactStatusGroupsMap.has(c.id));
@@ -852,18 +983,17 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
 
   const handleUserSelect = useCallback((contact: Contact, y: number) => {
     chatTransitionState.setPhase('entering');
+    selectedPillId.value = contact.id;
     homeMorphProgress.value = withTiming(1, {
       duration: HOME_MORPH_DURATION,
-      easing: Easing.bezier(0.22, 1, 0.36, 1),
+      easing: Easing.bezier(0.5, 0, 0.1, 1),
     });
-    requestAnimationFrame(() => {
-      router.push({
-        pathname: '/chat/[id]',
-        params: {
-          id: contact.id,
-          sourceY: y.toString(),
-        }
-      });
+    router.push({
+      pathname: '/chat/[id]',
+      params: {
+        id: contact.id,
+        sourceY: y.toString(),
+      }
     });
   }, [homeMorphProgress, router]);
 
@@ -1042,8 +1172,9 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
                   <SoulAvatar 
                     uri={proxySupabaseUrl(contact.avatar)} 
                     localUri={contact.localAvatarUri}
-                    size={34} 
+                    size={42} 
                     avatarType={contact.avatarType as any} 
+                    teddyVariant={contact.teddyVariant as any}
                     style={styles.avatarGlow}
                   />
                 </View>
@@ -1108,24 +1239,21 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
             unreadCount={item.unreadCount}
             isMuted={mutedChatIds.includes(item.id)}
             isPinned={pinnedChatIds.includes(item.id)}
-            onLongPress={() => {
-                const isPinned = pinnedChatIds.includes(item.id);
-                const isMuted = mutedChatIds.includes(item.id);
-                Alert.alert(item.name || 'Chat', undefined, [
-                    { text: isPinned ? 'Unpin' : 'Pin to top', onPress: () => togglePinChat(item.id) },
-                    { text: isMuted ? 'Unmute' : 'Mute', onPress: () => toggleMuteChat(item.id) },
-                    { text: 'Archive', onPress: () => archiveContact(item.id), style: 'destructive' },
-                    { text: 'Cancel', style: 'cancel' },
-                ]);
+            onLongPress={(chat, layout) => {
+                setSelectedChatForMenu(chat);
+                setMenuLayout(layout);
+                setContextMenuVisible(true);
+                void hapticService.impact(Haptics.ImpactFeedbackStyle.Light);
             }}
             getPresence={getPresence}
             connectivity={connectivity}
             onSelect={handleUserSelect}
             homeMorphProgress={homeMorphProgress}
+            selectedPillId={selectedPillId}
         />
       </SwipeableRow>
     );
-  }, [lastMessagesMap, typingUsers, getPresence, connectivity, handleUserSelect, homeMorphProgress, archiveContact, clearChatMessages, unfriendContact]);
+  }, [lastMessagesMap, typingUsers, getPresence, connectivity, handleUserSelect, homeMorphProgress, archiveContact, clearChatMessages, unfriendContact, pinnedChatIds, mutedChatIds]);
 
   const keyExtractor = useCallback((item: Contact) => item.id, []);
 
@@ -1165,8 +1293,43 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
           renderItem={renderStatusItem}
         />
       </Animated.View>
+      <ScrollView 
+        horizontal 
+        showsHorizontalScrollIndicator={false}
+        style={{ marginTop: -1, marginBottom: 8 }}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 6, gap: 8 }}
+      >
+        {[
+          { id: 'all', label: 'All' },
+          { id: 'unread', label: 'Unread' },
+          { id: 'favorites', label: 'Favourites' },
+          { id: 'groups', label: 'Groups' }
+        ].map(filter => (
+          <FilterPill
+            key={filter.id}
+            id={filter.id}
+            label={filter.label}
+            isActive={chatFilter === filter.id}
+            onPress={setChatFilter}
+            activeTheme={activeTheme}
+          />
+        ))}
+        <Pressable 
+          onPress={() => router.push('/create-group')}
+          style={{
+              width: 32,
+              height: 32,
+              borderRadius: 16,
+              backgroundColor: 'rgba(255,255,255,0.06)',
+              justifyContent: 'center',
+              alignItems: 'center'
+          }}
+        >
+          <MaterialIcons name="add" size={18} color="rgba(255,255,255,0.6)" />
+        </Pressable>
+      </ScrollView>
     </View>
-  ), [contactsWithStories, renderStatusItem, statusRailAnimStyle, router]);
+  ), [contactsWithStories, renderStatusItem, statusRailAnimStyle, router, chatFilter]);
 
   return (
     <View style={styles.container}>
@@ -1191,7 +1354,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
                 data={filteredVisibleContacts}
                 keyExtractor={keyExtractor}
                 renderItem={renderItem}
-                ListHeaderComponent={renderHeader}
+                ListHeaderComponent={renderHeader()}
                 contentContainerStyle={styles.listContent}
                 bounces={false}
                 scrollEnabled={!isRefreshing}
@@ -1246,6 +1409,63 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
         visible={isNoteModalVisible}
         onClose={closeModalRobustly}
       />
+
+      {/* Welcome animation — plays once for new users with completed profiles */}
+      {showWelcomeAnim && (
+        <View style={StyleSheet.absoluteFill} pointerEvents="none">
+          <LottieView
+            ref={welcomeAnimRef}
+            source={require('../../assets/animations/welcome-new-user.json')}
+            autoPlay
+            loop={false}
+            style={{ flex: 1 }}
+            onAnimationFinish={() => setShowWelcomeAnim(false)}
+          />
+        </View>
+      )}
+
+      <ChatListContextMenu
+        visible={contextMenuVisible}
+        chatItem={selectedChatForMenu}
+        layout={menuLayout}
+        isPinned={selectedChatForMenu ? pinnedChatIds.includes(selectedChatForMenu.id) : false}
+        isMuted={selectedChatForMenu ? mutedChatIds.includes(selectedChatForMenu.id) : false}
+        onClose={() => setContextMenuVisible(false)}
+        onAction={(action) => {
+            if (!selectedChatForMenu) return;
+            switch(action) {
+                case 'pin': togglePinChat(selectedChatForMenu.id); break;
+                case 'mute': toggleMuteChat(selectedChatForMenu.id); break;
+                case 'archive': archiveContact(selectedChatForMenu.id); break;
+            }
+        }}
+        renderItem={() => {
+            if (!selectedChatForMenu) return null;
+            const item = selectedChatForMenu;
+            const lastMsg = lastMessagesMap[item.id] || { text: item.lastMessage, timestamp: '' };
+            const isTyping = typingUsers.includes(item.id);
+            return (
+                <View style={[styles.chatItem, { marginHorizontal: 0, marginBottom: 0 }]}>
+                    <ChatListItem
+                        item={item}
+                        index={0}
+                        lastMsg={lastMsg}
+                        isTyping={isTyping}
+                        unreadCount={item.unreadCount}
+                        isMuted={mutedChatIds.includes(item.id)}
+                        isPinned={pinnedChatIds.includes(item.id)}
+                        onSelect={() => {}}
+                        onLongPress={() => {}}
+                        getPresence={getPresence}
+                        connectivity={connectivity}
+                        homeMorphProgress={homeMorphProgress}
+                        selectedPillId={selectedPillId}
+                        isClone
+                    />
+                </View>
+            );
+        }}
+      />
     </View>
   );
 }
@@ -1255,11 +1475,11 @@ const styles = StyleSheet.create({
   homeContent: {
     flex: 1,
   },
-  homeHeaderWrapper: { paddingTop: Platform.OS === 'ios' ? 50 : 30, zIndex: 1000, elevation: 10 },
+  homeHeaderWrapper: { paddingTop: Platform.OS === 'ios' ? 44 : 20, zIndex: 1000, elevation: 10 },
   topHeader: { 
     paddingHorizontal: 20,
-    paddingVertical: 10,
-    height: 60,
+    paddingVertical: 4,
+    height: 48,
     justifyContent: 'center',
     zIndex: 1000,
     elevation: 10,
@@ -1312,12 +1532,12 @@ const styles = StyleSheet.create({
     alignItems: 'center', 
     justifyContent: 'center' 
   },
-  statusRail: { marginTop: 15, marginBottom: 0, overflow: 'visible' },
-  statusContent: { paddingHorizontal: 20, paddingVertical: 12, paddingTop: 35, gap: 14, overflow: 'visible' },
+  statusRail: { marginTop: 0, marginBottom: 0, overflow: 'visible' },
+  statusContent: { paddingHorizontal: 20, paddingVertical: 8, paddingTop: 5, gap: 14, overflow: 'visible' },
   statusCard: { 
     width: 115, 
     height: 175, 
-    marginTop: 10, 
+    marginTop: 5, 
     borderRadius: 28, 
     backgroundColor: 'transparent', 
     zIndex: 10, 
@@ -1433,7 +1653,7 @@ const styles = StyleSheet.create({
 
   pillBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0, 0, 0, 0.15)', opacity: 0.95 },
   pillBlur: { ...StyleSheet.absoluteFillObject },
-  pillContent: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 12 },
+  pillContent: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 14 },
   avatarContainer: { position: 'relative' },
   avatar: { width: 46, height: 46, borderRadius: 23 },
   onlineIndicator: { position: 'absolute', bottom: 0, right: 0, width: 14, height: 14, borderRadius: 7, backgroundColor: '#22c55e', borderWidth: 2, borderColor: '#151515' },

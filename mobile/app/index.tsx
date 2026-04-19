@@ -27,8 +27,8 @@ export default function Index() {
   }, [context?.isReady, context?.currentUser, router, rootNavigationState?.key]);
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }}>
-      <ActivityIndicator size="large" color="#BC002A" />
+    <View style={{ flex: 1, backgroundColor: context?.activeTheme?.background || '#000', justifyContent: 'center', alignItems: 'center' }}>
+      <ActivityIndicator size="large" color={context?.activeTheme?.primary || '#BC002A'} />
     </View>
   );
 }

@@ -208,21 +208,27 @@ const ANDROID_CALL_INTERRUPTION_MODE =
 interface WebRTCCallbacks {
     onStateChange: (state: CallState) => void;
     onLocalStream: (stream: MediaStream | null) => void;
-    onRemoteStream: (stream: MediaStream | null) => void;
+    onRemoteStream: (stream: MediaStream | null, userId?: string) => void;
+    onPeerStateChange?: (userId: string, state: string) => void;
     onError: (error: string) => void;
 }
 
 class WebRTCService {
-    private peerConnection: RTCPeerConnection | null = null;
+    private peerConnections: Map<string, RTCPeerConnection> = new Map();
     private listeners: WebRTCCallbacks[] = [];
     private localStream: MediaStream | null = null;
-    private remoteStream: MediaStream | null = null;
+    private remoteStreams: Map<string, MediaStream> = new Map();
+
+    getRemoteStreams(): Map<string, MediaStream> {
+        return this.remoteStreams;
+    }
     private lastStats: any = { bytesReceived: 0 };
     private callType: CallType = 'audio';
     private callState: CallState = 'idle';
     private isInitiator: boolean = false;
     private partnerHasAccepted: boolean = false;
-    private pendingCandidates: RTCIceCandidate[] = [];
+    private pendingParticipants: Set<string> = new Set();
+    private pendingCandidates: Map<string, RTCIceCandidate[]> = new Map();
     private earlySignalQueue: CallSignal[] = [];
     private pendingCandidatesMutex: boolean = false;
     private mediaStreamAttempted: boolean = false;
@@ -595,11 +601,11 @@ class WebRTCService {
         ];
     }
 
-    private tryCreatePeerConnection(config: any, label: string): RTCPeerConnection {
+    private tryCreatePeerConnection(config: any, label: string, userId: string): RTCPeerConnection {
         const iceServers = config?.iceServers || [];
         const policy = config?.iceTransportPolicy || 'all';
         
-        console.log(`[WebRTCService] [BRIDGE] 🚀 Initializing [${label}]`);
+        console.log(`[WebRTCService] [BRIDGE] 🚀 Initializing [${label}] for user ${userId}`);
         console.log(`[WebRTCService] [BRIDGE] 🛠️ Policy: ${policy.toUpperCase()}`);
         
         iceServers.forEach((s: any, idx: number) => {
@@ -643,20 +649,37 @@ class WebRTCService {
                         clearTimeout(this.reconnectTimeout);
                         this.reconnectTimeout = null;
                     }
+                    if (this.connectionWatchdog) {
+                        clearTimeout(this.connectionWatchdog);
+                        this.connectionWatchdog = null;
+                    }
                     break;
                 case 'disconnected':
                     console.warn('[WebRTCService] ⚠️ Peer disconnected — starting watchdog');
                     this.lastDisconnectTime = Date.now();
                     this.startConnectionWatchdog();
                     break;
-                case 'failed':
-                    console.error('[WebRTCService] ❌ Peer failed — attempting recovery');
-                    this.attemptRecovery();
-                    break;
                 case 'closed':
-                    console.log('[WebRTCService] 🚫 Peer closed');
-                    this.endCall('peer-closed');
+                    console.log(`[WebRTCService] 🚫 Peer closed: ${userId}`);
+                    this.removePeer(userId);
                     break;
+            }
+        };
+
+        pc.ontrack = (event: any) => {
+            if (event.streams && event.streams[0]) {
+                console.log(`[WebRTCService] 📺 Remote stream received from ${userId}`);
+                this.remoteStreams.set(userId, event.streams[0]);
+                this.broadcast('onRemoteStream', event.streams[0], userId);
+            }
+        };
+
+        // For backward compatibility with older react-native-webrtc versions that use onaddstream
+        (pc as any).onaddstream = (event: any) => {
+            if (event.stream) {
+                console.log(`[WebRTCService] 📺 Remote stream added from ${userId} (legacy)`);
+                this.remoteStreams.set(userId, event.stream);
+                this.broadcast('onRemoteStream', event.stream, userId);
             }
         };
 
@@ -675,16 +698,42 @@ class WebRTCService {
                 if (this.isInitiator) {
                     const offer = await pc.createOffer();
                     await pc.setLocalDescription(offer);
-                    await callService.sendOffer(offer);
+                    await callService.sendOffer(offer, userId);
                 }
             } catch (err: any) {
-                console.warn('[WebRTCService] Negotiation failed:', err?.message);
+                console.warn(`[WebRTCService] Negotiation failed for ${userId}:`, err?.message);
             }
         };
 
-        // ICE candidate handling is set up in createPeerConnection() via addEventListener.
-        // Do NOT set pc.onicecandidate here — it would be overwritten and the property
-        // assignment can conflict with addEventListener in react-native-webrtc.
+        let candidateBatch: any[] = [];
+        let batchTimer: NodeJS.Timeout | null = null;
+        const flushCandidates = () => {
+            if (candidateBatch.length === 0) return;
+
+            const pendingBatch = candidateBatch;
+            candidateBatch = [];
+            batchTimer = null;
+            console.log(`[WebRTCService] [${label}] 🧊 Flushing ${pendingBatch.length} ICE candidates to ${userId}`);
+
+            pendingBatch.forEach((candidate) => {
+                void callService.sendIceCandidate(candidate, userId).catch((error: any) => {
+                    console.warn(`[WebRTCService] Failed to send ICE candidate to ${userId}:`, error?.message || error);
+                });
+            });
+        };
+
+        pc.addEventListener('icecandidate', (event: any) => {
+            if (event.candidate) {
+                candidateBatch.push(event.candidate);
+                if (!batchTimer) {
+                    batchTimer = setTimeout(flushCandidates, 150);
+                }
+                return;
+            }
+
+            flushCandidates();
+            console.log(`[WebRTCService] [${label}] ICE gathering complete for ${userId}`);
+        });
 
         // --- DIAGNOSTICS: ICE CANDIDATE ERRORS ---
         pc.onicecandidateerror = (event: any) => {
@@ -715,7 +764,9 @@ class WebRTCService {
             // Immediately sync current state to new listener
             listener.onStateChange(this.callState);
             if (this.localStream) listener.onLocalStream(this.localStream);
-            if (this.remoteStream) listener.onRemoteStream(this.remoteStream);
+            this.remoteStreams.forEach((stream, userId) => {
+                listener.onRemoteStream(stream, userId);
+            });
         }
     }
 
@@ -733,15 +784,15 @@ class WebRTCService {
     initialize(callbacks: WebRTCCallbacks, isInitiator: boolean): void {
         this.isInitiator = isInitiator;
         this.addListener(callbacks);
-        console.log(`[WebRTCService] Initializing (Compatible Mode). Role: ${isInitiator ? 'Initiator' : 'Receiver'}`);
+        console.log(`[WebRTCService] Initializing Mesh Call. Role: ${isInitiator ? 'Initiator' : 'Receiver'}`);
 
-        if (!this.peerConnection) {
+        if (this.peerConnections.size === 0) {
             this.localStream = null;
             this.mediaStreamAttempted = false;
-            this.remoteStream = null;
+            this.remoteStreams.clear();
             this.partnerHasAccepted = false;
             this.setState('idle');
-            this.pendingCandidates = [];
+            this.pendingCandidates.clear();
         }
 
         // RE-LINK SIGNALING BRIDGE
@@ -754,46 +805,58 @@ class WebRTCService {
             if (this.callState === 'ended') return;
             if (this.callState === 'idle' && type !== 'offer') return;
 
-            const sender = (signal as any).sender_id || signal.callerId;
-            console.log(`[WebRTCService] 📨 Signal received: ${type} from ${sender}`);
+            const senderId = normalizeId((signal as any).sender_id || signal.callerId);
+            console.log(`[WebRTCService] 📨 Signal received: ${type} from ${senderId}`);
 
             try {
                 switch (type) {
                     case 'offer':
-                        if (!this.isInitiator && offer) {
-                            await this.answerCall(this.callType, offer);
+                        if (offer) {
+                            await this.answerCall(this.callType, offer, senderId);
                         }
                         break;
                     case 'answer':
-                        if (this.isInitiator && answer && this.peerConnection) {
-                            console.log('[WebRTCService] 📝 Setting remote description (answer)');
-                            await this.peerConnection.setRemoteDescription(new RTCSessionDescription(answer as any));
-                            await this.processPendingCandidates();
+                        if (answer) {
+                            const pc = this.peerConnections.get(senderId);
+                            if (pc) {
+                                console.log(`[WebRTCService] 📝 Setting remote description (answer) for ${senderId}`);
+                                await pc.setRemoteDescription(new RTCSessionDescription(answer as any));
+                                await this.processPendingCandidates(senderId);
+                            }
                         }
                         break;
                     case 'ice-candidate':
-                        if (candidate && this.peerConnection) {
+                        if (candidate) {
                             try {
-                                // NORMALIZE: Ensure candidate has all required fields in the correct format
                                 const candidateData = {
                                     candidate: candidate.candidate || candidate,
                                     sdpMid: candidate.sdpMid,
                                     sdpMLineIndex: candidate.sdpMLineIndex
                                 };
                                 
-                                console.log(`[WebRTCService] 🧊 Applying remote candidate: ${candidateData.candidate.substring(0, 30)}...`);
                                 const iceCandidate = new RTCIceCandidate(candidateData);
+                                const pc = this.peerConnections.get(senderId);
                                 
-                                if (this.peerConnection.remoteDescription && this.peerConnection.remoteDescription.type) {
-                                    await this.peerConnection.addIceCandidate(iceCandidate);
-                                    console.log('[WebRTCService] ✅ Remote candidate applied successfully');
+                                if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+                                    console.log(`[WebRTCService] 🧊 Applying remote candidate for ${senderId}`);
+                                    await pc.addIceCandidate(iceCandidate);
                                 } else {
-                                    console.log('[WebRTCService] 📥 Queueing candidate (remote description not yet set)');
-                                    this.pendingCandidates.push(iceCandidate);
+                                    console.log(`[WebRTCService] 📥 Queueing candidate for ${senderId}`);
+                                    if (!this.pendingCandidates.has(senderId)) {
+                                        this.pendingCandidates.set(senderId, []);
+                                    }
+                                    this.pendingCandidates.get(senderId)!.push(iceCandidate);
                                 }
                             } catch (e: any) {
-                                console.warn('[WebRTCService] ❌ Failed to add ICE candidate:', e.message);
+                                console.warn(`[WebRTCService] ❌ Failed to add ICE candidate from ${senderId}:`, e.message);
                             }
+                        }
+                        break;
+                    case 'call-accept':
+                        // If we are initiator and someone accepts, they join the mesh
+                        if (this.isInitiator) {
+                            console.log(`[WebRTCService] 👤 Peer ${senderId} accepted — establishing connection`);
+                            await this.getOrCreatePeerConnection(senderId);
                         }
                         break;
                     case 'call-end':
@@ -833,14 +896,14 @@ class WebRTCService {
      * Get current remote stream
      */
     getRemoteStream(): MediaStream | null {
-        return this.remoteStream;
+        return Array.from(this.remoteStreams.values())[0] || null;
     }
 
     /**
      * Check if a call is currently active
      */
     isCallActive(): boolean {
-        return !!this.peerConnection && (this.callState === 'connected' || this.callState === 'connecting' || this.callState === 'ringing');
+        return this.peerConnections.size > 0 && (this.callState === 'connected' || this.callState === 'connecting' || this.callState === 'ringing');
     }
 
     /**
@@ -863,10 +926,10 @@ class WebRTCService {
         console.log('[WebRTCService] ✅ prepareCall complete. Stream ready.');
     }
 
-    async startCall(): Promise<void> {
+    async startCall(callType: CallType, partnerId?: string, groupId?: string): Promise<string | null> {
         if (this.isCallActive() && this.isInitiator) {
             console.log('[WebRTCService] startCall ignored: Call already active as Initiator.');
-            return;
+            return callService.getCurrentRoomId();
         }
 
         try {
@@ -877,8 +940,9 @@ class WebRTCService {
             }
             this.ensureTurnReadinessOrThrow();
 
-            console.log('[WebRTCService] Starting call as Initiator');
+            console.log(`[WebRTCService] Starting ${callType} call as Initiator (Target: ${groupId || partnerId})`);
             this.isInitiator = true;
+            this.callType = callType;
             this.hasManualAudioOutputOverride = false;
             this.speakerEnabled = this.getPreferredSpeakerForCallType(this.callType);
             this.setState('ringing');
@@ -900,127 +964,147 @@ class WebRTCService {
                 }
             }
 
-            // Create peer connection
-            await this.createPeerConnection();
-
-            // We wait for 'call-accepted' from the partner.
-            console.log('[WebRTCService] ✅ Call initiated, waiting for partner to accept...');
-            
-            // If the partner accepted the call so fast that we received it before startCall finished:
-            if (this.partnerHasAccepted) {
-                console.log('[WebRTCService] ⚡ Partner already accepted before startCall finished. Generating offer instantly.');
-                await this.onCallAccepted();
-            }
-        } catch (error: any) {
-            console.error('[WebRTCService] ❌ Failed to start call:', error);
-            this.broadcast('onError', `Failed to start call: ${error.message}`);
-            this.endCall('start-failed');
-        }
-    }
-
-    /**
-     * Triggered when the initiator receives 'call-accepted'
-     */
-    async onCallAccepted(): Promise<void> {
-        this.partnerHasAccepted = true;
-        console.log(`[WebRTCService] ⚡ onCallAccepted called. PC: ${!!this.peerConnection}, initiator: ${this.isInitiator}, state: ${this.callState}`);
-        
-        if (this.isInitiator && this.peerConnection) {
-            // Guard: don't create multiple offers if it gets called twice somehow
-            if (this.peerConnection.signalingState !== 'stable') {
-                console.log('[WebRTCService] ⚠️ Offer deferred: signalingState is', this.peerConnection.signalingState);
-                if (this.offerRetryAttempts < this.MAX_OFFER_RETRIES && !this.offerRetryTimer) {
-                    this.offerRetryAttempts++;
-                    this.offerRetryTimer = setTimeout(() => {
-                        this.offerRetryTimer = null;
-                        if (this.callState === 'connecting' || this.callState === 'ringing') {
-                            this.onCallAccepted().catch((error) => {
-                                console.warn('[WebRTCService] Deferred offer retry failed:', error);
-                            });
-                        }
-                    }, 500);
+            if (this.pendingParticipants.size > 0) {
+                console.log(`[WebRTCService] ⚡ Flushing ${this.pendingParticipants.size} accepted participant(s) queued before caller was ready`);
+                const acceptedParticipants = Array.from(this.pendingParticipants);
+                for (const userId of acceptedParticipants) {
+                    await this.onCallAccepted(userId);
                 }
-                return;
             }
-            
-            console.log('[WebRTCService] 🚀 Partner accepted! Creating WebRTC offer NOW...');
-            if (this.offerRetryTimer) {
-                clearTimeout(this.offerRetryTimer);
-                this.offerRetryTimer = null;
-            }
-            this.offerRetryAttempts = 0;
-            this.signalingRole = 'offerer';
-            this.setState('connecting');
-            await this.createOffer();
-            console.log('[WebRTCService] ✅ Offer created and sent!');
-        } else {
-            console.log(`[WebRTCService] ⏳ Partner accepted but we are not ready. PC: ${!!this.peerConnection}, initiator: ${this.isInitiator}`);
+
+            return callService.getCurrentRoomId();
+        } catch (error: any) {
+            console.error('[WebRTCService] Failed to start call:', error);
+            this.broadcast('onError', error?.message || 'Failed to start call');
+            this.endCall('start-failed');
+            return null;
         }
     }
 
     /**
      * Answer an incoming call
      */
-    async answerCall(callType: CallType, offer: RTCSessionDescriptionInit, roomId?: string): Promise<void> {
+    async answerCall(callType: CallType, offer: any, senderId: string): Promise<void> {
+        console.log(`[WebRTCService] 📞 Answering ${callType} call from ${senderId}`);
+        this.callType = callType;
+        this.isInitiator = false;
+
         try {
-            this.ensureTurnReadinessOrThrow();
+            await this.activateAudioSession('answerCall');
+            await this.prepareCall(callType);
 
-            if (this.peerConnection && this.peerConnection.signalingState !== 'stable') {
-                console.log('[WebRTCService] Ignoring offer: signalingState is not stable:', this.peerConnection.signalingState);
-                return;
-            }
-
-            // FORCE LATCH ROOM: Ensure CallService knows where the answer should go
-            if (roomId) {
-                callService.joinRoom(roomId);
-            }
-
-            this.callType = callType;
-            this.isInitiator = false;
-            this.signalingRole = 'answerer';
-            this.hasManualAudioOutputOverride = false;
-            this.speakerEnabled = this.getPreferredSpeakerForCallType(callType);
+            const pc = await this.getOrCreatePeerConnection(senderId);
+            
+            console.log(`[WebRTCService] 📝 Setting remote description (offer) for ${senderId}`);
+            await pc.setRemoteDescription(new RTCSessionDescription(offer as any));
+            
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            
+            await callService.sendAnswer(answer, senderId);
+            await this.processPendingCandidates(senderId);
+            
             this.setState('connecting');
-            await this.activateAudioSession('answer-call');
-
-            // Ensure media is ready. If another code path (e.g. CallScreen init)
-            // already started getMediaStream, wait for it to finish rather than
-            // skipping — otherwise the answer SDP will have no audio tracks.
-            if (!this.localStream) {
-                if (this.mediaStreamAttempted) {
-                    // Another caller started getMediaStream — wait up to 10s
-                    console.log('[WebRTCService] ⏳ Waiting for pending media stream...');
-                    let waited = 0;
-                    while (!this.localStream && waited < 10000) {
-                        await new Promise(r => setTimeout(r, 250));
-                        waited += 250;
-                    }
-                }
-                // If still no stream, acquire it ourselves
-                if (!this.localStream) {
-                    this.mediaStreamAttempted = false;
-                    await this.prepareCall(callType);
-                }
-            }
-
-            // Create peer connection
-            await this.createPeerConnection();
-
-            // Set remote description (offer)
-            const remoteDesc = new RTCSessionDescription(offer as any);
-            await this.peerConnection!.setRemoteDescription(remoteDesc as any);
-
-            // Process pending ICE candidates
-            await this.processPendingCandidates();
-
-            // Create and send answer
-            await this.createAnswer();
-            console.log('[WebRTCService] ✅ Call answered successfully');
-
         } catch (error: any) {
-            console.error('[WebRTCService] ❌ Failed to answer call:', error);
-            this.broadcast('onError', `Failed to answer call: ${error.message}`);
-            this.endCall('answer-failed');
+            console.error(`[WebRTCService] Failed to answer call from ${senderId}:`, error);
+            this.broadcast('onError', error.message || 'Failed to answer call');
+        }
+    }
+
+    private async getOrCreatePeerConnection(userId: string): Promise<RTCPeerConnection> {
+        if (this.peerConnections.has(userId)) {
+            return this.peerConnections.get(userId)!;
+        }
+
+        console.log(`[WebRTCService] 🏗️ Creating PeerConnection for user: ${userId}`);
+        const configs = this.getPeerConnectionConfigs();
+        const pc = this.tryCreatePeerConnection(configs[0], `MeshPeer-${userId.substring(0, 8)}`, userId);
+        
+        this.peerConnections.set(userId, pc);
+
+        // Add local stream tracks to the connection
+        if (this.localStream) {
+            this.localStream.getTracks().forEach(track => {
+                pc.addTrack(track, this.localStream!);
+            });
+        }
+
+        return pc;
+    }
+
+    private removePeer(userId: string): void {
+        console.log(`[WebRTCService] 🗑️ Removing peer: ${userId}`);
+        const pc = this.peerConnections.get(userId);
+        if (pc) {
+            pc.close();
+            this.peerConnections.delete(userId);
+        }
+        
+        const stream = this.remoteStreams.get(userId);
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+            this.remoteStreams.delete(userId);
+            this.broadcast('onRemoteStream', null, userId);
+        }
+
+        if (this.peerConnections.size === 0 && this.callState !== 'idle') {
+            console.log('[WebRTCService] All peers gone, keeping local session alive for potential newcomers');
+            // If it's a group call, we might stay in 'ringing' or 'connected' with 0 peers 
+            // but if it's 1:1 and they hang up, we should probably end.
+            if (!callService.getCurrentRoomId()) {
+                this.endCall('no-peers-remaining');
+            }
+        }
+    }
+
+    private async processPendingCandidates(userId: string): Promise<void> {
+        const candidates = this.pendingCandidates.get(userId);
+        const pc = this.peerConnections.get(userId);
+        
+        if (!pc || !candidates || candidates.length === 0) return;
+
+        console.log(`[WebRTCService] 📤 Processing ${candidates.length} pending candidates for ${userId}`);
+        
+        for (const candidate of candidates) {
+            try {
+                await pc.addIceCandidate(candidate);
+            } catch (e: any) {
+                console.warn(`[WebRTCService] Error adding pending candidate for ${userId}:`, e.message);
+            }
+        }
+        
+        this.pendingCandidates.delete(userId);
+    }
+
+    /**
+     * Triggered when a participant joins (receives 'call-accepted')
+     */
+    async onCallAccepted(userId: string): Promise<void> {
+        const normalizedUserId = normalizeId(userId || '');
+        if (!normalizedUserId) {
+            console.warn('[WebRTCService] onCallAccepted called without a valid user id');
+            return;
+        }
+
+        this.partnerHasAccepted = true;
+        this.pendingParticipants.add(normalizedUserId);
+        console.log(`[WebRTCService] ⚡ onCallAccepted from ${normalizedUserId}`);
+
+        if (!this.isInitiator) {
+            console.log('[WebRTCService] ⏳ Accept received before caller finished initializing. Queued for later.');
+            return;
+        }
+
+        try {
+            const pc = await this.getOrCreatePeerConnection(normalizedUserId);
+            this.pendingParticipants.delete(normalizedUserId);
+
+            if (pc.signalingState === 'stable') {
+                this.setState('connecting');
+            }
+        } catch (error: any) {
+            console.error(`[WebRTCService] Failed to connect accepted participant ${normalizedUserId}:`, error);
+            this.broadcast('onError', error?.message || 'Failed to connect call');
         }
     }
 
@@ -1028,117 +1112,84 @@ class WebRTCService {
      * Handle incoming WebRTC signals
      */
     async handleSignal(signal: CallSignal): Promise<void> {
-        console.log(`[WebRTCService] 📨 handleSignal: type=${signal.type}, from=${signal.callerId?.substring(0,8)}, hasPayload=${!!signal.payload}, callState=${this.callState}`);
+        const myId = normalizeId(callService.getUserId() || '');
+        const senderId = normalizeId(signal.callerId || (signal as any).sender_id);
         
-        // [AUTO-CUT FIX] Ignore signals sent by OURSELVES (loopy signaling)
-        const myId = callService.getUserId();
-        if (myId) {
-            const normalizedMyId = normalizeId(myId);
-            const normalizedSenderId = normalizeId(signal.callerId || (signal as any).sender_id);
-            
-            if (normalizedMyId === normalizedSenderId) {
-                console.log(`[WebRTCService] 🔇 Dropping self-echo: ${signal.type}`);
-                return;
-            }
+        console.log(`[WebRTCService] 📨 handleSignal: type=${signal.type}, from=${senderId.substring(0, 8)}, state=${this.callState}`);
+
+        if (myId === senderId) {
+            console.log(`[WebRTCService] 🔇 Dropping self-echo: ${signal.type}`);
+            return;
         }
 
         try {
-            // [STABILITY FIX] If PC isn't ready, QUEUE the signal instead of dropping it
-            // Exception: 'offer' triggers the PC creation so it shouldn't be queued
-            if (!this.peerConnection && signal.type !== 'offer') {
-                console.log(`[WebRTCService] 📥 Queueing early signal: ${signal.type} (PC not ready)`);
-                this.earlySignalQueue.push(signal);
-                // Keep queue size manageable
-                if (this.earlySignalQueue.length > 30) this.earlySignalQueue.shift();
-                return;
-            }
-
             switch (signal.type) {
-                case 'offer':
-                    console.log('Received WebRTC offer. Current state:', this.peerConnection?.signalingState);
+                case 'offer': {
+                    console.log(`[WebRTCService] 🚀 Received offer from ${senderId}`);
+                    this.callType = signal.callType || 'audio';
+                    this.isInitiator = false;
                     
-                    // GLARE PROTECTION: If we both send an offer, the "polite" peer lets the other win.
-                    // We define "polite" as having the alphabetically later ID.
-                    if (this.peerConnection?.signalingState === 'have-local-offer') {
-                        const myId = callService.getUserId() || '';
-                        const partnerId = signal.callerId || '';
-                        if (myId.toLowerCase() < partnerId.toLowerCase()) {
+                    const pc = await this.getOrCreatePeerConnection(senderId);
+                    
+                    // Glare Protection (Polite/Impolite logic)
+                    if (pc.signalingState !== 'stable') {
+                        if (myId.toLowerCase() < senderId.toLowerCase()) {
                             console.log('[WebRTCService] 🚨 Signaling glare! We are "impolite", keeping our offer.');
                             return;
                         } else {
-                            console.log('[WebRTCService] 🚨 Signaling glare! We are "polite", rolling back our offer to accept theirs.');
-                            await this.peerConnection.setLocalDescription({ type: 'rollback' } as any);
-                            
-                            // Wait a short moment for state to settle to 'stable'
-                            let waitState = 0;
-                             while ((this.peerConnection.signalingState as string) !== 'stable' && waitState < 2000) {
-                                await new Promise(r => setTimeout(r, 50));
-                                waitState += 50;
-                            }
+                            console.log('[WebRTCService] 🚨 Signaling glare! Rolling back for', senderId);
+                            await pc.setLocalDescription({ type: 'rollback' } as any);
                         }
                     }
+
+                    await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
                     
-                    // PASS signal.callId to ensure CallService latches the room
-                    await this.answerCall(signal.callType, signal.payload, signal.roomId || signal.callId);
+                    await callService.sendAnswer(answer, senderId);
+                    await this.processPendingCandidates(senderId);
+                    this.setState('connected');
                     break;
+                }
 
-                case 'answer':
-                    console.log(`Received WebRTC answer. Current state: ${this.peerConnection?.signalingState}`);
-                    if (this.peerConnection && signal.payload) {
-                        // Guard: Only apply answer if we are in a state that can transition.
-                        // We allow 'stable' as a fallback to handle race conditions where an answer is re-sent.
-                        const state = this.peerConnection.signalingState;
-                        if (state !== 'have-local-offer' && state !== 'stable') {
-                            console.log('[WebRTCService] ⚠️ Ignoring answer: signalingState is', state);
-                            return;
-                        }
-                        
-                        try {
-                            const remoteDesc = new RTCSessionDescription(signal.payload);
-                            await this.peerConnection.setRemoteDescription(remoteDesc);
-                            console.log('[WebRTCService] ✅ Remote description (answer) set successfully');
-                            await this.processPendingCandidates();
-                        } catch (err) {
-                            console.warn('[WebRTCService] ❌ Failed to set remote answer:', err);
-                        }
+                case 'answer': {
+                    const pc = this.peerConnections.get(senderId);
+                    if (pc && signal.payload) {
+                        console.log(`[WebRTCService] ✅ Received answer from ${senderId}`);
+                        await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+                        await this.processPendingCandidates(senderId);
+                        this.setState('connected');
                     }
                     break;
+                }
 
-                case 'ice-candidate':
+                case 'ice-candidate': {
                     if (signal.payload) {
-                        try {
-                            const candidate = new RTCIceCandidate(signal.payload);
-                            console.log(`[WebRTCService] 🧊 Adding remote ICE candidate: ${candidate.candidate?.split(' ').slice(0, 3).join(' ')}...`);
-                            if (this.peerConnection?.remoteDescription) {
-                                await this.peerConnection.addIceCandidate(candidate);
-                            } else {
-                                // FIX #1: Limit pending candidates to prevent memory leak
-                                if (this.pendingCandidates.length >= this.MAX_PENDING_CANDIDATES) {
-                                    console.warn('[WebRTCService] ICE candidate queue full, dropping oldest candidate');
-                                    this.pendingCandidates.shift();
-                                }
-                                this.pendingCandidates.push(candidate);
-                                console.log(`[WebRTCService] 📦 Buffered candidate (Total: ${this.pendingCandidates.length})`);
+                        const pc = this.peerConnections.get(senderId);
+                        const candidate = new RTCIceCandidate(signal.payload);
+                        
+                        if (pc && pc.remoteDescription) {
+                            await pc.addIceCandidate(candidate);
+                        } else {
+                            if (!this.pendingCandidates.has(senderId)) {
+                                this.pendingCandidates.set(senderId, []);
                             }
-                        } catch (e) {
-                            console.warn('[WebRTCService] Failed to add ICE candidate:', e);
+                            const queue = this.pendingCandidates.get(senderId)!;
+                            if (queue.length < this.MAX_PENDING_CANDIDATES) {
+                                queue.push(candidate);
+                            }
                         }
                     }
                     break;
+                }
 
                 case 'call-end':
-                    console.log('Remote user ended call');
-                    this.endCall();
+                    console.log(`[WebRTCService] 🏁 Remote user ${senderId} ended call`);
+                    this.removePeer(senderId);
                     break;
             }
         } catch (error: any) {
-            // Check for known "wrong state" errors and suppress them if state is already correct
-            if (error.message?.includes('stable') && this.peerConnection?.signalingState === 'stable') {
-                console.log('[WebRTCService] Suppressed safe signaling state error');
-                return;
-            }
-            console.error('Failed to handle signal:', error);
-            this.broadcast('onError', `Signal handling failed: ${error.message}`);
+            console.error(`[WebRTCService] ❌ Failed to handle ${signal.type} from ${senderId}:`, error);
         }
     }
 
@@ -1146,11 +1197,10 @@ class WebRTCService {
      * End the current call
      */
     endCall(reason: string = 'manual'): void {
-        console.log(`[WebRTCService] 🚨 endCall() called. Reason: ${reason}. Current state: ${this.callState}`);
+        console.log(`[WebRTCService] 🚨 endCall() called. Reason: ${reason}. Total Peers: ${this.peerConnections.size}`);
 
         // Guard: prevent double-end
         if (this.callState === 'ended' || this.callState === 'idle') {
-            console.log(`[WebRTCService] endCall() ignored (reason: ${reason}) - already ${this.callState}`);
             return;
         }
 
@@ -1162,48 +1212,53 @@ class WebRTCService {
             try {
                 this.localStream.getTracks().forEach((track: any) => {
                     if (track && typeof track.stop === 'function') {
-                        try {
-                            track.stop();
-                        } catch (e) {
-                            console.warn('[WebRTCService] Error stopping track:', e);
-                        }
+                        track.stop();
                     }
                 });
             } catch (e) {
-                console.warn('[WebRTCService] Error getting tracks for stop:', e);
+                console.warn('[WebRTCService] Error stopping local tracks:', e);
             }
             this.localStream = null;
         }
 
-        // Close peer connection
-        if (this.peerConnection) {
-            this.peerConnection.close();
-            this.peerConnection = null;
-        }
+        // Close ALL peer connections
+        this.peerConnections.forEach((pc, userId) => {
+            console.log(`[WebRTCService] Closing connection to: ${userId}`);
+            pc.close();
+        });
+        this.peerConnections.clear();
 
-        this.remoteStream = null;
-        this.pendingCandidates = [];
+        // Stop all remote tracks
+        this.remoteStreams.forEach((stream, userId) => {
+            stream.getTracks().forEach(track => track.stop());
+            this.broadcast('onRemoteStream', null, userId);
+        });
+        this.remoteStreams.clear();
+
+        this.pendingCandidates.clear();
         this.partnerHasAccepted = false;
+        this.pendingParticipants.clear();
         this.isInitiator = false;
         this.signalingRole = 'none';
+        if (this.reconnectTimeout) {
+            clearTimeout(this.reconnectTimeout);
+            this.reconnectTimeout = null;
+        }
+        if (this.connectionWatchdog) {
+            clearTimeout(this.connectionWatchdog);
+            this.connectionWatchdog = null;
+        }
+        
         if (this.offerRetryTimer) {
             clearTimeout(this.offerRetryTimer);
             this.offerRetryTimer = null;
         }
         this.offerRetryAttempts = 0;
 
-        // STOP AUDIO SESSION: Release hardware
+        // STOP AUDIO SESSION
         void this.deactivateAudioSession(`end-call:${reason}`);
 
-        // Notify listeners
-        this.broadcast('onLocalStream', null);
-        this.broadcast('onRemoteStream', null);
-
-        // NOTE: Do NOT call callService.endCall() here.
-        // The endCall signal is sent by AppContext.endCall() to avoid
-        // a double-signal loop (AppContext -> webRTCService.endCall() -> callService.endCall() -> signal loop).
-
-        // Reset state after short delay, but only if not cleaned up
+        // Reset state after short delay
         setTimeout(() => {
             if (this.listeners.length > 0 && this.callState === 'ended') {
                 this.setState('idle');
@@ -1249,87 +1304,36 @@ class WebRTCService {
      * Switch call media mode between audio and video during an active call.
      * This keeps the same room/session and triggers renegotiation.
      */
+    /**
+     * Switch call media mode between audio and video during an active call.
+     */
     async switchCallType(nextType: CallType): Promise<void> {
         if (nextType === this.callType) return;
 
         console.log(`[WebRTCService] Switching call mode: ${this.callType} -> ${nextType}`);
-
-        if (!this.peerConnection) {
-            this.callType = nextType;
-            if (!this.hasManualAudioOutputOverride) {
-                this.speakerEnabled = this.getPreferredSpeakerForCallType(nextType);
-            }
-            await this.setAudioOutput(this.speakerEnabled, false);
-            if (!this.localStream) {
-                await this.prepareCall(nextType);
-            }
-            return;
-        }
-
-        if (nextType === 'video') {
-            if (!mediaDevices?.getUserMedia) {
-                throw new Error(this.getAvailabilityError());
-            }
-
-            if (!this.localStream) {
-                this.callType = 'video';
-                await this.getMediaStream();
-            } else {
-                const existingVideo = this.localStream.getVideoTracks();
-                if (existingVideo.length === 0) {
-                    const camStream = await mediaDevices.getUserMedia({
-                        audio: false,
-                        video: { facingMode: 'user' },
-                    });
-                    const videoTracks = camStream?.getVideoTracks?.() || [];
-                    for (const track of videoTracks) {
-                        track.enabled = true;
-                        try { this.localStream.addTrack(track); } catch (_) {}
-                        try { this.peerConnection.addTrack(track, this.localStream); } catch (_) {}
-                    }
-                } else {
-                    existingVideo.forEach((track: any) => { track.enabled = true; });
-                }
-            }
-        } else {
-            // Downgrade to audio: remove local video tracks and related senders
-            if (this.localStream) {
-                const videoTracks = this.localStream.getVideoTracks();
-                for (const track of videoTracks) {
-                    try { track.enabled = false; } catch (_) {}
-                    try { track.stop(); } catch (_) {}
-                    try { this.localStream.removeTrack(track); } catch (_) {}
-                }
-            }
-
-            try {
-                const senders = this.peerConnection.getSenders?.() || [];
-                for (const sender of senders) {
-                    const senderTrack = sender?.track;
-                    if (senderTrack?.kind === 'video') {
-                        try { await sender.replaceTrack(null); } catch (_) {}
-                        try { this.peerConnection.removeTrack(sender); } catch (_) {}
-                    }
-                }
-            } catch (error) {
-                console.warn('[WebRTCService] Failed to remove video sender during audio downgrade:', error);
-            }
-        }
-
         this.callType = nextType;
-        this.broadcast('onLocalStream', this.localStream);
 
-        // Update audio routing for the new mode
         if (!this.hasManualAudioOutputOverride) {
             this.speakerEnabled = this.getPreferredSpeakerForCallType(nextType);
         }
         await this.setAudioOutput(this.speakerEnabled, false);
 
-        // Trigger renegotiation from this side if we're in a stable state.
-        if (this.peerConnection.signalingState === 'stable') {
-            await this.createOffer();
-        } else {
-            console.log(`[WebRTCService] Skipping immediate renegotiation, signalingState=${this.peerConnection.signalingState}`);
+        // Update local stream
+        await this.prepareCall(nextType);
+
+        // Replace tracks in all peer connections
+        if (this.peerConnections.size > 0 && this.localStream) {
+            const videoTrack = this.localStream.getVideoTracks()[0];
+            const audioTrack = this.localStream.getAudioTracks()[0];
+
+            for (const [userId, pc] of this.peerConnections.entries()) {
+                const senders = pc.getSenders();
+                const videoSender = senders.find(s => s.track?.kind === 'video');
+                const audioSender = senders.find(s => s.track?.kind === 'audio');
+
+                if (videoSender && videoTrack) await videoSender.replaceTrack(videoTrack);
+                if (audioSender && audioTrack) await audioSender.replaceTrack(audioTrack);
+            }
         }
     }
 
@@ -1353,11 +1357,13 @@ class WebRTCService {
     }
 
     getSignalingState(): string {
-        return (this.peerConnection as any)?.signalingState || 'idle';
+        const firstPc = Array.from(this.peerConnections.values())[0];
+        return (firstPc as any)?.signalingState || 'idle';
     }
 
     getIceConnectionState(): string {
-        return (this.peerConnection as any)?.iceConnectionState || 'idle';
+        const firstPc = Array.from(this.peerConnections.values())[0];
+        return (firstPc as any)?.iceConnectionState || 'idle';
     }
 
     // Private methods
@@ -1405,22 +1411,22 @@ class WebRTCService {
             });
             
             // If we already have a PeerConnection, add these tracks NOW
-            if (this.peerConnection && this.localStream) {
-                console.log('[WebRTCService] Adding local tracks to existing PeerConnection');
-                let tracksAdded = false;
-                this.localStream.getTracks().forEach((track: any) => {
-                    try {
-                        this.peerConnection!.addTrack(track, this.localStream!);
-                        tracksAdded = true;
-                    } catch (e) {
-                        console.warn('[WebRTCService] Failed to add track to existing PC:', e);
-                    }
-                });
+            // If we have any existing PeerConnections, add these tracks to all of them
+            if (this.peerConnections.size > 0 && this.localStream) {
+                console.log(`[WebRTCService] Adding local tracks to ${this.peerConnections.size} existing PeerConnections`);
+                for (const [userId, pc] of this.peerConnections.entries()) {
+                    this.localStream.getTracks().forEach((track: any) => {
+                        try {
+                            pc.addTrack(track, this.localStream!);
+                        } catch (e) {
+                            console.warn(`[WebRTCService] Failed to add track to PC for ${userId}:`, e);
+                        }
+                    });
 
-                // CRITICAL: If we added tracks late, we MUST re-negotiate
-                if (tracksAdded && this.peerConnection.signalingState === 'stable') {
-                    console.log('[WebRTCService] 🔄 Late tracks added, triggering re-negotiation...');
-                    this.createOffer().catch(e => console.warn('Late offer failed:', e));
+                    // Trigger re-negotiation if needed for this peer
+                    if (pc.signalingState === 'stable') {
+                        this.createOffer(userId).catch(e => console.warn(`Late offer failed for ${userId}:`, e));
+                    }
                 }
             }
 
@@ -1471,10 +1477,12 @@ class WebRTCService {
                     this.localStream = await Promise.race([audioOnlyPromise, audioTimeout]);
                     
                     // If we already have a PeerConnection, add these tracks NOW
-                    if (this.peerConnection && this.localStream) {
-                        this.localStream.getTracks().forEach((track: any) => {
-                            try { this.peerConnection!.addTrack(track, this.localStream!); } catch (e) {}
-                        });
+                    if (this.peerConnections.size > 0 && this.localStream) {
+                        for (const [userId, pc] of this.peerConnections.entries()) {
+                            this.localStream.getTracks().forEach((track: any) => {
+                                try { pc.addTrack(track, this.localStream!); } catch (e) {}
+                            });
+                        }
                     }
 
                     this.broadcast('onLocalStream', this.localStream);
@@ -1493,709 +1501,110 @@ class WebRTCService {
         }
     }
 
-    private async createPeerConnection(): Promise<void> {
-        // Guard: skip if PC already exists (prevents double-creation)
-        if (this.peerConnection) {
-            console.log('[WebRTCService] PeerConnection already exists, skipping creation');
-            return;
-        }
-
-        if (!webRTCNativeReady) {
-            throw new Error(this.getAvailabilityError());
-        }
-
-        if (!RTCPeerConnection) {
-            console.error('RTCPeerConnection is not defined. Check react-native-webrtc installation.');
-            throw new Error('WebRTC engine not available. You are likely using Expo Go. Please use a Development Build.');
-        }
-
-        const normalizedIceServers = await this.getNormalizedIceServers();
-        // Use our new High-Reliability configuration layer
-        const configs = this.getPeerConnectionConfigs();
-
-        const connectionAttempts = configs.map((config, index) => ({
-            label: index === 0 ? 'primary-relay' : `fallback-${index}`,
-            config,
-        }));
-
-        let createdPeerConnection: RTCPeerConnection | null = null;
-        let lastCreateError: any = null;
-
-        for (const attempt of connectionAttempts) {
-            try {
-                createdPeerConnection = this.tryCreatePeerConnection(attempt.config, attempt.label);
-                if (attempt.label !== 'primary') {
-                    console.warn(`[WebRTCService] PeerConnection recovered using ${attempt.label} config`);
-                }
-                break;
-            } catch (pcError: any) {
-                lastCreateError = pcError;
-                const attemptMessage = String(pcError?.message || pcError || 'unknown');
-                console.warn(`[WebRTCService] PeerConnection init failed (${attempt.label}): ${attemptMessage}`);
-            }
-        }
-
-        if (!createdPeerConnection) {
-            const msg = String(lastCreateError?.message || lastCreateError || 'unknown');
-            if (msg.includes('peerConnectionInit') || msg.includes('null')) {
-                throw new Error(
-                    'WebRTC native module is not initialized in this app build. Please rebuild dev client (expo prebuild + expo run:android/ios).'
-                );
-            }
-            throw new Error(`Failed to initialize PeerConnection, check the native logs! (${msg})`);
-        }
-
-        this.peerConnection = createdPeerConnection;
-
-        // UNIFIED PLAN TRACK MANAGEMENT
-        // With 'unified-plan', we use addTrack to link tracks to streams correctly.
-        // We avoid manual addTransceiver for basic 1:1 calls to prevent SDP bloat/conflicts,
-        // as addTrack automatically creates the necessary transceivers.
-
-        // Add existing local tracks to connection
-        if (this.localStream) {
-            this.localStream.getTracks().forEach((track: any) => {
-                try {
-                    this.peerConnection!.addTrack(track, this.localStream!);
-                } catch (e) {
-                    console.warn('[WebRTCService] Error adding track during PC creation:', e);
-                }
-            });
-        }
-
-        // Cast peerConnection for event handlers (react-native-webrtc types)
-        const pc = this.peerConnection as any;
-
-        // Handle incoming tracks
-        pc.addEventListener('track', (event: any) => {
-            const kind = event.track?.kind;
-            const track = event.track;
-            
-            // IGNORE if no track
-            if (!track) return;
-
-            console.log(`[WebRTCService] 📡 Remote track received: ${kind} | State: ${track.readyState} | Enabled: ${track.enabled}`);
-            
-            // CRITICAL: Explicitly enable the track. Sometimes they arrive disabled.
-            try {
-                if (track.enabled === false) {
-                    console.log(`[WebRTCService] 🛠 Enabling disabled remote track: ${kind}`);
-                    track.enabled = true;
-                }
-            } catch (e) {
-                console.warn('[WebRTCService] Failed to explicitly enable track:', e);
-            }
-
-            if (event.streams && event.streams[0]) {
-                this.remoteStream = event.streams[0];
-                console.log(`[WebRTCService] 📡 Remote stream attached: ${this.remoteStream.id}`);
-            } else {
-                console.warn('[WebRTCService] 📡 Track received but no streams found in event — creating local container');
-                // Fallback: if we have a track but it's not in a stream, create one
-                if (!this.remoteStream) {
-                    this.remoteStream = new MediaStream();
-                }
-                
-                // Only add if not already present
-                const tracks = this.remoteStream.getTracks();
-                const exists = tracks.some((t: any) => t.id === track.id);
-                if (!exists) {
-                    this.remoteStream.addTrack(track);
-                }
-            }
-
-            if (this.remoteStream) {
-                // Double-check: ensure all tracks in the container are enabled and live
-                this.remoteStream.getTracks().forEach((t: any) => {
-                    if (!t.enabled) {
-                        console.log(`[WebRTCService] 🛠 Auto-enabling track ${t.id} in stream container`);
-                        t.enabled = true;
-                    }
-                });
-
-                this.broadcast('onRemoteStream', this.remoteStream);
-
-                const iceReady =
-                    pc.iceConnectionState === 'connected'
-                    || pc.iceConnectionState === 'completed';
-                const peerReady = pc.connectionState === 'connected';
-
-                if (iceReady || peerReady) {
-                    this.setState('connected');
-                } else {
-                    console.log(
-                        `[WebRTCService] Remote track received before transport connected. ICE=${pc.iceConnectionState} Peer=${pc.connectionState}`
-                    );
-                }
-                
-                // Verify encryption
-                this.verifyEncryption();
-            }
-        });
-
-        // --- ICE Candidate Management & Batching ---
-        let candidateBatch: any[] = [];
-        let batchTimer: NodeJS.Timeout | null = null;
-
-        const flushCandidates = () => {
-            if (candidateBatch.length === 0) return;
-            console.log(`[WebRTCService] 🧊 Flushing batch of ${candidateBatch.length} ICE candidates`);
-            candidateBatch.forEach(c => callService.sendIceCandidate(c));
-            candidateBatch = [];
-            batchTimer = null;
-        };
-
-        pc.addEventListener('icecandidate', (event: any) => {
-            if (event.candidate) {
-                candidateBatch.push(event.candidate);
-                if (!batchTimer) {
-                    batchTimer = setTimeout(flushCandidates, 150);
-                }
-            } else {
-                flushCandidates();
-                console.log('[WebRTCService] ICE candidates collection finished (End-of-Candidates)');
-            }
-        });
-
-        // Update connection state handler with recovery logic
-        pc.addEventListener('connectionstatechange', () => {
-            const state = pc.connectionState;
-            console.log('[WebRTCService] 📶 Connection state changed:', state.toUpperCase());
-
-            switch (state) {
-                case 'connected':
-                    this.setState('connected');
-                    // Reset recovery attempts on successful reconnection
-                    this.reconnectAttempts = 0;
-                    if (this.reconnectTimeout) {
-                        clearTimeout(this.reconnectTimeout);
-                        this.reconnectTimeout = null;
-                    }
-                    break;
-
-                case 'disconnected':
-                    // IMPORTANT: 'disconnected' is TRANSIENT state, NOT final
-                    // WebRTC stack will automatically attempt to recover
-                    this.lastDisconnectTime = Date.now();
-                    console.warn('[WebRTCService] ⚠️ Connection transiently disconnected. Waiting for automatic recovery...');
-
-                    // Give WebRTC 10 seconds to auto-recover before manual intervention
-                    if (!this.reconnectTimeout) {
-                        this.reconnectTimeout = setTimeout(() => {
-                            // After 10 seconds, if still disconnected, attempt manual recovery
-                            if (pc.connectionState === 'disconnected' && this.reconnectAttempts < this.maxReconnectAttempts) {
-                                this.reconnectAttempts++;
-                                console.log(`[WebRTCService] Attempting manual recovery (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
-                                this.attemptRecovery();
-                            } else if (pc.connectionState === 'disconnected') {
-                                console.error('[WebRTCService] Max recovery attempts exceeded. Ending call.');
-                                this.endCall('recovery-exhausted');
-                            }
-                        }, 10000);
-                    }
-                    break;
-
-                case 'failed':
-                case 'closed':
-                    // 'failed' and 'closed' ARE FINAL states
-                    console.warn(`[WebRTCService] Connection permanently ${state}. Ending call.`);
-                    if (this.reconnectTimeout) {
-                        clearTimeout(this.reconnectTimeout);
-                        this.reconnectTimeout = null;
-                    }
-                    this.reconnectAttempts = 0;
-                    this.endCall(`pc-state-${state}`);
-                    break;
-            }
-        });
-
-        // Add ICE connection state handler with recovery
-        pc.addEventListener('iceconnectionstatechange', () => {
-            const iceState = pc.iceConnectionState;
-            console.log('[WebRTCService] 🧊 ICE state changed:', iceState);
-
-            switch (iceState) {
-                case 'connected':
-                case 'completed':
-                    // Once media is flowing (which we check in 'track' event), 
-                    // ICE states like 'completed' just confirm stability.
-                    this.setState('connected');
-                    break;
-
-                case 'disconnected':
-                    // ICE layer disconnection is often transient
-                    // Wait for auto-recovery before taking action
-                    console.warn('[WebRTCService] ⚠️ ICE transiently disconnected. Waiting for auto-repair...');
-                    break;
-
-                case 'checking':
-                    console.log('[WebRTCService] ICE is checking connection candidates...');
-                    break;
-
-                case 'failed':
-                    console.warn('[WebRTCService] ❌ ICE connection failed');
-                    console.warn('[WebRTCService] Note: On 4G/5G networks, ensure TURN server is configured');
-                    // Don't immediately end - connectionstatechange handler will handle final failure
-                    break;
-
-                case 'closed':
-                    console.log('[WebRTCService] ICE connection closed');
-                    this.endCall('ice-closed');
-                    break;
-            }
-        });
-
-        // ICE gathering state — critical for diagnosing "stuck at connecting"
-        pc.addEventListener('icegatheringstatechange', () => {
-            console.log('[WebRTCService] 🧊 ICE gathering state:', pc.iceGatheringState);
-        });
-
-        console.log('[WebRTCService] Peer connection created. ICE gathering:', pc.iceGatheringState);
-    }
-
-    private async createOffer(): Promise<void> {
-        if (!this.peerConnection) return;
-
-        // GUARD: If we are already in the middle of signaling, wait or ignore
-        if (this.peerConnection.signalingState !== 'stable') {
-            console.log(`[WebRTCService] createOffer ignored: signalingState is ${this.peerConnection.signalingState}`);
-            return;
-        }
-
-        const offerOptions = {
-            offerToReceiveAudio: true,
-            offerToReceiveVideo: this.callType === 'video',
-            iceRestart: false
-        };
-
-        const offer = await this.peerConnection.createOffer(offerOptions);
-        await this.peerConnection.setLocalDescription(offer);
-
-        console.log('Sending offer...');
-        callService.sendOffer(offer);
-    }
-
-    private async createAnswer(): Promise<void> {
-        if (!this.peerConnection) return;
-
-        const answerOptions = {
-            offerToReceiveAudio: true,
-            offerToReceiveVideo: this.callType === 'video',
-        };
-
-        const answer = await this.peerConnection.createAnswer(answerOptions);
-        await this.peerConnection.setLocalDescription(answer);
-
-        const pc = this.peerConnection as any;
-        console.log(`[WebRTCService] POST-SLD: gathering=${pc.iceGatheringState} signaling=${pc.signalingState} connection=${pc.connectionState} ice=${pc.iceConnectionState}`);
-
-        console.log('[WebRTCService] Sending answer...');
-        callService.sendAnswer(answer);
-    }
-
-    private async processPendingCandidates(): Promise<void> {
-        if (!this.peerConnection || !this.peerConnection.remoteDescription) return;
-        if (this.pendingCandidatesMutex) return;
-        this.pendingCandidatesMutex = true;
-
-        try {
-            console.log(`[WebRTCService] 🧊 Processing ${this.pendingCandidates.length} queued remote candidates...`);
-            const candidates = [...this.pendingCandidates];
-            this.pendingCandidates = [];
-
-            for (const candidate of candidates) {
-                try {
-                    await this.peerConnection.addIceCandidate(candidate);
-                } catch (e: any) {
-                    console.warn('[WebRTCService] Failed to apply queued candidate:', e.message);
-                }
-            }
-        } finally {
-            this.pendingCandidatesMutex = false;
-        }
-
-        // Also check if we have any other queued signals to process now that description is set
-        if (this.earlySignalQueue.length > 0) {
-            void this.processQueuedSignals();
-        }
-    }
-
-    private async processQueuedSignals(): Promise<void> {
-        if (!this.peerConnection) return;
-        console.log(`[WebRTCService] 📤 Flushing ${this.earlySignalQueue.length} early signals...`);
-        const signals = [...this.earlySignalQueue];
-        this.earlySignalQueue = [];
-        
-        for (const signal of signals) {
-            await this.handleSignal(signal);
-        }
-    }
-
-    private setState(state: CallState): void {
-        // PREVENT DOWNGRADE: If we are already connected, don't go back to connecting
-        // unless the state is failed, ended, or idle.
-        if (this.callState === 'connected' && state === 'connecting') {
-            console.log('[WebRTCService] 🛡️ Ignoring state downgrade from connected to connecting');
-            return;
-        }
-
-        console.log(`[WebRTCService] State change: ${this.callState} -> ${state}`);
-        this.callState = state;
-        
-        // Force broadcast multiple times to ensure and handle any race conditions in listeners
-        this.broadcast('onStateChange', state);
-        if (state === 'connected') {
-            // Also broadcast streams again to be absolutely sure
-            console.log('[WebRTCService] 📡 Connected! Broadcasting tracks. Local:', this.localStream?.getTracks().length, 'Remote:', this.remoteStream?.getTracks().length);
-            this.broadcast('onLocalStream', this.localStream);
-            this.broadcast('onRemoteStream', this.remoteStream);
-            void this.activateAudioSession('state-connected').catch((error: any) => {
-                console.warn('[WebRTCService] Failed to enforce audio session on connected state:', error?.message || error);
-            });
-        }
-
-        // Start/Stop media tracking
-        if (state === 'connected') {
-            this.startTrackMonitoring();
-        } else if (state === 'ended' || state === 'idle') {
-            this.stopTrackMonitoring();
-        }
-
-        // Connection Watchdog: If we stay in 'connecting' too long, fail the call
-        if (this.connectionWatchdog) {
-            clearTimeout(this.connectionWatchdog);
-            this.connectionWatchdog = null;
-        }
-
-        if (state === 'connecting') {
-            const timeoutMs = 25000; // Reduced from 35s to 25s for better UX
-            this.connectionWatchdog = setTimeout(() => {
-                if (this.callState === 'connecting') {
-                    console.warn(`[WebRTCService] 🚨 Connection watchdog timeout after ${timeoutMs}ms!`);
-                    this.endCall('connection-timeout');
-                    this.broadcast('onError', 'Connection timed out. Please check your network or try again.');
-                }
-            }, timeoutMs);
-
-            // Add an intermediate diagnostic check at 10s
-            setTimeout(() => {
-                if (this.callState === 'connecting') {
-                    console.log('[WebRTCService] ℹ️ Still connecting at 10s. Checking for signaling issues...');
-                    // Logic here could trigger a re-poll or extra diagnostic if needed
-                }
-            }, 10000);
-        }
-    }
-
-    private broadcast(method: string, data: any): void {
+    private broadcast(method: string, data: any, userId?: string): void {
         this.listeners.forEach((listener: any) => {
             if (typeof listener[method] === 'function') {
-                listener[method](data);
+                listener[method](data, userId);
             }
         });
     }
 
-    // FIX #13: Verify DTLS/SRTP encryption is established
-    private async verifyEncryption(): Promise<void> {
-        if (!this.peerConnection) return;
-
-        try {
-            const senders = this.peerConnection.getSenders();
-            for (const sender of senders) {
-                if (sender.transport) {
-                    const state = sender.transport.state;
-                    console.log('[WebRTCService] Sender transport state:', state);
-                    if (state !== 'connected' && state !== 'new') {
-                        console.warn('[WebRTCService] ⚠️ Encryption may not be properly established');
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('[WebRTCService] Error verifying encryption:', error);
-        }
-    }
-
-    private stopTrackMonitoring(): void {
-        if (this.trackMonitorTimer) {
-            console.log('[WebRTCService] 🔍 Stopping media track monitor');
-            clearInterval(this.trackMonitorTimer);
-            this.trackMonitorTimer = null;
-        }
-    }
-
-    private startTrackMonitoring(): void {
+    private startTrackMonitor(): void {
         this.stopTrackMonitoring();
-        console.log('[WebRTCService] 🔍 Starting media track monitor');
-        
-        let counter = 0;
-        let hasStatsSample = false;
-        let lastRxBytes = 0;
-        let lastRxBytesChangedAt = Date.now();
-
         this.trackMonitorTimer = setInterval(() => {
-            if (!this.peerConnection) {
-                this.stopTrackMonitoring();
-                return;
-            }
+            if (this.peerConnections.size === 0) return;
             
-            counter++;
-            const localAudio = this.localStream?.getAudioTracks() || [];
-            const remoteAudio = this.remoteStream?.getAudioTracks() || [];
-            const remoteVideo = this.remoteStream?.getVideoTracks() || [];
-            const iceState = this.getIceConnectionState();
-            const sigState = this.getSignalingState();
-
-            const lAudioInfo = localAudio.map((t: any) => `${t.readyState}${t.enabled?'✔️':'❌'}${t.muted?'🔇':''}`).join(',');
-            const rAudioInfo = remoteAudio.map((t: any) => `${t.readyState}${t.enabled?'✔️':'❌'}${t.muted?'🔇':''}`).join(',');
-
-            // Log stats every 1s (aggressive)
-            if (counter <= 30) {
-                // Ensure audio routing is stable on first tick only
-                if (counter === 1) {
-                    void this.setAudioOutput(this.speakerEnabled, false).catch(() => {});
-                }
-
-                // TRY TO GET BYTES RECEIVED
-                if (this.peerConnection && typeof (this.peerConnection as any).getStats === 'function') {
-                    (this.peerConnection as any).getStats().then((stats: any) => {
-                        let totalBytes = 0;
-                        let hasAudioInboundReport = false;
-
-                        stats.forEach((report: any) => {
-                            const type = String(report?.type || '').toLowerCase();
-                            if (type !== 'inbound-rtp') return;
-
-                            const kind = String(report?.kind || report?.mediaType || '').toLowerCase();
-                            const codec = String(report?.mimeType || report?.codecMimeType || '').toLowerCase();
-                            const isAudioInbound =
-                                kind === 'audio'
-                                || kind.includes('audio')
-                                || codec.includes('audio');
-
-                            if (isAudioInbound) {
-                                hasAudioInboundReport = true;
-                                totalBytes += Number(report?.bytesReceived || 0);
-                            }
-                        });
-
-                        // Fallback for runtimes that omit kind/mediaType on inbound-rtp reports.
-                        if (!hasAudioInboundReport) {
-                            stats.forEach((report: any) => {
-                                if (String(report?.type || '').toLowerCase() === 'inbound-rtp') {
-                                    totalBytes += Number(report?.bytesReceived || 0);
-                                }
-                            });
-                        }
-
-                        if (!Number.isFinite(totalBytes) || totalBytes < 0) {
-                            totalBytes = 0;
-                        }
-
-                        hasStatsSample = true;
-                        if (totalBytes > lastRxBytes) {
-                            lastRxBytes = totalBytes;
-                            lastRxBytesChangedAt = Date.now();
-                        }
-
-                        const statsData = { bytesReceived: totalBytes };
-                        this.lastStats = statsData;
-                        this.broadcast('onStats', statsData);
-                    }).catch(() => {});
-                }
-                
-                if (counter % 5 === 0) {
-                    console.log(`[WebRTC_STATS] Role: ${this.isInitiator ? 'In' : 'Rx'} | ICE: ${iceState} | SIG: ${sigState} | Audio-L: [${lAudioInfo}] Audio-R: [${rAudioInfo}] | Video-R: ${remoteVideo.length}`);
+            for (const [userId, pc] of this.peerConnections.entries()) {
+                if (pc.iceConnectionState === 'failed') {
+                    console.warn(`[WebRTCService] 🚨 Connection failed for ${userId}`);
                 }
             }
-            
-            // AUTO-RECOVERY: If we are connected but have 0 bytes received after 5 seconds,
-            // it's a network bridge failure. Force ICE restart.
-            if (this.callState === 'connected' && counter > 5) {
-                const statsValue: any = this.lastStats || { bytesReceived: 0 };
-                const hasNoAudio = remoteAudio.length === 0;
-                const allMuted = remoteAudio.length > 0 && remoteAudio.every((t: any) => t.muted);
-                const now = Date.now();
-                const transportReady = iceState === 'connected' || iceState === 'completed';
-                const noAudioBytesFlow =
-                    transportReady
-                    && hasStatsSample
-                    && remoteAudio.length > 0
-                    && counter > 10
-                    && (Number(statsValue.bytesReceived || 0) <= 0 || (now - lastRxBytesChangedAt) > 18000);
-
-                if (noAudioBytesFlow) {
-                    if (now - this.lastRecoveryAttemptAt >= this.RECOVERY_COOLDOWN_MS) {
-                        this.lastRecoveryAttemptAt = now;
-                        console.warn('[WebRTCService] 🚨 Audio data flow stalled. Triggering controlled recovery...');
-                        this.attemptRecovery().catch(() => {});
-                    }
-                }
-                
-                if (transportReady && (hasNoAudio || allMuted)) {
-                    console.warn(`[WebRTCService] ⚠️ ${hasNoAudio ? '0 remote tracks' : 'Muted remote tracks'} detected! Attempting recovery...`);
-                    // If we have transceivers, check their direction
-                    try {
-                        const transceivers = this.peerConnection.getTransceivers();
-                        transceivers.forEach((tr: any) => {
-                            if (tr.receiver && tr.receiver.track && tr.receiver.track.kind === 'audio') {
-                                if (!tr.receiver.track.enabled) tr.receiver.track.enabled = true;
-                            }
-                        });
-                    } catch (e) {}
-
-                    if (now - this.lastRecoveryAttemptAt >= this.RECOVERY_COOLDOWN_MS) {
-                        this.lastRecoveryAttemptAt = now;
-                        this.attemptRecovery().catch((e) => {
-                            console.warn('[WebRTCService] Recovery trigger from monitor failed:', e);
-                        });
-                    }
-                }
-            }
-        }, 1000); // NUCLEAR: Check stats and kick hardware every 1 second 
+        }, 10000);
     }
 
-    // Add recovery attempt method
-    private async attemptRecovery(): Promise<void> {
-        try {
-            console.log('[WebRTCService] Attempting manual recovery...');
-            
-            if (!this.peerConnection) {
-                console.log('[WebRTCService] No peer connection available');
-                return;
-            }
-            
-            if (typeof this.peerConnection.restartIce === 'function') {
-                try {
-                    this.peerConnection.restartIce();
-                    console.log('[WebRTCService] restartIce() invoked');
-                } catch (e) {
-                    console.warn('[WebRTCService] restartIce() failed:', e);
-                }
-            }
-
-            // Controlled renegotiation with ICE restart.
-            // Keep the initiator as the owner of recovery offers to avoid
-            // the receiver entering have-local-offer during initial setup.
-            if (this.peerConnection.signalingState === 'stable' && this.isInitiator) {
-                const offerOptions = {
-                    iceRestart: true,
-                    offerToReceiveAudio: true,
-                    offerToReceiveVideo: this.callType === 'video',
-                };
-                const offer = await this.peerConnection.createOffer(offerOptions);
-                await this.peerConnection.setLocalDescription(offer);
-                callService.sendOffer(offer);
-            } else {
-                console.log(
-                    `[WebRTCService] Skipping recovery offer, role=${this.isInitiator ? 'initiator' : 'receiver'} signalingState=${this.peerConnection.signalingState}`
-                );
-            }
-            
-            console.log('[WebRTCService] Recovery attempt initiated. Waiting for reconnection...');
-            
-        } catch (error) {
-            console.error('[WebRTCService] Recovery attempt failed:', error);
-        }
-    }
-
-    /**
-     * Start connection watchdog - monitors for stuck connections
-     */
     private startConnectionWatchdog(): void {
         if (this.connectionWatchdog) {
             clearTimeout(this.connectionWatchdog);
         }
 
-        // Wait 7 seconds for auto-recovery (whatsapp-grade speed)
         this.connectionWatchdog = setTimeout(() => {
-            if (this.callState === 'connecting' || this.callState === 'ringing') {
-                const pc = this.peerConnection as any;
-                if (pc && (pc.connectionState !== 'connected' && pc.iceConnectionState !== 'connected')) {
-                    console.warn('[WebRTCService] ⏰ Connection watchdog timeout — forcing recovery');
-                    this.attemptRecovery();
-                }
+            this.connectionWatchdog = null;
+
+            if (this.callState !== 'connecting' && this.callState !== 'ringing') {
+                return;
+            }
+
+            const hasConnectedPeer = Array.from(this.peerConnections.values()).some((pc) => (
+                pc.connectionState === 'connected'
+                || pc.iceConnectionState === 'connected'
+                || pc.iceConnectionState === 'completed'
+            ));
+
+            if (!hasConnectedPeer && this.peerConnections.size > 0) {
+                console.warn('[WebRTCService] ⏰ Connection watchdog timeout — attempting ICE restart');
+                void this.attemptIceRestart().catch((error: any) => {
+                    console.warn('[WebRTCService] Connection watchdog ICE restart failed:', error?.message || error);
+                });
             }
         }, 7000);
     }
 
-    /**
-     * Track monitor - ensures tracks remain attached to PC
-     */
-    private startTrackMonitor(): void {
-        if (this.trackMonitorTimer) clearInterval(this.trackMonitorTimer);
-        
-        this.trackMonitorTimer = setInterval(() => {
-            if (this.callState !== 'connecting' && this.callState !== 'connected') {
-                if (this.trackMonitorTimer) clearInterval(this.trackMonitorTimer);
-                this.trackMonitorTimer = null;
-                return;
-            }
-
-            const pc = this.peerConnection;
-            if (pc && this.localStream) {
-                const senders = (pc as any).getSenders?.() || [];
-                const localTrackCount = this.localStream.getTracks().length;
-                
-                if (senders.length < localTrackCount && this.callState === 'connected') {
-                    console.warn(`[WebRTCService] 🚨 Track mismatch detected (${senders.length} senders vs ${localTrackCount} tracks). Re-attaching...`);
-                    this.localStream.getTracks().forEach((track: any) => {
-                        const exists = senders.some((s: any) => s.track?.id === track.id);
-                        if (!exists) {
-                            try { (pc as any).addTrack(track, this.localStream!); } catch (_) {}
-                        }
-                    });
-                }
-            }
-        }, this.TRACK_MONITOR_INTERVAL_MS);
+    private stopTrackMonitoring(): void {
+        if (this.trackMonitorTimer) {
+            clearInterval(this.trackMonitorTimer);
+            this.trackMonitorTimer = null;
+        }
     }
 
-    /**
-     * Attempt ICE restart - creates new ICE candidates
-     */
-    private async attemptIceRestart(): Promise<void> {
-        if (!this.peerConnection) {
-            console.warn('[WebRTCService] Cannot restart ICE: no peer connection');
-            return;
-        }
+    private setState(state: CallState): void {
+        if (this.callState === state) return;
+        this.callState = state;
+        console.log(`[WebRTCService] 🔄 State changed: ${state.toUpperCase()}`);
+        this.broadcast('onStateChange', state);
+    }
 
-        // Prevent rapid-fire ICE restarts
-        const now = Date.now();
-        if (now - this.lastRecoveryAttemptAt < this.RECOVERY_COOLDOWN_MS) {
-            console.warn('[WebRTCService] Skipping ICE restart (cooldown active)');
-            return;
-        }
-        this.lastRecoveryAttemptAt = now;
+    private async createOffer(userId: string): Promise<void> {
+        const pc = this.peerConnections.get(userId);
+        if (!pc) return;
 
         try {
-            console.log('[WebRTCService] 🔄 Attempting ICE restart...');
-            
-            // Check if restartIce is available
-            if (typeof this.peerConnection.restartIce === 'function') {
-                this.peerConnection.restartIce();
-                console.log('[WebRTCService] ✅ ICE restart initiated');
-            } else {
-                // Fallback: create new offer with iceRestart
-                if (this.peerConnection.signalingState === 'stable') {
-                    const offer = await this.peerConnection.createOffer({ iceRestart: true });
-                    await this.peerConnection.setLocalDescription(offer);
-                    callService.sendOffer(offer);
-                    console.log('[WebRTCService] ✅ ICE restart via offer created');
-                }
-            }
+            console.log(`[WebRTCService] 🚀 Creating offer for user: ${userId}`);
+            const offer = await pc.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: this.callType === 'video'
+            });
+            await pc.setLocalDescription(offer);
+            await callService.sendOffer(offer, userId);
         } catch (error: any) {
-            console.error('[WebRTCService] ❌ ICE restart failed:', error.message);
+            console.error(`[WebRTCService] Failed to create offer for ${userId}:`, error);
         }
     }
 
-    /**
-     * Cleanup resources
-     */
-    cleanup(): void {
-        this.listeners = []; // Clear all listeners
-        if (this.callState === 'idle' || this.callState === 'ended') {
-            void this.deactivateAudioSession('cleanup');
+    private async attemptIceRestart(): Promise<void> {
+        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+            console.error('[WebRTCService] Max ICE restart attempts reached');
+            this.endCall('reconnect-failed');
+            return;
         }
-        this.endCall();
+
+        this.reconnectAttempts++;
+        console.log(`[WebRTCService] 🔄 Attempting ICE restart (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+        
+        for (const [userId, pc] of this.peerConnections.entries()) {
+            try {
+                const offer = await pc.createOffer({ iceRestart: true });
+                await pc.setLocalDescription(offer);
+                await callService.sendOffer(offer, userId);
+            } catch (err: any) {
+                console.warn(`[WebRTCService] ICE restart failed for ${userId}:`, err?.message);
+            }
+        }
+    }
+
+    cleanup(): void {
+        this.listeners = [];
+        this.stopTrackMonitoring();
+        this.endCall('cleanup');
     }
 }
 

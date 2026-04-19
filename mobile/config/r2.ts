@@ -10,23 +10,23 @@ export const R2_CONFIG = {
   // Feature flag
   USE_R2: Env.USE_R2,
 
-  // Upload timeout in milliseconds
-  UPLOAD_TIMEOUT: 30000,
+  // Upload timeout in milliseconds (5 min for high-res media or slow networks)
+  UPLOAD_TIMEOUT: 300000,
 
   // Retry configuration
   MAX_RETRIES: 3,
-  RETRY_DELAY: 1000,
+  RETRY_DELAY: 2000,
 };
 
 /**
  * FREE TIER Setup Instructions:
  *
  * 1. Deploy Worker (FREE): cd cloudflare-worker && npm run deploy
- * 2. Get Worker URL: https://soulsync-upload-worker.YOUR-SUBDOMAIN.workers.dev
+ * 2. Get Worker URL: https://soul-upload-worker.YOUR-SUBDOMAIN.workers.dev
  * 3. Enable R2 public access in dashboard to get r2.dev URL
  * 4. Create .env file:
  *
- * EXPO_PUBLIC_R2_WORKER_URL=https://soulsync-upload-worker.YOUR-SUBDOMAIN.workers.dev
+ * EXPO_PUBLIC_R2_WORKER_URL=https://soul-upload-worker.YOUR-SUBDOMAIN.workers.dev
  * EXPO_PUBLIC_R2_PUBLIC_URL=https://pub-XXXXXXXXXXXX.r2.dev
  * EXPO_PUBLIC_USE_R2=false
  *

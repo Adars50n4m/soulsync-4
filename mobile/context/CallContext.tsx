@@ -23,6 +23,7 @@ interface CallContextType {
     toggleVideo: () => void;
     deleteCall: (id: string) => Promise<void>;
     clearCalls: () => Promise<void>;
+    startGroupCall: (groupId: string, participantIds: string[], type: 'audio' | 'video') => Promise<void>;
 }
 
 export const CallContext = createContext<CallContextType | undefined>(undefined);
@@ -161,7 +162,14 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, [endCallLocalOnly]);
 
     useEffect(() => {
-        if (!currentUserId) return;
+        if (!currentUserId) {
+            // Ensure no active call survives logout
+            if (activeCallRef.current) {
+                console.log('[CallContext] Clearing active call on logout');
+                setActiveCall(null);
+            }
+            return;
+        }
 
         callService.initialize(currentUserId, {
             name: currentUser.name || currentUser.username || 'User',
@@ -225,7 +233,9 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         isVideoOff: false,
                         isMinimized: false,
                         remoteVideoOff: false,
-                        roomId: signal.roomId
+                        roomId: signal.roomId,
+                        groupId: signal.groupId,
+                        participantIds: (signal as any).participantIds || []
                     });
                     
                     callService.notifyRinging(signal.roomId!, signal.callerId, signal.callType)
@@ -258,7 +268,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     callStartTimeRef.current = Date.now();
                     
                     if (webRTCService && !active?.isIncoming) {
-                        try { webRTCService.onCallAccepted(); } catch (e) {}
+                        try { webRTCService.onCallAccepted(normalizedSenderId); } catch (e) {}
                     }
                     break;
                 }
@@ -351,14 +361,10 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     }
                     if (webRTCService) {
                         try {
-                            if (signal.type === 'offer' && !webRTCService.peerConnection) {
-                                console.log('[CallContext] Setting initiator to false for incoming offer');
-                                webRTCService.setInitiator(false);
-                            }
                             console.log(`[CallContext] Forwarding ${signal.type} to WebRTCService`);
-                            webRTCService.handleSignal(signal);
+                            await webRTCService.handleSignal(signal);
                         } catch (e) {
-                            console.error(`[CallContext] ❌ Error handling ${signal.type}:`, e);
+                            console.error(`[CallContext] ❌ Error forwarding ${signal.type}:`, e);
                         }
                     }
                     break;
@@ -378,51 +384,69 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
             nativeCallBridge.cleanup();
             supabase.removeChannel(callSub);
             clearCallTimeout(); // Clear any pending timeouts
+            setActiveCall(null); // Force clear on cleanup
         };
     }, [currentUserId, endCallLocalOnly, acceptCall]);
 
     const startCall = useCallback(async (contactId: string, type: 'audio' | 'video') => {
         if (!webRTCService?.isAvailable?.()) {
-            const reason =
-                webRTCService?.getAvailabilityError?.()
-                || 'WebRTC native module is unavailable in this build.';
-            console.warn('[CallContext] startCall blocked:', reason);
-            Alert.alert(
-                'Calling Unavailable',
-                'This app build does not include native WebRTC. Please rebuild dev client (expo prebuild + expo run:android/ios).'
-            );
+            Alert.alert('Calling Unavailable', 'WebRTC native module is missing.');
             return;
         }
 
-        const normalizedContactId = normalizeId(contactId);
         pendingAcceptedRoomRef.current = null;
-        console.log(`[CallContext] 📞 Starting call to ${normalizedContactId} (${type})`);
-        const roomId = await callService.startCall(normalizedContactId, type);
-        console.log(`[CallContext] 📞 startCall returned roomId: ${roomId}`);
+        console.log(`[CallContext] 📞 Starting 1:1 call to ${contactId} (${type})`);
+        const roomId = await callService.startCall(contactId, type);
+        
         if (roomId) {
-            const contactName = getSuperuserName(normalizedContactId) || 'User';
-            const wasAcceptedEarly = pendingAcceptedRoomRef.current === roomId;
             setActiveCall({
                 callId: roomId,
-                contactId: normalizedContactId,
-                contactName,
+                contactId: contactId,
+                contactName: getSuperuserName(contactId) || 'User',
                 type,
                 isIncoming: false,
-                isAccepted: wasAcceptedEarly,
+                isAccepted: false,
                 isMuted: false,
                 isVideoOff: false,
                 isMinimized: false,
                 remoteVideoOff: false,
-                roomId
+                roomId,
             });
-            if (!wasAcceptedEarly) {
-                callStartTimeRef.current = null;
-            }
-            
-            // Start timeout for unanswered call
+            callStartTimeRef.current = Date.now();
             startCallTimeout(roomId);
         }
     }, [startCallTimeout]);
+
+    const startGroupCall = useCallback(async (groupId: string, participantIds: string[], type: 'audio' | 'video') => {
+        if (!webRTCService?.isAvailable?.()) {
+            Alert.alert('Calling Unavailable', 'WebRTC native module is missing.');
+            return;
+        }
+
+        pendingAcceptedRoomRef.current = null;
+        console.log(`[CallContext] 📞 Starting group call for ${groupId} (${type})`);
+        const roomId = await callService.startCall('', type, groupId);
+        
+        if (roomId) {
+            const groupName = 'Group Call'; // Should fetch from chat state if possible
+            setActiveCall({
+                callId: roomId,
+                contactId: groupId,
+                contactName: groupName,
+                type,
+                isIncoming: false,
+                isAccepted: true, // Group calls we are "connected" to the room immediately
+                isMuted: false,
+                isVideoOff: false,
+                isMinimized: false,
+                remoteVideoOff: false,
+                roomId,
+                groupId,
+                participantIds
+            });
+            callStartTimeRef.current = Date.now();
+        }
+    }, []);
 
     const endCall = useCallback(async () => {
         console.log('[CallContext] ⚠️ endCall called!', new Error().stack?.split('\n').slice(1, 4).join(' | '));
@@ -485,7 +509,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 } else if (webRTCService && nextType === 'video') {
                     // Fallback for older builds where switchCallType is unavailable.
                     await webRTCService.prepareCall('video');
-                    await webRTCService.startCall?.();
+                    await webRTCService.startCall?.(nextType, current.groupId ? undefined : current.contactId, current.groupId);
                 }
             } catch (error) {
                 console.warn('[CallContext] Failed to switch call mode:', error);
@@ -534,6 +558,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         toggleVideo,
         deleteCall,
         clearCalls,
+        startGroupCall,
     };
 
     return <CallContext.Provider value={value}>{children}</CallContext.Provider>;
@@ -555,6 +580,7 @@ export const useCall = (): CallContextType => {
             toggleVideo: () => {},
             deleteCall: async () => {},
             clearCalls: async () => {},
+            startGroupCall: async () => {},
         };
     }
     return context;

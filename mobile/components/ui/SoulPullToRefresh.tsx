@@ -2,12 +2,15 @@ import React, { useRef, useState, useCallback } from 'react';
 import {
   View,
   Animated,
+  Easing,
   PanResponder,
   StyleSheet,
   Platform,
 } from 'react-native';
 import LottieView from 'lottie-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { hapticService } from '../../services/HapticService';
+import * as Haptics from 'expo-haptics';
 
 const PULL_LOTTIE = require('../../assets/animations/pull-refresh.json');
 
@@ -20,24 +23,31 @@ const PullLottieIndicator = ({ isRefreshing, pullPercentage }: { isRefreshing: b
   const lottieRef = useRef<LottieView>(null);
   const wasRefreshing = useRef(false);
   const exitAnim = useRef(new Animated.Value(0)).current;
+  const [isExiting, setIsExiting] = useState(false);
 
   React.useEffect(() => {
     if (isRefreshing && !wasRefreshing.current) {
       wasRefreshing.current = true;
+      setIsExiting(false);
       exitAnim.setValue(0);
       // Start loop from frame 30 to 151 (loading state)
       lottieRef.current?.play(30, 151);
     }
     if (!isRefreshing && wasRefreshing.current) {
       wasRefreshing.current = false;
+      setIsExiting(true);
       // Dive down animation when refresh completes
       Animated.timing(exitAnim, {
         toValue: 1,
-        duration: 800,
+        duration: 2200, // Slightly longer for more "weight"
+        easing: Easing.bezier(0.4, 0, 0.2, 1), // More natural easing
         useNativeDriver: true,
-      }).start();
+      }).start(() => {
+        exitAnim.setValue(0);
+        setIsExiting(false);
+      });
     }
-  }, [isRefreshing]);
+  }, [exitAnim, isRefreshing]);
 
   React.useEffect(() => {
     if (!isRefreshing && lottieRef.current) {
@@ -48,13 +58,13 @@ const PullLottieIndicator = ({ isRefreshing, pullPercentage }: { isRefreshing: b
   }, [pullPercentage, isRefreshing]);
 
   const opacityExit = exitAnim.interpolate({
-    inputRange: [0, 0.4, 1],
+    inputRange: [0, 0.7, 1],
     outputRange: [1, 1, 0],
   });
 
   const translateY = exitAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 120],
+    outputRange: [0, 480], // Deep dive into the abyss
   });
 
   const scaleExit = exitAnim.interpolate({
@@ -65,9 +75,9 @@ const PullLottieIndicator = ({ isRefreshing, pullPercentage }: { isRefreshing: b
   return (
     <View style={styles.lottieContainer}>
       <Animated.View style={{
-        opacity: isRefreshing ? 1 : (pullPercentage > 0.05 ? opacityExit : 0),
+        opacity: isRefreshing ? 1 : (isExiting || pullPercentage > 0.05 ? opacityExit : 0),
         transform: [
-          { scale: isRefreshing ? 1 : (exitAnim._value > 0 ? scaleExit : Math.max(0.5, pullPercentage)) },
+          { scale: isRefreshing ? 1 : (isExiting ? scaleExit : Math.max(0.5, pullPercentage)) },
           { translateY: translateY }
         ],
       }}>
@@ -112,7 +122,7 @@ export const SoulPullToRefresh = ({ children, onRefresh }: { children: any; onRe
       friction: 10,
     }).start();
     pullYValue.current = 0;
-  }, []);
+  }, [pullY]);
 
   const lockAt = useCallback((h: number) => {
     Animated.spring(pullY, {
@@ -122,7 +132,7 @@ export const SoulPullToRefresh = ({ children, onRefresh }: { children: any; onRe
       friction: 14,
     }).start();
     pullYValue.current = h;
-  }, []);
+  }, [pullY]);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -155,8 +165,7 @@ export const SoulPullToRefresh = ({ children, onRefresh }: { children: any; onRe
         if (resistance >= THRESHOLD && statusRef.current !== 'armed') {
           setStatusSync('armed');
           if (Platform.OS !== 'web') {
-            const Haptics = require('expo-haptics');
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+            hapticService.impact(Haptics.ImpactFeedbackStyle.Medium);
           }
         } else if (resistance < THRESHOLD && statusRef.current === 'armed') {
           setStatusSync('pulling');
@@ -194,7 +203,7 @@ export const SoulPullToRefresh = ({ children, onRefresh }: { children: any; onRe
 
   return (
     <View style={styles.root} {...panResponder.panHandlers}>
-      <View style={[styles.header, { paddingTop: insets.top }]} pointerEvents="none">
+      <View style={[styles.header, { paddingTop: insets.top + 54 }]} pointerEvents="none">
         <PullLottieIndicator
           isRefreshing={status === 'loading'}
           pullPercentage={pullPercentage}
@@ -227,7 +236,7 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: 140,
+    height: 180,
     alignItems: 'center',
     justifyContent: 'flex-end',
     zIndex: 0,

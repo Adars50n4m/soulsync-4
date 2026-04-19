@@ -14,12 +14,11 @@ import { useApp } from '../context/AppContext';
 import GlassView from './ui/GlassView';
 
 const MINI_HEIGHT = 56;
-const ACCENT = '#ff0080';
 
 export default function MiniPlayer() {
     const router = useRouter();
     const segments = useSegments();
-    const { musicState, togglePlayMusic, getPlaybackPosition } = useApp();
+    const { musicState, togglePlayMusic, getPlaybackPosition, activeTheme } = useApp();
     const [progress, setProgress] = useState(0);
 
     const song = musicState?.currentSong;
@@ -56,7 +55,7 @@ export default function MiniPlayer() {
         >
             {/* Progress line at top */}
             <View style={styles.progressTrack}>
-                <View style={[styles.progressFill, { width: `${progress}%` }]} />
+                <View style={[styles.progressFill, { width: `${progress}%`, backgroundColor: activeTheme?.primary || '#fff' }]} />
             </View>
 
             <GlassView intensity={40} tint="dark" style={styles.container}>
@@ -104,7 +103,6 @@ const styles = StyleSheet.create({
     },
     progressFill: {
         height: 2,
-        backgroundColor: ACCENT,
     },
     container: {
         borderRadius: 14,

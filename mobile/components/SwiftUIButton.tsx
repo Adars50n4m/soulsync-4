@@ -1,5 +1,6 @@
 import React, { useRef, useMemo } from 'react';
 import { Animated, Pressable, Text, StyleSheet, ViewStyle, TextStyle, Platform, View } from 'react-native';
+import { hapticService } from '../services/HapticService';
 import * as Haptics from 'expo-haptics';
 import GlassView from './ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -26,7 +27,7 @@ export const SwiftUIButton: React.FC<SwiftUIButtonProps> = ({
 
     const handlePressIn = () => {
         // Light haptic feedback exactly like iOS
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        hapticService.impact(Haptics.ImpactFeedbackStyle.Light);
         
         // Spring scale down
         Animated.spring(scaleAnim, {

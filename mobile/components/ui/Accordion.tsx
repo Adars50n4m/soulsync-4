@@ -16,7 +16,7 @@ interface CustomAccordionProps {
 /**
  * Global CustomAccordion Component
  * 
- * A standardized, branded accordion for use across the SoulSync app.
+ * A standardized, branded accordion for use across the Soul app.
  * Wraps @animatereactnative/accordion with custom styling.
  */
 export const CustomAccordion = ({
@@ -26,7 +26,7 @@ export const CustomAccordion = ({
   footer,
   containerStyle,
   titleStyle,
-  iconColor = '#EC4899', // SoulSync Pink
+  iconColor = '#EC4899', // Soul Pink
 }: CustomAccordionProps) => {
   return (
     <BaseAccordion.Accordion 

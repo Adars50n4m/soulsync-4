@@ -1,5 +1,5 @@
 const fetch = require('node-fetch');
-const URL = 'https://soulsync-supabase-proxy.adarshark.workers.dev/rest/v1/profiles?id=eq.shri';
+const URL = 'https://soul-supabase-proxy.adarshark.workers.dev/rest/v1/profiles?id=eq.shri';
 const API_KEY = 'sb_publishable_9cVY_6oQHMZnV9CaxmMs9Q_7QlUxqlD';
 
 async function test() {

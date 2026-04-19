@@ -129,7 +129,7 @@ export default function CallsScreen() {
             toggleSelection={toggleSelection}
             selectionMode={selectionMode}
         />
-    ), [getContact, startCall, activeTheme, selectedIds, toggleSelection, selectionMode]);
+    ), [getContact, startCall, activeTheme?.primary, selectedIds, toggleSelection, selectionMode]);
 
     return (
         <View style={styles.container}>
@@ -186,7 +186,7 @@ export default function CallsScreen() {
                     showsVerticalScrollIndicator={false}
                     onScroll={handleScrollMotion}
                     scrollEventThrottle={16}
-                    extraData={selectedIds} // Re-render items when selection changes
+                    extraData={`${activeTheme?.primary}_${selectedIds.size}`} // Re-render on theme or selection change
                 />
             )}
         </View>

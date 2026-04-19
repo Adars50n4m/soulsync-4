@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useApp } from '../context/AppContext';
 import {
     View,
     Text,
@@ -24,6 +25,7 @@ import Animated, {
     interpolate,
     Extrapolation,
     Easing,
+    cancelAnimation,
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Video, ResizeMode } from 'expo-av';
@@ -60,6 +62,8 @@ interface EnhancedMediaViewerProps {
         avatar?: string;
         timestamp?: string;
     };
+    duration?: number; // duration in seconds
+    isStatus?: boolean; 
 }
 
 export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
@@ -75,6 +79,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
     onEdit,
     onShare,
     userInfo,
+    isStatus = true, 
 }) => {
     const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
     const insets = useSafeAreaInsets();
@@ -91,7 +96,9 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
     const translateY = useSharedValue(0);
     const scale = useSharedValue(1);
     const menuProgress = useSharedValue(0);
+    const statusProgress = useSharedValue(0);
 
+    const [isPaused, setIsPaused] = useState(false);
     const isClosing = useRef(false);
 
     useEffect(() => {
@@ -100,6 +107,9 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
             translateY.value = 0;
             scale.value = 1;
             animationProgress.value = 0;
+            statusProgress.value = 0;
+            menuProgress.value = 0; // Reset menu as well
+            setIsPaused(false);
             
             animationProgress.value = withTiming(1, {
                 duration: 450,
@@ -113,8 +123,34 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
             setIsFullyOpen(false);
             setComment('');
             setShowMenu(false);
+            statusProgress.value = 0;
         }
     }, [visible, media, sourceLayout]);
+
+    // Status Progress Timer Logic
+    useEffect(() => {
+        if (!visible || !isFullyOpen) return;
+
+        if (isPaused) {
+            cancelAnimation(statusProgress);
+        } else {
+            const activeDuration = (media?.type === 'video' ? 15 : 5) * 1000; // Simplified duration logic
+            const remaining = (1 - statusProgress.value) * activeDuration;
+            
+            if (isStatus) {
+                statusProgress.value = withTiming(1, {
+                    duration: remaining,
+                    easing: Easing.linear,
+                }, (finished) => {
+                    if (finished) {
+                        runOnJS(handleClose)();
+                    }
+                });
+            }
+        }
+
+        return () => cancelAnimation(statusProgress);
+    }, [visible, isFullyOpen, isPaused, media]);
 
     const handleClose = useCallback(() => {
         if (isClosing.current) return;
@@ -202,10 +238,12 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
         transform: [{ scale: interpolate(menuProgress.value, [0, 1], [0.8, 1]) }]
     }));
 
-    const handleReaction = (emoji: string) => {
-        if (onReaction) runOnJS(onReaction)(emoji);
-        menuProgress.value = withTiming(0, { duration: 150 }, () => runOnJS(setShowMenu)(false));
-    };
+    const statusProgressStyle = useAnimatedStyle(() => ({
+        width: `${statusProgress.value * 100}%`,
+    }));
+
+    const { activeTheme } = useApp();
+    const themeAccent = activeTheme?.primary || '#BC002A';
 
     if (!visible || !media || !sourceLayout) return null;
 
@@ -229,6 +267,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                 <Animated.View style={animatedMediaStyle}>
                     {media.type === 'video' ? (
                         <Video
+                            key={media.localFileUri || media.url}
                             source={{ uri: media.localFileUri || media.url }}
                             style={styles.fullMedia}
                             resizeMode={ResizeMode.CONTAIN}
@@ -237,6 +276,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                         />
                     ) : (
                         <Image 
+                            key={media.localFileUri || media.url}
                             source={{ uri: media.localFileUri || media.url }} 
                             style={styles.fullMedia} 
                             contentFit="contain" 
@@ -249,6 +289,12 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
 
             {/* Top Bar - Header & Actions */}
             <Animated.View style={[styles.topBar, animatedOverlayStyle]}>
+                {isStatus && (
+                    <View style={[StyleSheet.absoluteFill, styles.progressTrack]}>
+                        <Animated.View style={[styles.progressFill, statusProgressStyle]} />
+                    </View>
+                )}
+
                 <View style={styles.topBarLeft}>
                     <Pressable onPress={handleClose} style={styles.topIcon}>
                         <MaterialIcons name="close" size={28} color="white" />
@@ -270,32 +316,36 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
             </Animated.View>
 
             {/* Bottom Keyboard Area */}
-            <KeyboardAvoidingView
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                style={[
-                    styles.bottomArea,
-                    { bottom: bottomOffset }
-                ]}
-            >
-                <Animated.View style={[styles.inputContainer, animatedOverlayStyle]}>
-                    <View style={styles.inputPill}>
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Reply..."
-                            placeholderTextColor="rgba(255,255,255,0.4)"
-                            value={comment}
-                            onChangeText={setComment}
-                            multiline
-                        />
-                        <Pressable 
-                            style={[styles.sendIconBtn, !comment.trim() && { opacity: 0.3 }]}
-                            onPress={() => comment.trim() && onSendComment?.(comment)}
-                        >
-                            <MaterialIcons name="send" size={24} color="white" />
-                        </Pressable>
-                    </View>
-                </Animated.View>
-            </KeyboardAvoidingView>
+            {isStatus && (
+                <KeyboardAvoidingView
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                    style={[
+                        styles.bottomArea,
+                        { bottom: bottomOffset }
+                    ]}
+                >
+                    <Animated.View style={[styles.inputContainer, animatedOverlayStyle]}>
+                        <View style={styles.inputPill}>
+                            <TextInput
+                                style={styles.input}
+                                placeholder="Reply..."
+                                placeholderTextColor="rgba(255,255,255,0.4)"
+                                value={comment}
+                                onChangeText={setComment}
+                                multiline
+                                onFocus={() => setIsPaused(true)}
+                                onBlur={() => setIsPaused(false)}
+                            />
+                            <Pressable 
+                                style={[styles.sendIconBtn, !comment.trim() && { opacity: 0.3 }]}
+                                onPress={() => comment.trim() && onSendComment?.(comment)}
+                            >
+                                <MaterialIcons name="send" size={24} color={themeAccent} />
+                            </Pressable>
+                        </View>
+                    </Animated.View>
+                </KeyboardAvoidingView>
+            )}
 
             {/* Long Press Menu Overlay */}
             {showMenu && (
@@ -307,7 +357,7 @@ export const EnhancedMediaViewer: React.FC<EnhancedMediaViewerProps> = ({
                         <GlassView intensity={95} tint="dark" style={styles.menuBlur} >
                             <View style={styles.reactionRow}>
                                 {['❤️', '🔥', '😂', '😮', '😢'].map(emoji => (
-                                    <Pressable key={emoji} onPress={() => handleReaction(emoji)} style={styles.reactionItem}>
+                                    <Pressable key={emoji} onPress={() => onReaction?.(emoji)} style={styles.reactionItem}>
                                         <Text style={styles.reactionText}>{emoji}</Text>
                                     </Pressable>
                                 ))}
@@ -360,6 +410,19 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'space-between',
         zIndex: 10,
+        height: 80,
+    },
+    progressTrack: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 3,
+        backgroundColor: 'rgba(255,255,255,0.2)',
+    },
+    progressFill: {
+        height: '100%',
+        backgroundColor: 'rgba(255,255,255,0.8)',
     },
     topBarLeft: {
         flexDirection: 'row',
@@ -458,7 +521,6 @@ const styles = StyleSheet.create({
         width: 36,
         height: 36,
         borderRadius: 18,
-        backgroundColor: '#BC002A',
         alignItems: 'center',
         justifyContent: 'center',
         marginLeft: 10,

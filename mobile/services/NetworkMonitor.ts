@@ -5,7 +5,7 @@
  * Uses @react-native-community/netinfo for reliable detection.
  */
 
-import { AppState, AppStateStatus } from 'react-native';
+import { AppState, AppStateStatus, Platform } from 'react-native';
 
 type NetworkState = {
   isOnline: boolean;
@@ -129,7 +129,11 @@ export const startMonitoring = (): void => {
 
     _unsubscribe = NetInfo.addEventListener((state: any) => {
       const wasOnline = _isOnline;
-      _isOnline = !!(state.isConnected && state.isInternetReachable !== false);
+      const isSimulator = Platform.OS === 'ios' && 
+        ((Platform as any).constants?.model?.includes('Simulator') || 
+         (Platform as any).constants?.isTesting);
+
+      _isOnline = !!state.isConnected && (isSimulator || state.isInternetReachable !== false);
       _connectionType = state.type || 'unknown';
 
       const networkState: NetworkState = {
@@ -208,7 +212,7 @@ export const networkMonitor = {
 };
 
 // FIX #10: Connection state persistence
-const CONNECTION_STATE_KEY = 'soulsync_connection_state';
+const CONNECTION_STATE_KEY = 'soul_connection_state';
 
 export interface PersistedConnectionState {
   lastOnlineAt: string | null;

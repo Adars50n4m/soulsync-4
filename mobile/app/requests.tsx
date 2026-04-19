@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { SERVER_URL, proxySupabaseUrl } from '../config/api';
 import { supabase } from '../config/supabase';
 import { useApp } from '../context/AppContext';
+import { useChat } from '../context/ChatContext';
 import { MaterialIcons } from '@expo/vector-icons';
 import GlassView from '../components/ui/GlassView';
 import { SoulAvatar } from '../components/SoulAvatar';
@@ -12,6 +13,7 @@ import Animated, { FadeInDown } from 'react-native-reanimated';
 
 export default function RequestsScreen() {
     const { currentUser, activeTheme } = useApp();
+    const { refreshLocalCache } = useChat();
     const [incoming, setIncoming] = useState<any[]>([]);
     const [outgoing, setOutgoing] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -35,7 +37,7 @@ export default function RequestsScreen() {
                 });
                 clearTimeout(tid);
                 if (res.ok) {
-                    const data = await res.json();
+                    const data = await res.json() as any;
                     if (data?.success) {
                         setIncoming(data.incoming || []);
                         setOutgoing(data.outgoing || []);
@@ -46,17 +48,17 @@ export default function RequestsScreen() {
             if (serverOk) return;
 
             // Direct Supabase (instant)
-            const { data: inReqs } = await supabase
+            const { data: inReqs } = (await supabase
                 .from('connection_requests')
                 .select('id, sender_id, receiver_id, message, status, created_at')
                 .eq('receiver_id', userId)
-                .eq('status', 'pending');
+                .eq('status', 'pending')) as any;
 
-            const { data: outReqs } = await supabase
+            const { data: outReqs } = (await supabase
                 .from('connection_requests')
                 .select('id, sender_id, receiver_id, message, status, created_at')
                 .eq('sender_id', userId)
-                .eq('status', 'pending');
+                .eq('status', 'pending')) as any;
 
             // Enrich with profile data
             const allIds = [
@@ -66,10 +68,10 @@ export default function RequestsScreen() {
 
             let profileMap: Record<string, any> = {};
             if (allIds.length > 0) {
-                const { data: profiles } = await supabase
+                const { data: profiles } = (await supabase
                     .from('profiles')
                     .select('id, username, display_name, avatar_url')
-                    .in('id', allIds);
+                    .in('id', allIds)) as any;
                 (profiles || []).forEach(p => { profileMap[p.id] = p; });
             }
 
@@ -109,6 +111,8 @@ export default function RequestsScreen() {
                     const ids = [request.sender_id, request.receiver_id].sort();
                     await supabase.from('connections')
                         .upsert({ user_1_id: ids[0], user_2_id: ids[1] }, { onConflict: 'user_1_id,user_2_id' });
+                    // Force a contact refresh so the new friend pops up immediately
+                    await refreshLocalCache(true);
                 }
                 setIncoming(prev => prev.filter(r => r.id !== requestId));
             } else if (action === 'reject') {

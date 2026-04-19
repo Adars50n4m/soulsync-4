@@ -56,8 +56,9 @@ class R2StorageService {
         const uploadPath = this.getUploadPath(bucket);
         const uploadUrl = `${R2_CONFIG.WORKER_URL}${uploadPath}`;
 
-        console.log(`[R2Direct] Uploading via fetch to ${uploadUrl} (${contentType}, ${((fileCheck as any).size || 0) / 1024}KB)`);
-        onProgress?.(0.1);
+        const fileSizeKB = ((fileCheck as any).size || 0) / 1024;
+        console.log(`[R2Direct] Uploading via fetch to ${uploadUrl} (${contentType}, ${fileSizeKB}KB)`);
+        onProgress?.(0.05);
 
         // React Native FormData: use { uri, type, name } object instead of Blob
         const formData = new FormData();
@@ -68,35 +69,50 @@ class R2StorageService {
         } as any);
         formData.append('folder', folder || '');
 
-        onProgress?.(0.4);
+        // 🛡️ [Stall Prevention] Improved simulated progress
+        // Since fetch() doesn't support upload progress, we simulate up to 96%.
+        // Increment becomes smaller the closer it gets to 96% (simulated asymptotic approach)
+        let simProgress = 0.05;
+        const estimatedMs = Math.max(2000, (fileSizeKB / 150) * 1000); // Slower estimation for safety
+        const progressInterval = setInterval(() => {
+          const remaining = 0.96 - simProgress;
+          const increment = Math.max(0.005, remaining * 0.15); // Smaller steps as we approach 96%
+          simProgress += increment;
+          onProgress?.(simProgress);
+        }, estimatedMs / 12);
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000);
+        const timeoutId = setTimeout(() => controller.abort(), R2_CONFIG.UPLOAD_TIMEOUT);
 
-        const response = await fetch(uploadUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'x-filename': fileName,
-            'x-folder': folder || '',
-          },
-          body: formData,
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
+        let data: UploadResponse;
+        try {
+          const response = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'x-filename': fileName,
+              'x-folder': folder || '',
+            },
+            body: formData,
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+          clearInterval(progressInterval);
+          onProgress?.(0.92);
 
-        onProgress?.(0.9);
-
-        if (response.status === 401 || response.status === 403) {
-          throw new R2AuthError(`Worker auth rejected request (${response.status})`);
+          if (response.status === 401 || response.status === 403) {
+            throw new R2AuthError(`Worker auth rejected request (${response.status})`);
+          }
+          if (!response.ok) {
+            const text = await response.text().catch(() => '');
+            throw new Error(`Worker returned ${response.status}: ${text}`);
+          }
+          data = await response.json();
+        } catch (fetchErr) {
+          clearTimeout(timeoutId);
+          clearInterval(progressInterval);
+          throw fetchErr;
         }
-
-        if (!response.ok) {
-          const text = await response.text().catch(() => '');
-          throw new Error(`Worker returned ${response.status}: ${text}`);
-        }
-
-        const data: UploadResponse = await response.json();
         const normalizedKey = data.key
           ? data.key
           : data.filename

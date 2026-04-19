@@ -21,6 +21,7 @@ export interface DownloadQueueResult {
 }
 
 interface QueueItem {
+  downloadId: string;
   messageId: string;
   remoteUrl: string;
   mediaType?: string;
@@ -84,12 +85,14 @@ class DownloadQueueService {
     isSent: boolean = false,
     priority: number = 2,
     manual: boolean = false,
+    downloadId?: string,
   ): Promise<DownloadQueueResult> {
+    const queueId = downloadId || messageId;
     // Deduplicate — if already queued or active, return existing promise
-    if (this.activeIds.has(messageId)) {
+    if (this.activeIds.has(queueId)) {
       return Promise.resolve({ success: false, error: 'Already downloading' });
     }
-    const existing = this.queue.find(item => item.messageId === messageId);
+    const existing = this.queue.find(item => item.downloadId === queueId);
     if (existing) {
       return new Promise((resolve, reject) => {
         // Chain onto existing item's resolution
@@ -102,7 +105,7 @@ class DownloadQueueService {
 
     return new Promise<DownloadQueueResult>((resolve, reject) => {
       this.queue.push({
-        messageId, remoteUrl, mediaType, isSent, priority, manual, resolve, reject,
+        downloadId: queueId, messageId, remoteUrl, mediaType, isSent, priority, manual, resolve, reject,
       });
       // Sort: priority 1 first, then by insertion order (stable sort)
       this.queue.sort((a, b) => a.priority - b.priority);
@@ -117,7 +120,7 @@ class DownloadQueueService {
       if (!next) break;
 
       this.activeCount++;
-      this.activeIds.add(next.messageId);
+      this.activeIds.add(next.downloadId);
       this.processItem(next);
     }
   }
@@ -159,7 +162,7 @@ class DownloadQueueService {
           // Re-queue as deferred — will be picked up when WiFi connects
           this.queue.push(item);
           this.activeCount--;
-          this.activeIds.delete(item.messageId);
+          this.activeIds.delete(item.downloadId);
           return;
         }
       }
@@ -183,7 +186,7 @@ class DownloadQueueService {
       item.resolve({ success: false, error: error instanceof Error ? error.message : 'Download failed' });
     } finally {
       this.activeCount--;
-      this.activeIds.delete(item.messageId);
+      this.activeIds.delete(item.downloadId);
       this.flush(); // Start next in queue
     }
   }
@@ -204,7 +207,7 @@ class DownloadQueueService {
   }
 
   isQueued(messageId: string): boolean {
-    return this.activeIds.has(messageId) || this.queue.some(i => i.messageId === messageId);
+    return this.activeIds.has(messageId) || this.queue.some(i => i.downloadId === messageId);
   }
 
   cleanup(): void {

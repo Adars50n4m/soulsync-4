@@ -137,6 +137,8 @@ export default function SettingsScreen() {
                     name={currentUser?.name || 'User'}
                     subtitle={currentUser?.bio}
                     username={currentUser?.username || 'user'}
+                    avatarType={currentUser?.avatarType as any}
+                    teddyVariant={currentUser?.teddyVariant as any}
                     onEditPress={openProfileEdit}
                     heroRef={profileHeroRef}
                     hidden={isProfileHeroHidden}

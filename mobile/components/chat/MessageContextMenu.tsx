@@ -26,6 +26,7 @@ interface MessageContextMenuProps {
     onAction: (action: string) => void;
     chatMessages: Message[];
     contactName: string;
+    isAdmin?: boolean;
 }
 
 const MessageContextMenu = ({ 
@@ -36,7 +37,8 @@ const MessageContextMenu = ({
     onReaction, 
     onAction, 
     chatMessages, 
-    contactName 
+    contactName,
+    isAdmin = false
 }: MessageContextMenuProps) => {
     const emojis = ['❤️', '👍', '👎', '🔥', '🥰', '👏', '😁'];
     const progress = useSharedValue(0);
@@ -84,9 +86,10 @@ const MessageContextMenu = ({
     const mediaItems = getMessageMediaItems(msg);
     const isGroupedMedia = mediaItems.length > 1;
 
-    const ACTION_ITEM_HEIGHT = 48; // Approx height of one context action button
-    const numberOfActions = isMe ? 9 : 8;
-    const IDEAL_ACTION_HEIGHT = numberOfActions * ACTION_ITEM_HEIGHT;
+    const estimatedItemHeight = 49; // 48 padding + 1 border
+    const canEdit = isMe && mediaItems.length === 0;
+    const numberOfActions = (canEdit ? 8 : 7);
+    const IDEAL_ACTION_HEIGHT = numberOfActions * estimatedItemHeight;
     
     const EMOJI_HEIGHT = 54;
     const UNIT_GAP = 8;
@@ -99,12 +102,15 @@ const MessageContextMenu = ({
     const fixedElementsHeight = layout.height + EMOJI_HEIGHT + TOTAL_GAP;
     
     // Constrain the action menu height so the entire component fits on screen
-    const MAX_ACTION_HEIGHT = Math.max(
-        150, // Absolute minimum height for usability (allows scrolling ~3 items)
+    const CLAMPED_ACTION_HEIGHT = Math.max(
+        150, 
         Math.min(IDEAL_ACTION_HEIGHT, maxAllowableHeight - fixedElementsHeight)
     );
     
-    const unitHeight = fixedElementsHeight + MAX_ACTION_HEIGHT;
+    // We use the actual predicted height for position calculations, 
+    // but the container will use maxHeight to snap to content.
+    const actualActionHeight = Math.min(IDEAL_ACTION_HEIGHT, CLAMPED_ACTION_HEIGHT);
+    const unitHeight = fixedElementsHeight + actualActionHeight;
 
     let topAdjust = 0;
     const startY = layout.y - EMOJI_HEIGHT - UNIT_GAP; 
@@ -180,7 +186,7 @@ const MessageContextMenu = ({
                         {/* 3. Action Menu */}
                         <View style={{
                             width: 200,
-                            height: MAX_ACTION_HEIGHT,
+                            maxHeight: CLAMPED_ACTION_HEIGHT,
                             shadowColor: '#000',
                             shadowOffset: { width: 0, height: 10 },
                             shadowOpacity: 0.5,
@@ -197,10 +203,6 @@ const MessageContextMenu = ({
                                         <MaterialIcons name="content-copy" size={20} color="#fff" />
                                         <Text style={ChatStyles.contextActionText}>Copy</Text>
                                     </Pressable>
-                                    <Pressable style={ChatStyles.contextActionBtn} onPress={() => { onAction('copy_time'); handleClose(); }}>
-                                        <MaterialIcons name="schedule" size={20} color="#fff" />
-                                        <Text style={ChatStyles.contextActionText}>Copy Time</Text>
-                                    </Pressable>
                                     <Pressable style={ChatStyles.contextActionBtn} onPress={() => { onAction('forward'); handleClose(); }}>
                                         <MaterialIcons name="forward" size={20} color="#fff" />
                                         <Text style={ChatStyles.contextActionText}>Forward</Text>
@@ -209,7 +211,7 @@ const MessageContextMenu = ({
                                         <MaterialIcons name={msg.isStarred ? 'star-outline' : 'star'} size={20} color="#fff" />
                                         <Text style={ChatStyles.contextActionText}>{msg.isStarred ? 'Unstar' : 'Star'}</Text>
                                     </Pressable>
-                                    {isMe && (
+                                    {isMe && mediaItems.length === 0 && (
                                         <Pressable style={ChatStyles.contextActionBtn} onPress={() => { onAction('edit'); handleClose(); }}>
                                             <MaterialIcons name="edit" size={20} color="#fff" />
                                             <Text style={ChatStyles.contextActionText}>Edit</Text>
@@ -226,7 +228,7 @@ const MessageContextMenu = ({
                                     <Pressable style={[ChatStyles.contextActionBtn, { borderBottomWidth: 0 }]} onPress={() => { onAction('delete'); handleClose(); }}>
                                         <MaterialIcons name="delete-outline" size={20} color="#ff4444" />
                                         <Text style={[ChatStyles.contextActionText, { color: '#ff4444' }]}>
-                                            {isGroupedMedia ? `Delete (${mediaItems.length})` : 'Delete'}
+                                            {isMe || isAdmin ? (isGroupedMedia ? `Delete for Everyone (${mediaItems.length})` : 'Delete for Everyone') : 'Delete for Me'}
                                         </Text>
                                     </Pressable>
                                 </ScrollView>

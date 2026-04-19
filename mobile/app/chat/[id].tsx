@@ -12,6 +12,8 @@ import { FlashList } from '@shopify/flash-list';
 
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import MaskedView from '@react-native-masked-view/masked-view';
 import GlassView from '../../components/ui/GlassView';
 import ConnectionBanner from '../../components/ConnectionBanner';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -20,16 +22,17 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import LottieView from 'lottie-react-native';
 import * as MediaLibrary from 'expo-media-library';
-import { 
-    documentDirectory, 
-    getInfoAsync, 
-    makeDirectoryAsync, 
-    deleteAsync, 
-    readDirectoryAsync, 
-    copyAsync, 
-    cacheDirectory, 
-    downloadAsync 
+import {
+    documentDirectory,
+    getInfoAsync,
+    makeDirectoryAsync,
+    deleteAsync,
+    readDirectoryAsync,
+    copyAsync,
+    cacheDirectory,
+    downloadAsync
 } from 'expo-file-system';
+import { hapticService } from '../../services/HapticService';
 import * as Haptics from 'expo-haptics';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Crypto from 'expo-crypto';
@@ -38,11 +41,9 @@ import VoiceNotePlayer from '../../components/chat/VoiceNotePlayer';
 import ProgressiveBlur from '../../components/chat/ProgressiveBlur';
 import MessageBubble from '../../components/chat/MessageBubble';
 import MessageContextMenu from '../../components/chat/MessageContextMenu';
-import { ChatStyles, SCREEN_WIDTH, SCREEN_HEIGHT, HEADER_PILL_HEIGHT, HEADER_PILL_RADIUS } from '../../components/chat/ChatStyles';
+import { ChatStyles, SCREEN_WIDTH, SCREEN_HEIGHT } from '../../components/chat/ChatStyles';
 import { formatDuration } from '../../utils/formatters';
-import { getMessageMediaItems, sanitizeSongTitle, isMessageEmpty } from '../../utils/chatUtils';
-
-
+import { applyGroupedMediaLocalUri, getMessageMediaItems, sanitizeSongTitle, isMessageEmpty } from '../../utils/chatUtils';
 
 import Animated, {
     useSharedValue,
@@ -51,6 +52,7 @@ import Animated, {
     withDelay,
     withRepeat,
     withSequence,
+    withSpring,
     interpolate,
     interpolateColor,
     Extrapolation,
@@ -59,12 +61,17 @@ import Animated, {
     FadeOutDown,
     runOnJS,
     useAnimatedProps,
+    useDerivedValue,
+    Extrapolate,
 } from 'react-native-reanimated';
+
+const AnimatedPath = Animated.createAnimatedComponent(Path);
 import 'react-native-gesture-handler';
 
 import { useApp, USERS } from '../../context/AppContext';
 import { usePresence } from '../../context/PresenceContext';
-import { LEGACY_TO_UUID } from '../../config/supabase';
+import { supabase, LEGACY_TO_UUID } from '../../config/supabase';
+import { normalizeId } from '../../utils/idNormalization';
 import { SoulAvatar } from '../../components/SoulAvatar';
 import { chatService } from '../../services/ChatService';
 import { chatTransitionState } from '../../services/chatTransitionState';
@@ -74,10 +81,10 @@ import { MediaPreviewModal } from '../../components/MediaPreviewModal';
 import { downloadQueue } from '../../services/DownloadQueueService';
 import { EnhancedMediaViewer } from '../../components/EnhancedMediaViewer';
 import {
-    PROFILE_AVATAR_SHARED_TRANSITION,
-    PROFILE_AVATAR_TRANSITION_TAG,
+    getProfileAvatarTransitionTag,
     SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION,
     SUPPORT_SHARED_TRANSITIONS,
+    PROFILE_AVATAR_SHARED_TRANSITION,
 } from '../../constants/sharedTransitions';
 import { Contact, Message } from '../../types';
 import { ResizeMode, Video, Audio } from 'expo-av';
@@ -86,13 +93,16 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'reac
 const IS_IOS = Platform.OS === 'ios';
 const ENABLE_SHARED_TRANSITIONS = SUPPORT_SHARED_TRANSITIONS;
 const ENABLE_INNER_SHARED_TRANSITIONS = SUPPORT_SHARED_TRANSITIONS;
+const ENABLE_PROFILE_AVATAR_SHARED_TRANSITION = SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION;
 const MEDIA_GROUP_MARKER = '__MEDIA_GROUP_V1__:';
-const IOS_KEYBOARD_SAFE_ADJUST = 0; 
-const HEADER_PILL_TOP = 62;
+const IOS_KEYBOARD_SAFE_ADJUST = 0;
+const HEADER_PILL_RADIUS = 28;
+const HEADER_PILL_TOP = 52;
+const HEADER_PILL_HEIGHT = 60;
 const LIST_PILL_HEIGHT = 72;
 const LIST_PILL_RADIUS = 36;
-const MORPH_IN_OUT_DURATION = 420;
-const MORPH_OUT_HANDOFF = Math.round(MORPH_IN_OUT_DURATION * 0.92);
+const MORPH_IN_OUT_DURATION = 500;
+const MORPH_OUT_HANDOFF = Math.round(MORPH_IN_OUT_DURATION * 0.94);
 const BACK_BTN_SIZE = 54;
 const BACK_BTN_GAP = 10;
 const MAIN_PILL_LEFT = 16 + BACK_BTN_SIZE + BACK_BTN_GAP;
@@ -104,7 +114,36 @@ type ChatMediaItem = {
     name?: string;
 };
 
+// Extracted to avoid calling useAnimatedStyle inside .map() (Rules of Hooks violation)
+const OptionMenuItem = React.memo(({ opt, index, isExpanded }: { opt: { name: string; label: string; color: string; bg: string; action: () => void }; index: number; isExpanded: boolean }) => {
+    const itemAnimatedStyle = useAnimatedStyle(() => {
+        const delay = index * 45;
+        const expanded = isExpanded;
+        const itemSpring = { damping: 12, stiffness: 180, mass: 0.5 };
+
+        return {
+            transform: [
+                { scale: withDelay(delay, withSpring(expanded ? 1 : 0, itemSpring)) },
+                { translateY: withDelay(delay, withSpring(expanded ? 0 : 15, itemSpring)) }
+            ] as any,
+            opacity: withDelay(delay, withSpring(expanded ? 1 : 0, { damping: 20 }))
+        };
+    }, [isExpanded]);
+
+    return (
+        <Pressable style={styles.optionItem} onPress={opt.action}>
+            <Animated.View style={[styles.optionIcon, { backgroundColor: opt.bg }, itemAnimatedStyle as any]}>
+                <MaterialIcons name={opt.name as any} size={20} color={opt.color} />
+            </Animated.View>
+            <Text style={styles.optionText}>{opt.label}</Text>
+        </Pressable>
+    );
+});
+
+
 interface SingleChatScreenProps {
+    id?: string;
+    isOverlay?: boolean;
     user?: Contact;
     onBack?: () => void;
     onBackStart?: () => void;
@@ -113,7 +152,6 @@ interface SingleChatScreenProps {
 
 
 const AnyFlashList = FlashList as any;
-const AnimatedPath = Animated.createAnimatedComponent(Path);
 
 // Format "last seen" relative time (e.g. "today at 2:30 PM", "yesterday at 11:00 AM")
 const formatLastSeen = (isoString: string): string => {
@@ -150,7 +188,7 @@ const TypingDots = () => {
     );
 };
 
-const SiriWaveform = ({ level, active }: { level: number; active: boolean }) => {
+const SiriWaveform = ({ level, active, themeColor }: { level: number; active: boolean; themeColor: string }) => {
     const phase = useSharedValue(0);
     const width = 200;
     const height = 40;
@@ -199,11 +237,11 @@ const SiriWaveform = ({ level, active }: { level: number; active: boolean }) => 
             <Svg width={width} height={height}>
                 <Defs>
                     <SvgLinearGradient id="siriGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <Stop offset="0%" stopColor="#FF6A88" stopOpacity="0" />
-                        <Stop offset="10%" stopColor="#FF6A88" stopOpacity="0.58" />
-                        <Stop offset="50%" stopColor="#FF1E56" stopOpacity="1" />
-                        <Stop offset="90%" stopColor="#BC002A" stopOpacity="0.58" />
-                        <Stop offset="100%" stopColor="#BC002A" stopOpacity="0" />
+                        <Stop offset="0%" stopColor={themeColor} stopOpacity="0" />
+                        <Stop offset="10%" stopColor={themeColor} stopOpacity="0.58" />
+                        <Stop offset="50%" stopColor={themeColor} stopOpacity="1" />
+                        <Stop offset="90%" stopColor={themeColor} stopOpacity="0.58" />
+                        <Stop offset="100%" stopColor={themeColor} stopOpacity="0" />
                     </SvgLinearGradient>
                 </Defs>
                 <AnimatedPath animatedProps={animatedProps1} fill="none" stroke="url(#siriGradient)" strokeWidth={3} opacity={0.28} />
@@ -214,26 +252,31 @@ const SiriWaveform = ({ level, active }: { level: number; active: boolean }) => 
     );
 };
 
-export default function SingleChatScreen({ user: propsUser, onBack, onBackStart, sourceY: propsSourceY }: SingleChatScreenProps) {
+export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUser, onBack, onBackStart, sourceY: propsSourceY }: SingleChatScreenProps) {
     const { id: paramsId, sourceY: paramsSourceY } = useLocalSearchParams();
+    const insets = useSafeAreaInsets();
 
     // Support both direct routing (params) and inline rendering (props)
-    const rawId = propsUser?.id || (Array.isArray(paramsId) ? paramsId[0] : paramsId);
+    const rawId = propsId || propsUser?.id || (Array.isArray(paramsId) ? paramsId[0] : paramsId);
     // Robust parameter parsing to prevent NaN-induced black screens or native crashes
     const parsedSourceY = paramsSourceY ? Number(Array.isArray(paramsSourceY) ? paramsSourceY[0] : paramsSourceY) : undefined;
     const sourceYValue = propsSourceY ?? (typeof parsedSourceY === 'number' && !isNaN(parsedSourceY) ? parsedSourceY : undefined);
     const sourceY = (typeof sourceYValue === 'number' && !isNaN(sourceYValue)) ? sourceYValue : undefined;
     const id = (rawId && LEGACY_TO_UUID[rawId as string]) || rawId;
-    const stringId = Array.isArray(paramsId) ? paramsId[0] : paramsId;
+    const stringId = id as string;
     const isMorphEntry = typeof sourceY === 'number' && !isNaN(sourceY);
-    
+
     const router = useRouter();
     const isFocused = useIsFocused();
-    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, toggleHeart, deleteMessage, musicState, getPlaybackPosition, seekTo, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, initializeChatSession, cleanupChatSession, fetchOtherUserProfile, setMusicPartner } = useApp() as any;
+    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, toggleHeart, deleteMessage, musicState, getPlaybackPosition, seekTo, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, initializeChatSession, cleanupChatSession, fetchOtherUserProfile, setMusicPartner, startGroupCall } = useApp() as any;
+    const themeAccent = activeTheme?.primary || '#BC002A';
+    const themeAccentSoft = activeTheme?.accent || '#FF6A88';
     const { getPresence } = usePresence();
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
     const [isReady, setIsReady] = useState(false);
+    const [isAdmin, setIsAdmin] = useState(false);
+    const [memberRoles, setMemberRoles] = useState<Record<string, string>>({});
 
 
 
@@ -243,15 +286,15 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         // during heavy initialization.
         const timeout = setTimeout(() => {
             setIsReady(true);
-        }, Platform.OS === 'android' ? 250 : 400); 
-        
+        }, Platform.OS === 'android' ? 250 : 400);
+
         const task = InteractionManager.runAfterInteractions(() => {
             setIsReady(true);
         });
-        
+
         return () => {
-             task.cancel();
-             clearTimeout(timeout);
+            task.cancel();
+            clearTimeout(timeout);
         };
     }, []);
 
@@ -266,7 +309,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                     headerPillProgress.value = withTiming(1, { duration: 300 });
                     headerPillOffsetY.value = withTiming(0, { duration: 300 });
                 }
-            }, 800); 
+            }, 800);
             return () => clearTimeout(fallback);
         }
     }, [isMorphEntry]);
@@ -279,7 +322,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const ITEM_HEIGHT = 72;
     const ITEM_MARGIN = 16;
     const ITEM_RADIUS = 36;
-    
+
     const keyboardOffset = useSharedValue(0);
     const headerAccessoryOpacity = useSharedValue(isMorphEntry ? 0 : 1);
     const backgroundMorphProgress = useSharedValue(isMorphEntry ? 0 : 1);
@@ -302,13 +345,13 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         return {
             opacity: interpolate(progress, [0, 0.4, 1], [0, 0, 1], Extrapolation.CLAMP),
             transform: [
-                { 
+                {
                     translateX: interpolate(
                         progress,
                         [0, 1],
                         [-24, 0],
                         Extrapolation.CLAMP
-                    ) 
+                    )
                 },
                 {
                     scale: interpolate(
@@ -347,7 +390,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const headerMorphAnimatedStyle = useAnimatedStyle(() => {
         const progress = headerPillProgress.value;
         const selProgress = selectionModeProgress.value;
-        
+
         return {
             transform: [
                 { translateY: headerPillOffsetY.value },
@@ -372,11 +415,11 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         if (isMorphEntry) {
             headerPillOffsetY.value = withTiming(0, {
                 duration: MORPH_IN_OUT_DURATION,
-                easing: Easing.bezier(0.22, 1, 0.36, 1),
+                easing: Easing.bezier(0.5, 0, 0.1, 1),
             });
             headerPillProgress.value = withTiming(1, {
                 duration: MORPH_IN_OUT_DURATION,
-                easing: Easing.bezier(0.22, 1, 0.36, 1),
+                easing: Easing.bezier(0.5, 0, 0.1, 1),
             }, (finished) => {
                 if (finished) {
                     runOnJS(setAnimationFinished)(true);
@@ -384,13 +427,10 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             });
             backgroundMorphProgress.value = withTiming(1, {
                 duration: MORPH_IN_OUT_DURATION,
-                easing: Easing.bezier(0.22, 1, 0.36, 1),
+                easing: Easing.bezier(0.5, 0, 0.1, 1),
             });
-            // Separately timed entry for back button to create separation effect
-            headerAccessoryOpacity.value = withDelay(
-                80,
-                withTiming(1, { duration: 250, easing: Easing.out(Easing.cubic) })
-            );
+            // Symmetrical entry for back button to match exit feel
+            headerAccessoryOpacity.value = withTiming(1, { duration: 180 });
             return;
         }
         headerPillOffsetY.value = 0;
@@ -455,18 +495,18 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             easing: Easing.bezier(0.22, 1, 0.36, 1),
         });
     }, [selectionMode]);
-    
+
     const formatDateLabel = useCallback((d: Date) => {
         const today = new Date();
         const yesterday = new Date(today);
         yesterday.setDate(yesterday.getDate() - 1);
         if (d.toDateString() === today.toDateString()) return 'Today';
         if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
-        return d.toLocaleDateString(undefined, { 
-            weekday: 'long', 
-            month: 'short', 
-            day: 'numeric', 
-            year: d.getFullYear() !== today.getFullYear() ? 'numeric' : undefined 
+        return d.toLocaleDateString(undefined, {
+            weekday: 'long',
+            month: 'short',
+            day: 'numeric',
+            year: d.getFullYear() !== today.getFullYear() ? 'numeric' : undefined
         });
     }, []);
 
@@ -485,16 +525,16 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     useEffect(() => { onViewableItemsChangedRef.current = onViewableItemsChanged; }, [onViewableItemsChanged]);
 
     const viewabilityConfigCallbackPairs = useRef([
-        { 
-            viewabilityConfig: { itemVisiblePercentThreshold: 10, minimumViewTime: 0 }, 
-            onViewableItemsChanged: (info: any) => onViewableItemsChangedRef.current(info) 
+        {
+            viewabilityConfig: { itemVisiblePercentThreshold: 10, minimumViewTime: 0 },
+            onViewableItemsChanged: (info: any) => onViewableItemsChangedRef.current(info)
         }
     ]);
 
     // Animate OUT — butter smooth unified morph back to pill
     const handleBack = useCallback(() => {
         if (isNavigatingRef.current) return;
-        
+
         if (selectionMode) {
             setSelectionMode(false);
             setSelectedMessageIds([]);
@@ -519,15 +559,15 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             headerAccessoryOpacity.value = withTiming(0, { duration: 180 });
             backgroundMorphProgress.value = withTiming(0, {
                 duration: MORPH_IN_OUT_DURATION,
-                easing: Easing.bezier(0.22, 1, 0.36, 1),
+                easing: Easing.bezier(0.5, 0, 0.1, 1),
             });
             headerPillOffsetY.value = withTiming(Math.max(0, sourceY - HEADER_PILL_TOP), {
                 duration: MORPH_IN_OUT_DURATION,
-                easing: Easing.bezier(0.22, 1, 0.36, 1),
+                easing: Easing.bezier(0.5, 0, 0.1, 1),
             });
             headerPillProgress.value = withTiming(0, {
                 duration: MORPH_IN_OUT_DURATION,
-                easing: Easing.bezier(0.22, 1, 0.36, 1),
+                easing: Easing.bezier(0.5, 0, 0.1, 1),
             });
             // Small handoff delay keeps the return motion closer to the
             // entry feel without changing the pill animation itself.
@@ -535,10 +575,10 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             return;
         }
         chatTransitionState.setPhase('returning');
-        headerAccessoryOpacity.value = withTiming(0, { duration: 150 });
+        headerAccessoryOpacity.value = withTiming(0, { duration: 180 });
         backgroundMorphProgress.value = withTiming(0, {
             duration: 250,
-            easing: Easing.out(Easing.cubic),
+            easing: Easing.bezier(0.5, 0, 0.1, 1),
         });
         setTimeout(() => finishBack(), 220);
     }, [
@@ -572,8 +612,9 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
     // Animation Values
     const plusRotation = useSharedValue(0);
-    const optionsHeight = useSharedValue(0);
     const optionsOpacity = useSharedValue(0);
+    const optionsTranslateY = useSharedValue(20); // Starts slightly down
+    const optionsScale = useSharedValue(0.9);
     const modalAnim = useRef(new RNAnimated.Value(0)).current;
 
     // Refs
@@ -591,9 +632,9 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             try {
                 const pos = await getPlaybackPosition();
                 const dur = (musicState.currentSong?.duration || 240) * 1000;
-                setMusicProgress(Math.min((pos / dur) * 100, 100));
-            } catch {}
-        }, 1000);
+                setMusicProgress(Math.min(pos / dur, 1)); // Store as ratio 0-1
+            } catch { }
+        }, 200); // Faster polling for real-time feel
         return () => clearInterval(interval);
     }, [musicState?.isPlaying, musicState?.currentSong?.id]);
 
@@ -603,7 +644,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     const contact = useMemo(() => {
         const found = contacts.find(c => c.id === id);
         if (found) return found;
-        
+
         // Fallback for legacy ID navigation
         const legacyMappedUuid = id ? (USERS[id]?.id) : null;
         if (legacyMappedUuid) {
@@ -613,20 +654,39 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         return undefined;
     }, [contacts, id]);
 
+    const profileAvatarTransitionTag = useMemo(() => {
+        const transitionId = normalizeId(contact?.id || String(id || ''));
+        return transitionId ? getProfileAvatarTransitionTag(transitionId) : undefined;
+    }, [contact?.id, id]);
+    const isGroup = contact?.isGroup || false;
+
     const openProfileWithMorph = useCallback(() => {
         const pushProfile = (origin?: { x: number; y: number; width: number; height: number }) => {
             router.push({
-                pathname: `/profile/${stringId}` as any,
-                params: origin
+                pathname: (isGroup ? '/group-info/[id]' : '/profile/[id]') as any,
+                params: !isGroup && ENABLE_PROFILE_AVATAR_SHARED_TRANSITION && profileAvatarTransitionTag
                     ? {
-                        avatarX: Math.round(origin.x).toString(),
-                        avatarY: Math.round(origin.y).toString(),
-                        avatarW: Math.round(origin.width).toString(),
-                        avatarH: Math.round(origin.height).toString(),
-                      }
-                    : undefined,
+                        id: String(stringId),
+                        avatarTransition: '1',
+                    }
+                    : origin
+                        ? {
+                            id: String(stringId),
+                            avatarX: Math.round(origin.x).toString(),
+                            avatarY: Math.round(origin.y).toString(),
+                            avatarW: Math.round(origin.width).toString(),
+                            avatarH: Math.round(origin.height).toString(),
+                        }
+                        : {
+                            id: String(stringId),
+                        },
             });
         };
+
+        if (!isGroup && ENABLE_PROFILE_AVATAR_SHARED_TRANSITION && profileAvatarTransitionTag) {
+            pushProfile();
+            return;
+        }
 
         profileAvatarRef.current?.measure((x, y, width, height, pageX, pageY) => {
             if (!width || !height) {
@@ -635,7 +695,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             }
             pushProfile({ x: pageX, y: pageY, width, height });
         });
-    }, [router, stringId]);
+    }, [isGroup, profileAvatarTransitionTag, router, stringId]);
 
     // FIX: Use contact.id (UUID) for message lookup, not the raw id param
     const messageKey = contact?.id || id || '';
@@ -649,17 +709,36 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             return;
         }
 
-        const task = InteractionManager.runAfterInteractions(() => {
-            initializeChatSession?.(id);
-            fetchOtherUserProfile?.(id);
-            setMusicPartner?.(id);
+        const task = InteractionManager.runAfterInteractions(async () => {
+            initializeChatSession?.(id, isGroup);
+            if (!isGroup) {
+                fetchOtherUserProfile?.(id);
+                setMusicPartner?.(id);
+            } else {
+                // Fetch roles for all group members
+                const { data: members } = await supabase
+                    .from('group_members')
+                    .select('user_id, role')
+                    .eq('group_id', id);
+
+                if (members) {
+                    const roles: Record<string, string> = {};
+                    members.forEach(m => {
+                        roles[m.user_id] = m.role;
+                    });
+                    setMemberRoles(roles);
+                    if (roles[currentUser?.id] === 'admin') {
+                        setIsAdmin(true);
+                    }
+                }
+            }
         });
 
         return () => {
             task.cancel();
             cleanupChatSession?.(id);
         };
-    }, [cleanupChatSession, id, currentUser?.id, initializeChatSession, fetchOtherUserProfile, isFocused]);
+    }, [cleanupChatSession, id, currentUser?.id, initializeChatSession, fetchOtherUserProfile, isFocused, isGroup]);
 
     // Mark incoming messages as read when chat is open or app returns to foreground
     useEffect(() => {
@@ -681,22 +760,20 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         return () => subscription.remove();
     }, [chatMessages]);
 
-    // Toggle inline sharing options above the composer
     const toggleOptions = () => {
         const nextExpanded = !isExpanded;
         setIsExpanded(nextExpanded);
-        plusRotation.value = withTiming(nextExpanded ? 45 : 0, {
-            duration: 220,
-            easing: Easing.out(Easing.cubic),
-        });
-        optionsHeight.value = withTiming(nextExpanded ? 92 : 0, {
-            duration: 240,
-            easing: Easing.out(Easing.cubic),
-        });
-        optionsOpacity.value = withTiming(nextExpanded ? 1 : 0, {
-            duration: nextExpanded ? 180 : 120,
-            easing: Easing.out(Easing.cubic),
-        });
+
+        const springConfig = {
+            damping: 15,
+            stiffness: 140,
+            mass: 0.8,
+        };
+
+        plusRotation.value = withSpring(nextExpanded ? 45 : 0, { damping: 12, stiffness: 150 });
+        optionsOpacity.value = withSpring(nextExpanded ? 1 : 0, { damping: 20 });
+        optionsTranslateY.value = withSpring(nextExpanded ? 0 : 20, springConfig);
+        optionsScale.value = withSpring(nextExpanded ? 1 : 0.9, springConfig);
     };
 
     // Close options when typing
@@ -706,14 +783,25 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         }
     };
 
+    // Animation Shared Values
+    const recordingPulsate = useSharedValue(1);
+    const plusScale = useSharedValue(1);
+    const micScale = useSharedValue(1);
+
     const animatedPlusStyle = useAnimatedStyle(() => ({
-        transform: [{ rotate: `${plusRotation.value}deg` }]
+        transform: [
+            { rotate: `${plusRotation.value}deg` },
+            { scale: plusScale.value }
+        ] as any
     }));
 
     const animatedOptionsStyle = useAnimatedStyle(() => ({
-        height: optionsHeight.value,
         opacity: optionsOpacity.value,
-        marginBottom: isExpanded ? 20 : 0
+        transform: [
+            { translateY: optionsTranslateY.value },
+            { scale: optionsScale.value }
+        ] as any,
+        pointerEvents: isExpanded ? 'auto' : 'none' as any,
     }));
 
     const callButtonRef = useRef<View>(null);
@@ -750,7 +838,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         try {
             // Force-cleanup any lingering recording to avoid "Only one Recording" error
             if (recordingRef.current) {
-                try { await recordingRef.current.stopAndUnloadAsync(); } catch {}
+                try { await recordingRef.current.stopAndUnloadAsync(); } catch { }
                 recordingRef.current = null;
             }
             if (recordingTimerRef.current) {
@@ -769,7 +857,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             // Reset audio mode first to release any previous recording resources
             try {
                 await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true });
-            } catch {}
+            } catch { }
 
             await Audio.setAudioModeAsync({
                 allowsRecordingIOS: true,
@@ -805,7 +893,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             });
 
             isPreparingRecordingRef.current = false;
-            
+
             // If finger was released while recorder was still preparing, resolve immediately.
             if (pendingStopAfterPrepareRef.current) {
                 const { shouldSend } = pendingStopAfterPrepareRef.current;
@@ -825,13 +913,13 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                     await recordingRef.current.stopAndUnloadAsync();
                     recordingRef.current = null;
                 }
-            } catch {}
+            } catch { }
             try {
                 await Audio.setAudioModeAsync({
                     allowsRecordingIOS: false,
                     playsInSilentModeIOS: true,
                 });
-            } catch {}
+            } catch { }
             isPreparingRecordingRef.current = false;
         }
     };
@@ -877,7 +965,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             } else {
                 console.error('Failed to stop recording', err);
             }
-            
+
             await Audio.setAudioModeAsync({
                 allowsRecordingIOS: false,
                 playsInSilentModeIOS: true,
@@ -897,9 +985,9 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 url: '', // will be set by ChatService after background upload
                 duration,
             };
-            
+
             // Instantly send message to local DB, passing the local uri for background upload
-            sendChatMessage(messageKey,'', media, undefined, uri);
+            sendChatMessage(messageKey, '', media, undefined, uri);
         } catch (error: any) {
             Alert.alert('Send Failed', error.message || 'Please try again.');
         }
@@ -907,7 +995,6 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
 
 
-    const recordingPulsate = useSharedValue(1);
 
     useEffect(() => {
         if (isRecording) {
@@ -930,16 +1017,20 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     }, [isRecording]);
 
     const recordingPulseStyle = useAnimatedStyle(() => ({
-        transform: [{ scale: recordingPulsate.value }],
-        backgroundColor: interpolateColor(recordingPulsate.value, [1, 1.2], ['rgba(188, 0, 42, 0.4)', 'rgba(188, 0, 42, 0.8)']),
-    }));
+        transform: [
+            { scale: isRecording ? recordingPulsate.value : micScale.value }
+        ],
+        backgroundColor: isRecording
+            ? interpolateColor(recordingPulsate.value, [1, 1.2], ['rgba(188, 0, 42, 0.5)', 'rgba(188, 0, 42, 0.8)'])
+            : 'transparent',
+    }), [isRecording]);
 
     const slideToCancelStyle = useAnimatedStyle(() => ({
         transform: [{ translateX: recordingTranslateX.value }],
         opacity: interpolate(recordingTranslateX.value, [-100, 0], [0, 1], Extrapolation.CLAMP),
     }));
 
-    const MIC_TRAVEL_FULL = SCREEN_WIDTH - 150; // drag distance from right mic zone to left delete zone
+    const MIC_TRAVEL_FULL = SCREEN_WIDTH - 110; // drag distance fromStandalone right mic button to left delete zone
 
     const deleteIconAnimatedStyle = useAnimatedStyle(() => {
         const progress = Math.min(1, Math.abs(recordingTranslateX.value) / MIC_TRAVEL_FULL);
@@ -960,7 +1051,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             backgroundColor: interpolateColor(
                 progress,
                 [0, 0.9, 1],
-                ['#BC002A', '#D3003B', '#ff4d6d']
+                [themeAccent, themeAccentSoft, '#ff4d6d']
             ),
         };
     });
@@ -974,7 +1065,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     });
 
     // Cancel only when mic is dragged close to delete target on the left.
-    const CANCEL_SWIPE_THRESHOLD = -(MIC_TRAVEL_FULL - 26);
+    const CANCEL_SWIPE_THRESHOLD = -(MIC_TRAVEL_FULL - 32);
 
     // Raw touch handlers — guaranteed to fire on every platform (no gesture recognition)
     const handleMicTouchStart = (e: any) => {
@@ -1024,10 +1115,10 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
             // Stop any active recording when unmounting
             if (recordingRef.current) {
-                recordingRef.current.stopAndUnloadAsync().catch(() => {});
+                recordingRef.current.stopAndUnloadAsync().catch(() => { });
                 recordingRef.current = null;
             }
-            Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true }).catch(() => {});
+            Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true }).catch(() => { });
         };
     }, []);
 
@@ -1053,11 +1144,11 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
     const openCallModal = () => {
         console.log('[Chat] 📞 Opening call modal...');
-        
+
         // Show immediately with a sensible fallback so the overlay appears
-        setCallOptionsPosition({ x: 0, y: 110 });
+        setCallOptionsPosition({ x: 0, y: 115 });
         setShowCallModal(true);
-        
+
         RNAnimated.spring(modalAnim, {
             toValue: 1,
             useNativeDriver: true,
@@ -1070,11 +1161,11 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             requestAnimationFrame(() => {
                 callButtonRef.current?.measure((x, y, width, height, pageX, pageY) => {
                     console.log(`[Chat] 📍 Measure result: x=${x}, y=${y}, w=${width}, h=${height}, pageX=${pageX}, pageY=${pageY}`);
-                    
+
                     const safeY = (typeof pageY === 'number' && !isNaN(pageY) && pageY > 0) ? pageY : 60;
                     const safeHeight = (typeof height === 'number' && !isNaN(height) && height > 0) ? height : 44;
-                    
-                    const finalPos = { x: 0, y: safeY + safeHeight + 8 };
+
+                    const finalPos = { x: 0, y: safeY + safeHeight + 14 };
                     console.log('[Chat] 🎯 Refining callOptionsPosition:', finalPos);
                     setCallOptionsPosition(finalPos);
                 });
@@ -1090,9 +1181,35 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         }).start(() => setShowCallModal(false));
     };
 
-    const handleCall = (type: 'audio' | 'video') => {
+    const handleCall = async (type: 'audio' | 'video') => {
         closeCallModal();
-        setTimeout(() => startCall(id!, type), 300);
+        if (isGroup && id) {
+            try {
+                // Fetch group members from supabase
+                const { data, error } = await supabase
+                    .from('chat_group_members')
+                    .select('user_id')
+                    .eq('group_id', id);
+
+                if (error) throw error;
+
+                const participantIds = data
+                    .map(m => m.user_id)
+                    .filter(uid => normalizeId(uid) !== normalizeId(currentUser?.id));
+
+                if (participantIds.length === 0) {
+                    Alert.alert('Group Call', 'No other members to call.');
+                    return;
+                }
+
+                await startGroupCall(id as string, participantIds, type);
+            } catch (err) {
+                console.error('[Chat] Group call failed:', err);
+                Alert.alert('Error', 'Could not start group call.');
+            }
+        } else if (id) {
+            startCall(id as string, type);
+        }
     };
 
     const handleSend = () => {
@@ -1162,7 +1279,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 if (!sourceText) {
                     Alert.alert('Copy', 'No text to copy in this message.');
                 } else {
-                    Clipboard.setStringAsync(sourceText).catch(() => {});
+                    Clipboard.setStringAsync(sourceText).catch(() => { });
                 }
             } else if (action === 'forward') {
                 const forwardText =
@@ -1172,6 +1289,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 setEditingMessage(null);
                 setReplyingTo(null);
                 setInputText(`↪ ${forwardText}`);
+            } else if (action === 'delete') {
+                deleteMessage(id as string, selectedContextMessage.msg.id, isAdmin);
             } else if (action === 'star') {
                 updateMessage(id as string, selectedContextMessage.msg.id, { isStarred: true } as any);
             } else if (action === 'unstar') {
@@ -1246,7 +1365,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                     style: 'destructive',
                     onPress: () => {
                         selectedMessageIds.forEach(msgId => {
-                            if (id) deleteMessage(id, msgId);
+                            if (id) deleteMessage(id, msgId, isAdmin);
                         });
                         setSelectionMode(false);
                         setSelectedMessageIds([]);
@@ -1267,6 +1386,18 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
     const handleMediaTap = (payload: any) => {
         if (!payload?.mediaItems?.length) return;
+
+        // 🛡️ Secondary Check: Prevent viewing expired statuses
+        const msg = (chatMessages || []).find(m => m.id === payload.messageId);
+        if (msg?.media?.type === 'status_reply') {
+            const timestamp = msg.timestamp;
+            const STATUS_EXPIRATION_MS = 24 * 60 * 60 * 1000;
+            if (timestamp && (Date.now() - new Date(timestamp).getTime()) > STATUS_EXPIRATION_MS) {
+                Alert.alert('Status Expired', 'This status was posted more than 24 hours ago and is no longer available.');
+                return;
+            }
+        }
+
         const nextViewer = {
             messageId: payload.messageId,
             items: payload.mediaItems,
@@ -1314,7 +1445,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             let localUri = current.url;
             if (!current.url.startsWith('file://')) {
                 const extension = current.type === 'video' ? '.mp4' : '.jpg';
-                const target = `${cacheDirectory}soulsync_${Date.now()}${extension}`;
+                const target = `${cacheDirectory}soul_${Date.now()}${extension}`;
                 const downloaded = await downloadAsync(current.url, target);
                 localUri = downloaded.uri;
             }
@@ -1328,28 +1459,67 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
         }
     };
 
-    const handleMediaDownload = useCallback(async (msgId: string, url: string, index: number) => {
+    const handleMediaDownload = useCallback(async (msgId: string, url: string, index: number, manual = false) => {
         try {
+            const currentMsg = (chatMessages || []).find(m => m.id === msgId);
+            const mediaItems = currentMsg ? getMessageMediaItems(currentMsg) : [];
+            const isGroupedMedia = mediaItems.length > 1;
+            const downloadKey = isGroupedMedia ? `${msgId}:${index}` : msgId;
+
             // Route through download queue for concurrency control + wifi-only policy
-            const result = await downloadQueue.enqueue(msgId, url, undefined, false, 1, false);
+            const result = await downloadQueue.enqueue(downloadKey, url, undefined, false, 1, manual, downloadKey);
 
             if (!result.success || !result.localUri) {
-                console.warn(`[ChatScreen] Media download failed for ${msgId}:`, result.error);
+                if (result.error !== 'Already downloading') {
+                    console.warn(`[ChatScreen] Media download failed for ${msgId}:${index}:`, result.error);
+                }
+                // Force re-render so MessageBubble clears downloading state via localFileUri check
+                if (updateMessage && id) {
+                    if (currentMsg) {
+                        updateMessage(id as string, msgId, {
+                            downloadFailed: true,
+                        } as any);
+                    }
+                }
+                if (manual && result.error && result.error !== 'Already downloading') {
+                    Alert.alert('Download Failed', result.error);
+                }
                 return;
             }
 
             // Update AppContext State to trigger re-render in UI
             if (updateMessage && id) {
-                const currentMsg = (chatMessages || []).find(m => m.id === msgId);
                 if (currentMsg) {
-                    updateMessage(id as string, msgId, {
-                         localFileUri: result.localUri,
-                         media: currentMsg.media ? { ...currentMsg.media } : {}
-                    } as any);
+                    if (isGroupedMedia && currentMsg.media?.thumbnail) {
+                        updateMessage(id as string, msgId, {
+                            downloadFailed: false,
+                            media: {
+                                ...currentMsg.media,
+                                thumbnail: applyGroupedMediaLocalUri(
+                                    currentMsg.media.thumbnail,
+                                    index,
+                                    result.localUri
+                                ) || currentMsg.media.thumbnail,
+                            },
+                        } as any);
+                    } else {
+                        updateMessage(id as string, msgId, {
+                            downloadFailed: false,
+                            localFileUri: result.localUri,
+                            media: currentMsg.media ? { ...currentMsg.media } : {}
+                        } as any);
+                    }
                 }
             }
         } catch (error) {
             console.error('[ChatScreen] Media download error:', error);
+            // Clear downloading state on exception too
+            if (updateMessage && id) {
+                updateMessage(id as string, msgId, { downloadFailed: true } as any);
+            }
+            if (manual) {
+                Alert.alert('Download Failed', error instanceof Error ? error.message : 'Could not download this media.');
+            }
         }
     }, [id, chatMessages, updateMessage]);
 
@@ -1389,6 +1559,8 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                     uploadProgress={uploadProgressTracker?.[item.id]}
                     onMediaDownload={handleMediaDownload}
                     onRetry={handleRetryMessage}
+                    isAdmin={isAdmin}
+                    senderRole={memberRoles[item.sender_id]}
                 />
                 {item.id === firstUnreadId && unreadIncomingIds.length > 0 && (
                     <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8 }}>
@@ -1416,7 +1588,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             </>
         );
     }, [selectedContextMessage, chatMessages, contact?.name, handleReaction, handleDoubleTap, handleMediaTap, selectionMode, selectedMessageIds, handleSelectToggle, uploadProgressTracker, handleMediaDownload, handleRetryMessage, handleQuotePress, highlightedMessageId, reversedMessages, firstUnreadId, unreadIncomingIds, formatDateLabel]);
-    
+
     const renderCollectionItem = useCallback(({ item, index }: { item: any, index: number }) => (
         <Pressable
             style={styles.mediaCollectionTile}
@@ -1522,7 +1694,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     };
 
 
-    const handleSendMedia = async (mediaList: { uri: string; type: 'image'|'video'|'audio'|'file'; name?: string }[], caption?: string) => {
+    const handleSendMedia = async (mediaList: { uri: string; type: 'image' | 'video' | 'audio' | 'file'; name?: string }[], caption?: string) => {
         if (!mediaList || mediaList.length === 0 || !id) return;
         try {
             const preparedItems: any[] = [];
@@ -1533,11 +1705,11 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
 
                 try {
                     if (item.type === 'image') {
-                        // Generate thumbnail (32px blurhash-like preview)
+                        // Generate a sharper lightweight preview for grouped media placeholders.
                         const thumbResult = await ImageManipulator.manipulateAsync(
                             item.uri,
-                            [{ resize: { width: 32 } }],
-                            { compress: 0.3, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+                            [{ resize: { width: 160 } }],
+                            { compress: 0.45, format: ImageManipulator.SaveFormat.JPEG, base64: true }
                         );
                         thumbnail = `data:image/jpeg;base64,${thumbResult.base64}`;
 
@@ -1598,62 +1770,192 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
     }
 
     return (
-        <View style={styles.container} pointerEvents={isFocused ? 'auto' : 'none'}>
+        <View style={[styles.container, isOverlay && { backgroundColor: 'transparent' }]} pointerEvents={(isOverlay || isFocused) ? 'auto' : 'none'}>
             <StatusBar barStyle="light-content" />
-            
-            <ConnectionBanner connectivity={connectivity} mode="absolute" />
 
-            {/* Screen Background — always solid black so there's never a transparent flash */}
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000', zIndex: -1 }]} />
+            {!isOverlay && (
+                <>
+                    <ConnectionBanner connectivity={connectivity} mode="absolute" />
+                    <View style={[StyleSheet.absoluteFill, { backgroundColor: '#000', zIndex: -1 }]} />
+
+                    {/* Standard Navigation Header (Only in non-overlay mode) */}
+                    <View style={[StyleSheet.absoluteFill, { zIndex: 10 }]} pointerEvents="box-none">
+                        <Animated.View
+                            {...(ENABLE_SHARED_TRANSITIONS ? { sharedTransitionTag: `pill-${contact?.id || id}` } : {})}
+                            style={[
+                                styles.headerPill,
+                                headerMorphAnimatedStyle,
+                                {
+                                    position: 'absolute',
+                                    top: HEADER_PILL_TOP,
+                                    left: MAIN_PILL_LEFT,
+                                    right: 24,
+                                    backgroundColor: 'rgba(15, 15, 20, 0.4)',
+                                    borderRadius: HEADER_PILL_RADIUS,
+                                    zIndex: 10,
+                                    borderWidth: 1,
+                                    borderColor: 'rgba(255, 255, 255, 0.22)',
+                                    overflow: 'hidden'
+                                }
+                            ]}
+                            pointerEvents="box-none"
+                        >
+                            <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                                {animationFinished ? (
+                                    <Animated.View entering={FadeInDown.duration(400)} style={StyleSheet.absoluteFill}>
+                                        <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
+                                    </Animated.View>
+                                ) : (
+                                    <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(15, 15, 20, 0.4)' }]} />
+                                )}
+                            </View>
+
+                                                       {musicState?.currentSong && musicProgress > 0 && (
+                                <View 
+                                    style={{ 
+                                        position: 'absolute', 
+                                        bottom: 5, 
+                                        left: 16, 
+                                        right: 16,
+                                        height: 2.5, 
+                                        backgroundColor: 'rgba(255,255,255,0.1)',
+                                        borderRadius: 2,
+                                        overflow: 'hidden',
+                                        zIndex: 15
+                                    }} 
+                                >
+                                    <View 
+                                        style={{ 
+                                            width: `${musicProgress * 100}%`, 
+                                            height: '100%', 
+                                            backgroundColor: activeTheme.primary,
+                                            borderRadius: 2,
+                                            shadowColor: activeTheme.primary,
+                                            shadowOffset: { width: 0, height: 0 },
+                                            shadowOpacity: 0.8,
+                                            shadowRadius: 4,
+                                            elevation: 5
+                                        }} 
+                                    />
+                                </View>
+                            )}
+
+                            <View style={[styles.header, { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, height: '100%', paddingRight: 16 }]} pointerEvents="box-none">
+                                <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
+                                    <Pressable collapsable={false} style={styles.avatarWrapper} onPress={openProfileWithMorph}>
+                                        <SoulAvatar uri={contact?.avatar} size={46} isOnline={contact?.id ? getPresence(contact.id).isOnline : false} />
+                                    </Pressable>
+                                    <View style={styles.headerInfo}>
+                                        <Text style={styles.contactName}>{contact?.name || '...'}</Text>
+                                        <Text style={[styles.statusText, { color: activeTheme.primary }]}>
+                                            {musicState?.currentSong ? 
+                                                (musicState.currentSong.name.split('(')[0].split('-')[0].split('[')[0].replace(/&quot;/gi, '"').replace(/&amp;/gi, '&').trim()) 
+                                                : 'ONLINE'
+                                            }
+                                        </Text>
+                                    </View>
+                                    <View style={{ flexDirection: 'row', gap: 8, marginLeft: 'auto', marginRight: 0 }}>
+                                        <Pressable style={styles.headerButton} onPress={() => setShowMusicPlayer(true)}>
+                                            <MaterialIcons name="music-note" size={20} color="#ffffff" />
+                                        </Pressable>
+                                        <Pressable style={styles.headerButton} onPress={openCallModal}>
+                                            <MaterialIcons name="call" size={20} color="#ffffff" />
+                                        </Pressable>
+                                    </View>
+                                </View>
+                            </View>
+                        </Animated.View>
+
+                        {!selectionMode && (
+                            <Animated.View style={[
+                                styles.headerButton, 
+                                { 
+                                    position: 'absolute', 
+                                    top: HEADER_PILL_TOP + (HEADER_PILL_HEIGHT - BACK_BTN_SIZE) / 2, 
+                                    left: 16, 
+                                    width: BACK_BTN_SIZE, 
+                                    height: BACK_BTN_SIZE, 
+                                    borderRadius: BACK_BTN_SIZE / 2,
+                                    zIndex: 20 
+                                }
+                            ]}>
+                                <Pressable onPress={handleBack} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                                    <MaterialIcons name="arrow-back" size={28} color="#ffffff" />
+                                </Pressable>
+                            </Animated.View>
+                        )}
+                    </View>
+                </>
+            )}
 
             {/* Content Wrapper */}
-            <Animated.View style={[StyleSheet.absoluteFill, { zIndex: 1 }, backgroundMorphAnimatedStyle as any]}>
-
-                {/* Chat body — fades in AFTER the morph transition completes */}
+            <Animated.View style={[StyleSheet.absoluteFill, { zIndex: 1, backgroundColor: 'transparent' }, backgroundMorphAnimatedStyle as any]}>
                 <View style={StyleSheet.absoluteFill}>
-
-                {/* Chat content - Expensive portions are deferred, UI is immediate */}
-                <View style={{ flex: 1 }}>
-                    <Animated.View style={[{ flex: 1 }, messagesContainerAnimatedStyle]}>
-                        {isReady && (
-                            <Animated.FlatList
-                                ref={flatListRef as any}
-                                data={reversedMessages}
-                                keyExtractor={keyExtractor}
-                                inverted={true}
-                                renderItem={renderMessage}
-                                style={styles.messagesList}
-                                contentContainerStyle={styles.messagesContent}
-                                showsVerticalScrollIndicator={false}
-                                removeClippedSubviews={Platform.OS === 'android'}
-                                onScroll={(e: any) => { 
-                                    const offset = e.nativeEvent.contentOffset.y;
-                                    // simple scroll tracking
-                                }}
-                                scrollEventThrottle={16}
-                                ListEmptyComponent={
-                                    <View style={styles.emptyChat}>
-                                        <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.1)" />
-                                        <Text style={styles.emptyChatText}>No messages yet</Text>
-                                        <Text style={styles.emptyChatHint}>Say hi to {contact?.name || 'your contact'}!</Text>
+                    <View style={{ flex: 1 }}>
+                        <Animated.View style={[{ flex: 1 }, isOverlay && { paddingTop: SCREEN_HEIGHT * 0.60 }, messagesContainerAnimatedStyle]}>
+                            {isReady && (
+                                isOverlay ? (
+                                    <View style={{ flex: 1 }}>
+                                        <MaskedView
+                                            style={{ flex: 1 }}
+                                            maskElement={
+                                                <LinearGradient
+                                                    colors={['transparent', 'white', 'white']}
+                                                    locations={[0, 0.70, 1]}
+                                                    style={StyleSheet.absoluteFill}
+                                                />
+                                            }
+                                        >
+                                            <Animated.FlatList
+                                                ref={flatListRef as any}
+                                                data={reversedMessages}
+                                                keyExtractor={keyExtractor}
+                                                inverted={true}
+                                                renderItem={renderMessage}
+                                                style={styles.messagesList}
+                                                contentContainerStyle={[
+                                                    styles.messagesContent,
+                                                    { paddingBottom: 100 }
+                                                ]}
+                                                showsVerticalScrollIndicator={false}
+                                                scrollEventThrottle={16}
+                                                ListEmptyComponent={
+                                                    <View style={styles.emptyChat}>
+                                                        <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.1)" />
+                                                        <Text style={styles.emptyChatText}>No messages yet</Text>
+                                                    </View>
+                                                }
+                                            />
+                                        </MaskedView>
                                     </View>
-                                }
-                            />
-                        )}
+                                ) : (
+                                    <Animated.FlatList
+                                        ref={flatListRef as any}
+                                        data={reversedMessages}
+                                        keyExtractor={keyExtractor}
+                                        inverted={true}
+                                        renderItem={renderMessage}
+                                        style={styles.messagesList}
+                                        contentContainerStyle={styles.messagesContent}
+                                        showsVerticalScrollIndicator={false}
+                                        scrollEventThrottle={16}
+                                        ListEmptyComponent={
+                                            <View style={styles.emptyChat}>
+                                                <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.1)" />
+                                                <Text style={styles.emptyChatText}>No messages yet</Text>
+                                            </View>
+                                        }
+                                    />
+                                )
+                            )}
 
+                            {!isOverlay && <ProgressiveBlur position="top" height={160} intensity={60} />}
+                            <ProgressiveBlur position="bottom" height={160} intensity={80} />
+                        </Animated.View>
 
-
-                            {/* Progressive Blur — Telegram/iOS style, works on Android too */}
-                            <ProgressiveBlur position="top" height={160} intensity={60} />
-                            
-                            {/* Date headers are rendered inline within the list for better performance */}
-
-                        <ProgressiveBlur position="bottom" height={160} intensity={80} />
-                    </Animated.View>
-
-                        {/* Input Area */}
+                        {/* Input Area Row — Restored full features */}
                         <Animated.View style={[styles.inputArea, inputAreaAnimatedStyle]}>
-                            {/* Typing Indicator above input */}
+                            {/* Typing indicator */}
                             {isTyping && (
                                 <Animated.View entering={FadeInDown} exiting={FadeOutDown} style={styles.typingIndicatorWrapper}>
                                     <View style={styles.typingBubbleMini}>
@@ -1661,406 +1963,157 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                     </View>
                                 </Animated.View>
                             )}
-                        {/* Edit Preview */}
-                        {editingMessage && (
-                            <GlassView intensity={35} tint="dark" style={styles.replyPreview} >
-                                <View style={styles.replyContent}>
-                                    <MaterialIcons name="edit" size={16} color={activeTheme.primary} style={{ marginRight: 8 }} />
-                                    <View style={styles.replyTextContainer}>
-                                        <Text style={[styles.replySender, { color: activeTheme.primary }]}>Editing message</Text>
-                                        <Text numberOfLines={1} style={styles.replyText}>
-                                            {editingMessage.text || editingMessage.media?.caption || 'Media caption'}
-                                        </Text>
-                                    </View>
-                                    <Pressable onPress={() => setEditingMessage(null)}>
-                                        <MaterialIcons name="close" size={18} color="rgba(255,255,255,0.7)" />
-                                    </Pressable>
-                                </View>
-                            </GlassView>
-                        )}
-                        {/* Reply Preview */}
-                        {replyingTo && (() => {
-                            const mediaItems = getMessageMediaItems(replyingTo);
-                            const hasMedia = mediaItems.length > 0;
-                            const firstMedia = hasMedia ? mediaItems[0] : null;
-                            let replyText = replyingTo.text;
-                            if (!replyText && hasMedia) {
-                                if (firstMedia?.type === 'video') replyText = '🎥 Video';
-                                else if (firstMedia?.type === 'audio') replyText = '🎵 Audio Voice Note';
-                                else replyText = '📷 Photo';
-                            }
                             
-                            return (
+                            {/* Edit/Reply previews */}
+                            {editingMessage && (
+                                <GlassView intensity={35} tint="dark" style={styles.replyPreview} >
+                                    <View style={styles.replyContent}>
+                                        <MaterialIcons name="edit" size={16} color={activeTheme.primary} style={{ marginRight: 8 }} />
+                                        <View style={styles.replyTextContainer}>
+                                            <Text style={[styles.replySender, { color: activeTheme.primary }]}>Editing</Text>
+                                            <Text numberOfLines={1} style={styles.replyText}>{editingMessage.text || 'Media'}</Text>
+                                        </View>
+                                        <Pressable onPress={() => setEditingMessage(null)}>
+                                            <MaterialIcons name="close" size={18} color="rgba(255,255,255,0.7)" />
+                                        </Pressable>
+                                    </View>
+                                </GlassView>
+                            )}
+
+                            {replyingTo && (
                                 <GlassView intensity={35} tint="dark" style={styles.replyPreview} >
                                     <View style={styles.replyContent}>
                                         <View style={[ChatStyles.quoteBar, { backgroundColor: activeTheme.primary }]} />
                                         <View style={styles.replyTextContainer}>
                                             <Text style={[styles.replySender, { color: activeTheme.primary }]}>
-                                                {replyingTo.sender === 'me' ? 'You' : (contact?.name || 'Someone') }
+                                                {replyingTo.sender === 'me' ? 'You' : contact?.name}
                                             </Text>
-                                            <Text numberOfLines={1} style={styles.replyText}>{replyText}</Text>
+                                            <Text numberOfLines={1} style={styles.replyText}>{replyingTo.text || 'Media'}</Text>
                                         </View>
-                                        {hasMedia && firstMedia?.type !== 'audio' && firstMedia?.url && (
-                                            <Image source={{ uri: firstMedia.url }} style={styles.replyThumbnail} resizeMode="cover" />
-                                        )}
+                                        <Pressable onPress={() => setReplyingTo(null)} style={{ padding: 4 }}>
+                                            <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
+                                        </Pressable>
                                     </View>
-                                    <Pressable onPress={() => setReplyingTo(null)} style={{ padding: 4, marginLeft: 8 }}>
-                                        <MaterialIcons name="close" size={20} color="rgba(255,255,255,0.5)" />
-                                    </Pressable>
                                 </GlassView>
-                            );
-                        })()}
-                        {/* Unified Pill Container */}
-                        <View 
-                            ref={inputContainerRef}
-                            onLayout={undefined}
-                            style={styles.unifiedPillContainer}
-                        >
-                            <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill}  />
-                            
-                            <Animated.View style={[styles.optionsMenu, animatedOptionsStyle]}>
-                                <Pressable style={styles.optionItem} onPress={handleSelectCamera}>
-                                    <View style={[styles.optionIcon, { backgroundColor: 'rgba(244,63,94,0.16)' }]}>
-                                        <MaterialIcons name="photo-camera" size={20} color="#f43f5e" />
-                                    </View>
-                                    <Text style={styles.optionText}>Camera</Text>
-                                </Pressable>
-                                <Pressable style={styles.optionItem} onPress={handleSelectGallery}>
-                                    <View style={[styles.optionIcon, { backgroundColor: 'rgba(59,130,246,0.16)' }]}>
-                                        <MaterialIcons name="photo-library" size={20} color="#60a5fa" />
-                                    </View>
-                                    <Text style={styles.optionText}>Gallery</Text>
-                                </Pressable>
-                                <Pressable style={styles.optionItem} onPress={handleSelectDocument}>
-                                    <View style={[styles.optionIcon, { backgroundColor: 'rgba(34,197,94,0.16)' }]}>
-                                        <MaterialIcons name="insert-drive-file" size={20} color="#4ade80" />
-                                    </View>
-                                    <Text style={styles.optionText}>Document</Text>
-                                </Pressable>
-                                <Pressable style={styles.optionItem} onPress={handleSelectContact}>
-                                    <View style={[styles.optionIcon, { backgroundColor: 'rgba(255,255,255,0.12)' }]}>
-                                        <MaterialIcons name="person-outline" size={20} color="rgba(255,255,255,0.82)" />
-                                    </View>
-                                    <Text style={styles.optionText}>Contact</Text>
-                                </Pressable>
+                            )}
+
+                            {/* Floating Options Menu — FULL RESTORATION */}
+                            <Animated.View 
+                                style={[
+                                    styles.optionsMenu, 
+                                    animatedOptionsStyle as any,
+                                    {
+                                        position: 'absolute',
+                                        bottom: 70,
+                                        left: 16,
+                                        right: 16,
+                                        height: 80,
+                                        borderRadius: 24,
+                                        zIndex: 70,
+                                        backgroundColor: 'rgba(25, 25, 30, 0.4)',
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-around',
+                                        paddingHorizontal: 12,
+                                    }
+                                ]}
+                            >
+                                <GlassView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+                                {[
+                                    { name: 'photo-camera', label: 'Camera', color: '#f43f5e', action: handleSelectCamera },
+                                    { name: 'photo-library', label: 'Gallery', color: '#60a5fa', action: handleSelectGallery },
+                                    { name: 'insert-drive-file', label: 'Document', color: '#4ade80', action: handleSelectDocument },
+                                    { name: 'person-outline', label: 'Contact', color: 'rgba(255,255,255,0.8)', action: handleSelectContact },
+                                ].map((opt) => (
+                                    <Pressable key={opt.label} style={{ alignItems: 'center', gap: 4 }} onPress={() => { opt.action(); toggleOptions(); }}>
+                                        <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.05)', alignItems: 'center', justifyContent: 'center' }}>
+                                            <MaterialIcons name={opt.name as any} size={24} color={opt.color} />
+                                        </View>
+                                        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10 }}>{opt.label}</Text>
+                                    </Pressable>
+                                ))}
                             </Animated.View>
 
-                            <View
-                                style={[styles.inputWrapper, isRecording && styles.inputWrapperHidden]}
-                            >
-                                    {/* + Button on left inside */}
-                                    <Pressable style={styles.attachButton} onPress={toggleOptions}>
-                                        <Animated.View style={animatedPlusStyle}>
-                                            <MaterialIcons name="add" size={20} color="rgba(255,255,255,0.7)" />
-                                        </Animated.View>
-                                    </Pressable>
+                            <View style={styles.inputAreaRow}>
+                                <Pressable style={[styles.attachButton, isRecording && { opacity: 0 }]} onPress={toggleOptions}>
+                                    <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
+                                    <Animated.View style={animatedPlusStyle}>
+                                        <MaterialIcons name="add" size={24} color="rgba(255,255,255,0.7)" />
+                                    </Animated.View>
+                                </Pressable>
 
-                                    <TextInput
-                                        style={styles.input}
-                                        value={inputText}
-                                        onChangeText={(text) => {
-                                            setInputText(text);
-                                            
-                                            // Typing indicator logic
-                                            sendTyping(true);
-                                            
-                                            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-                                            typingTimeoutRef.current = setTimeout(() => {
-                                                sendTyping(false);
-                                            }, 2000) as unknown as NodeJS.Timeout;
-                                        }}
-                                        onFocus={handleFocus}
-                                        placeholder="Sync fragment..."
-                                        placeholderTextColor="rgba(255,255,255,0.3)"
-                                        multiline
-                                        maxLength={1000}
-                                    />
-
-                                    {/* Mic button on right inside */}
-                                    {inputText.trim() ? (
-                                        <Pressable
-                                            style={styles.sendButton}
-                                            onPress={handleSend}
-                                        >
-                                            <MaterialIcons
-                                                name="arrow-upward"
-                                                size={18}
-                                                color={activeTheme.primary}
-                                            />
-                                        </Pressable>
-                                    ) : (
-                                        <View
-                                            onTouchStart={handleMicTouchStart}
-                                            onTouchMove={handleMicTouchMove}
-                                            onTouchEnd={handleMicTouchEnd}
-                                            onTouchCancel={() => {
-                                                cancelHapticJSRef.current = false;
-                                                recordingTranslateX.value = withTiming(-MIC_TRAVEL_FULL, { duration: 180, easing: Easing.in(Easing.quad) });
-                                                setTimeout(() => {
-                                                    stopRecording(false);
-                                                    recordingTranslateX.value = 0;
-                                                }, 200);
-                                            }}
-                                        >
-                                            <Animated.View style={[styles.sendButton, isRecording && recordingPulseStyle]}>
-                                                <MaterialIcons
-                                                    name="mic"
-                                                    size={18}
-                                                    color={isRecording ? '#fff' : 'rgba(255,255,255,0.7)'}
-                                                />
-                                            </Animated.View>
-                                        </View>
-                                    )}
+                                <View style={[styles.unifiedPillContainer, isRecording && { opacity: 0 }]}>
+                                    <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
+                                    <View style={styles.inputWrapper}>
+                                        <TextInput
+                                            style={styles.input}
+                                            value={inputText}
+                                            onChangeText={setInputText}
+                                            multiline
+                                        />
+                                    </View>
                                 </View>
 
-                            {/* Recording Overlay */}
-                            {isRecording && (
-                                <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: 'transparent', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, zIndex: 10 }]}>
-                                    <Animated.View style={[styles.deleteIconWrap, deleteIconAnimatedStyle]}>
-                                        <MaterialIcons name="delete" size={20} color={isRecordingCancelled ? '#ff4d6d' : 'rgba(255,255,255,0.72)'} />
-                                    </Animated.View>
-                                    <Animated.View style={[styles.recordingIndicator, recordingPulseStyle]} />
-                                    <Text style={styles.recordingTimer}>{formatDuration(recordingDuration)}</Text>
-                                    
-                                    <Animated.View style={[{ flex: 1, height: 40, justifyContent: 'center', alignItems: 'center' }, recordingWaveAnimatedStyle]}>
-                                        <SiriWaveform level={recordingLevel} active={isRecording} />
-                                    </Animated.View>
+                                {inputText.trim() ? (
+                                    <Pressable style={styles.sendButton} onPress={handleSend}>
+                                        <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
+                                        <MaterialIcons name="arrow-upward" size={22} color="#fff" />
+                                    </Pressable>
+                                ) : (
+                                    <View
+                                        onTouchStart={handleMicTouchStart}
+                                        onTouchMove={handleMicTouchMove}
+                                        onTouchEnd={handleMicTouchEnd}
+                                        style={isRecording ? { opacity: 0 } : {}}
+                                    >
+                                        <Animated.View style={[styles.sendButton, recordingPulseStyle]}>
+                                            <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
+                                            <MaterialIcons name="mic" size={22} color={isRecording ? '#fff' : 'rgba(255,255,255,0.7)'} />
+                                        </Animated.View>
+                                    </View>
+                                )}
 
-                                    <Animated.View style={[styles.cancelHintChevron, slideToCancelStyle]}>
-                                        <MaterialIcons name="chevron-left" size={20} color="rgba(255,255,255,0.42)" />
+                                {isRecording && (
+                                    <Animated.View style={[StyleSheet.absoluteFill, { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 4, zIndex: 10 }]}>
+                                        <Animated.View style={[styles.deleteIconWrap, deleteIconAnimatedStyle]}>
+                                            <MaterialIcons name="delete" size={24} color="rgba(255,255,255,0.72)" />
+                                        </Animated.View>
+
+                                        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(18, 16, 26, 0.4)', borderRadius: 24, height: 44, marginHorizontal: 4, paddingHorizontal: 12, borderWidth: 1.2, borderColor: 'rgba(255,255,255,0.22)', overflow: 'hidden' }}>
+                                            <GlassView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+                                            <Animated.View style={[styles.recordingIndicator, recordingPulseStyle]} />
+                                            <Text style={styles.recordingTimer}>{formatDuration(recordingDuration)}</Text>
+                                            <View style={{ flex: 1, height: 40, justifyContent: 'center' }}>
+                                               <SiriWaveform level={recordingLevel} active={isRecording} themeColor={activeTheme.primary} />
+                                            </View>
+                                            <Animated.View style={[{ opacity: 0.4 }, slideToCancelStyle]}>
+                                                <MaterialIcons name="chevron-left" size={20} color="white" />
+                                            </Animated.View>
+                                        </View>
+
+                                        <Animated.View style={[styles.recordingMicIconWrap, { backgroundColor: activeTheme.primary, width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' }]}>
+                                            <MaterialIcons name="mic" size={24} color="#fff" />
+                                        </Animated.View>
                                     </Animated.View>
-                                    <Animated.View style={[styles.recordingMicIconWrap, recordingMicAnimatedStyle]}>
-                                        <MaterialIcons name="mic" size={20} color="#fff" />
-                                    </Animated.View>
-                                </Animated.View>
-                            )}
-                        </View>
+                                )}
+                            </View>
                         </Animated.View>
                     </View>
                 </View>
             </Animated.View>
 
-            {/* ─── Header & Morph Pill — OUTSIDE all opacity wrappers ─────────────────
-                 These MUST be at the root level with opacity:1 from frame 0.
-                 The shared transition engine snapshots them on mount — if they are
-                 inside an opacity:0 view, the morph target is invisible → black flash.
-            */}
-            <View style={[StyleSheet.absoluteFill, { zIndex: 2 }]} pointerEvents="box-none">
-                {/* 
-                    UNIFIED HEADER WRAPPER 
-                    This is the single Shared Transition target for the pill shape.
-                    By nesting the glass blur and content inside it, we ensure they 
-                    never desync or jitter during the transition.
-                */}
-                <Animated.View
-                    {...(ENABLE_SHARED_TRANSITIONS ? { sharedTransitionTag: `pill-${contact?.id || id}` } : {})}
-                    style={[
-                        styles.headerPill, 
-                        headerMorphAnimatedStyle, 
-                        { 
-                            position: 'absolute', 
-                            top: HEADER_PILL_TOP, 
-                            left: MAIN_PILL_LEFT,
-                            right: 24, 
-                            backgroundColor: 'rgba(15, 15, 20, 0.4)', 
-                            borderRadius: HEADER_PILL_RADIUS, 
-                            zIndex: 10,
-                            borderWidth: 1,
-                            borderColor: 'rgba(255, 255, 255, 0.22)',
-                            overflow: 'hidden'
-                        }
-                    ]}
-                    pointerEvents="box-none"
-                    {...(!animationFinished ? { renderToHardwareTextureAndroid: true } : {})}
-                >
-                    {/* Liquid-glass blur layer (internalized) */}
-                    <View style={StyleSheet.absoluteFill} pointerEvents="none">
-                        {animationFinished ? (
-                            <Animated.View entering={FadeInDown.duration(400)} style={StyleSheet.absoluteFill}>
-                                <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill}  />
-                            </Animated.View>
-                        ) : (
-                            <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(15, 15, 20, 0.65)' }]} />
-                        )}
-                    </View>
-
-                    {/* Music progress glow (internalized) */}
-                    {musicState?.currentSong && musicProgress > 0 && (
-                        <Pressable
-                            onPress={(e) => {
-                                const tapX = e.nativeEvent.locationX;
-                                const width = SCREEN_WIDTH - MAIN_PILL_LEFT - 24;
-                                const percent = Math.max(0, Math.min(tapX / width, 1));
-                                const dur = (musicState.currentSong?.duration || 240) * 1000;
-                                seekTo(percent * dur);
-                            }}
-                            style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 10, justifyContent: 'flex-end', overflow: 'hidden' }}
-                        >
-                            <View style={{
-                                width: `${musicProgress}%`,
-                                height: 3,
-                                backgroundColor: '#ff0080',
-                                shadowColor: '#ff0080',
-                                shadowOpacity: 1,
-                                shadowRadius: 6,
-                                shadowOffset: { width: 0, height: 0 },
-                            }} />
-                        </Pressable>
-                    )}
-
-                    {/* Header Content — also internalized to follow the shared transition perfectly */}
-                    <View style={[styles.header, { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, height: '100%' }]} pointerEvents="box-none">
-                        {selectionMode ? (
-                            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16 }}>
-                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                    <Pressable 
-                                        onPress={() => { setSelectionMode(false); setSelectedMessageIds([]); }}
-                                        style={({ pressed }) => [
-                                            { 
-                                                width: BACK_BTN_SIZE, 
-                                                height: BACK_BTN_SIZE, 
-                                                borderRadius: BACK_BTN_SIZE/2, 
-                                                backgroundColor: 'rgba(255, 255, 255, 0.1)', 
-                                                alignItems: 'center', 
-                                                justifyContent: 'center',
-                                                marginRight: 10,
-                                                opacity: pressed ? 0.7 : 1
-                                            }
-                                        ]}
-                                    >
-                                        <MaterialIcons name="close" size={24} color="#ffffff" />
-                                    </Pressable>
-                                    <View>
-                                        <Text style={{ color: '#fff', fontSize: 18, fontWeight: '600' }}>
-                                            {selectedMessageIds.length}
-                                        </Text>
-                                        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12 }}>Selected</Text>
-                                    </View>
-                                </View>
-                                <Pressable onPress={handleDeleteSelected} style={{ padding: 4 }}>
-                                    <MaterialIcons name="delete-outline" size={24} color="#ff4444" />
-                                </Pressable>
-                            </View>
-                        ) : (
-                          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', paddingLeft: 0 }}>
-                            <Pressable 
-                                ref={profileAvatarRef}
-                                collapsable={false}
-                                style={styles.avatarWrapper} 
-                                onPress={openProfileWithMorph}
-                            >
-                                <SoulAvatar
-                                    uri={contact?.avatar}
-                                    localUri={contact?.localAvatarUri}
-                                    size={44}
-                                    avatarType={contact?.avatarType}
-                                    teddyVariant={contact?.teddyVariant}
-                                    isOnline={contact?.id ? getPresence(contact.id).isOnline : false}
-                                    // Match list item tag for smooth flying
-                                    {...(ENABLE_INNER_SHARED_TRANSITIONS ? { sharedTransitionTag: `pill-avatar-${contact?.id || id}` } : {})}
-                                    style={[
-                                        contact?.stories && contact.stories.length > 0 && {
-                                            borderWidth: 2,
-                                            borderColor: contact.stories.some(s => !s.seen) ? '#3b82f6' : 'rgba(255,255,255,0.4)',
-                                            padding: 2
-                                        }
-                                    ]}
-                                />
-                            </Pressable>
-
-                            <View style={styles.headerInfo}>
-                                <Animated.View {...(ENABLE_INNER_SHARED_TRANSITIONS ? { sharedTransitionTag: `pill-name-${contact?.id || id}` } : {})}>
-                                    <Text style={styles.contactName}>{contact?.name || '...'}</Text>
-                                </Animated.View>
-                                <Animated.View style={headerAccessoryAnimatedStyle}>
-                                    {musicState.isPlaying && musicState.currentSong ? (
-                                        <View style={styles.nowPlayingStatus}>
-                                            <MaterialIcons name="audiotrack" size={12} color={activeTheme.primary} />
-                                            <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
-                                                {sanitizeSongTitle(musicState.currentSong.name)}
-                                            </Text>
-                                        </View>
-                                    ) : (() => {
-                                        const presence = contact?.id ? getPresence(contact.id) : { isOnline: false, lastSeen: null };
-                                        let statusText = 'offline';
-                                        let statusColor = 'rgba(255,255,255,0.35)';
-                                        
-                                        if (!connectivity.isDeviceOnline) {
-                                            statusText = 'No network';
-                                        } else if (!connectivity.isServerReachable) {
-                                            statusText = 'Connecting...';
-                                        } else if (presence.isOnline) {
-                                            statusText = 'ONLINE';
-                                            statusColor = activeTheme.primary;
-                                        } else if (presence.lastSeen) {
-                                            statusText = `last seen ${formatLastSeen(presence.lastSeen)}`;
-                                        }
-
-                                        return (
-                                            <Text style={[styles.statusText, { color: statusColor }]}>
-                                                {statusText}
-                                            </Text>
-                                        );
-                                    })()}
-                                </Animated.View>
-                            </View>
-
-                            <View style={{ flexDirection: 'row', gap: 10, marginLeft: 'auto' }}>
-                                <Animated.View style={headerAccessoryAnimatedStyle}>
-                                    <Pressable style={styles.headerButton} onPress={() => router.push('/music')}>
-                                        {({ pressed }) => (
-                                            <MaterialIcons name={musicState?.isPlaying ? 'equalizer' : 'audiotrack'} size={22} color={musicState?.currentSong ? '#ff0080' : pressed ? activeTheme.primary : '#ffffff'} />
-                                        )}
-                                    </Pressable>
-                                </Animated.View>
-
-                                <Animated.View style={headerAccessoryAnimatedStyle}>
-                                    <View ref={callButtonRef} collapsable={false}>
-                                        <Pressable style={styles.headerButton} onPress={openCallModal}>
-                                            {({ pressed }) => (
-                                                <MaterialIcons name="call" size={22} color={pressed ? activeTheme.primary : '#ffffff'} />
-                                            )}
-                                        </Pressable>
-                                    </View>
-                                </Animated.View>
-                            </View>
-                          </View>
-                        )}
-                    </View>
-                </Animated.View>
-
-                {/* Detached Back Button Circle */}
-                {!selectionMode && (
-                    <Animated.View 
-                        style={[
-                            headerAccessoryAnimatedStyle, 
-                            { 
-                                position: 'absolute', 
-                                top: HEADER_PILL_TOP + (HEADER_PILL_HEIGHT - BACK_BTN_SIZE) / 2, 
-                                left: 16, 
-                                width: BACK_BTN_SIZE, 
-                                height: BACK_BTN_SIZE, 
-                                borderRadius: BACK_BTN_SIZE/2, 
-                                backgroundColor: 'rgba(15, 15, 20, 0.4)', 
-                                zIndex: 20, 
-                                overflow: 'hidden',
-                                borderWidth: 1,
-                                borderColor: 'rgba(255, 255, 255, 0.22)',
-                                alignItems: 'center',
-                                justifyContent: 'center'
-                            }
-                        ]}
+            {/* Root-level Close Button for Overlay — Top Priority */}
+            {isOverlay && (
+                <View style={{ position: 'absolute', top: Math.max(insets.top, 20), right: 20, zIndex: 100000 }} pointerEvents="auto">
+                    <Pressable 
+                        onPress={() => onBack?.()} 
+                        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+                        style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' }}
                     >
-                        <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
-                        <Pressable 
-                            onPress={handleBack} 
-                            style={{ width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }}
-                        >
-                            <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
-                        </Pressable>
-                    </Animated.View>
-                )}
-            </View>
+                        <MaterialIcons name="close" size={24} color="white" />
+                    </Pressable>
+                </View>
+            )}
 
             {/* Reaction Modal */}
             <MessageContextMenu
@@ -2072,6 +2125,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 onAction={handleAction}
                 chatMessages={chatMessages}
                 contactName={contact?.name || 'Them'}
+                isAdmin={isAdmin}
             />
 
             {/* Call Options Dropdown */}
@@ -2083,7 +2137,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                 styles.callDropdown,
                                 {
                                     top: callOptionsPosition.y,
-                                    right: 16,
+                                    right: 24,
                                     opacity: modalAnim,
                                     transform: [{
                                         scale: modalAnim.interpolate({
@@ -2094,15 +2148,13 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                                 }
                             ]}
                         >
-                            <View style={[styles.callDropdownContent, { backgroundColor: Platform.OS === 'android' ? 'rgba(18, 16, 26, 0.95)' : 'rgba(18, 16, 26, 0.8)' }]}>
-                                {Platform.OS !== 'android' && (
-                                    <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
-                                )}
+                            <View style={[styles.callDropdownContent, { backgroundColor: 'transparent' }]}>
+                                <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
                                 <Pressable style={styles.callDropdownItem} onPress={() => handleCall('audio')}>
                                     <View style={[styles.callDropdownIcon, { backgroundColor: 'rgba(34, 197, 94, 0.15)' }]}>
                                         <MaterialIcons name="call" size={20} color="#22c55e" />
                                     </View>
-                                    <Text style={styles.callDropdownText}>Audio</Text>
+                                    <Text style={styles.callDropdownText}>{isGroup ? 'Group Call' : 'Audio'}</Text>
                                 </Pressable>
                                 <View style={styles.callDropdownDivider} />
                                 <Pressable style={styles.callDropdownItem} onPress={() => handleCall('video')}>
@@ -2202,15 +2254,16 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
             {/* Premium Media Viewer (Seamless Morph & Blur) */}
             <EnhancedMediaViewer
                 visible={!!mediaViewer}
+                isStatus={false}
                 media={mediaViewer ? mediaViewer.items[mediaViewer.index] as any : null}
                 sourceLayout={selectedMediaLayout}
                 userInfo={(() => {
                     if (!mediaViewer) return undefined;
                     const msg = chatMessages.find((m: any) => m.id === mediaViewer.messageId);
                     if (!msg) return { name: 'You', timestamp: 'Just now' };
-                    
+
                     const isMe = msg.sender === 'me';
-                    
+
                     // Robust timestamp parsing
                     let formattedTime = 'Just now';
                     if (msg.timestamp) {
@@ -2236,7 +2289,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 }}
                 onSendComment={(comment) => {
                     if (id && comment.trim()) {
-                        sendChatMessage(messageKey,comment);
+                        sendChatMessage(messageKey, comment);
                     }
                 }}
                 onDownload={handleSaveCurrentMedia}
@@ -2276,7 +2329,7 @@ export default function SingleChatScreen({ user: propsUser, onBack, onBackStart,
                 onClose={() => setShowMusicPlayer(false)}
                 contactName={contact?.name || 'Someone'}
             />
-            
+
             {/* FlyingBubbleLayer removed — component not available */}
         </View>
     );
@@ -2313,11 +2366,11 @@ const styles = StyleSheet.create({
     header: {
         flex: 1,
         backgroundColor: 'transparent',
-        paddingLeft: 12,
-        paddingRight: 12,
+        paddingLeft: 16,
+        paddingRight: 16,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: 14,
     },
     backButton: {
         padding: 4,
@@ -2326,9 +2379,9 @@ const styles = StyleSheet.create({
         position: 'relative',
     },
     avatar: {
-        width: 42,
-        height: 42,
-        borderRadius: 21,
+        width: 46,
+        height: 46,
+        borderRadius: 23,
         borderWidth: 0,
     },
     onlineIndicator: {
@@ -2497,32 +2550,40 @@ const styles = StyleSheet.create({
         backgroundColor: 'transparent',
         zIndex: 60,
     },
+    inputAreaRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        gap: 8,
+    },
     unifiedPillContainer: {
+        flex: 1,
         backgroundColor: 'transparent',
-        borderRadius: 25,
+        borderRadius: 24,
         borderWidth: 1.2,
         borderColor: 'rgba(255, 255, 255, 0.22)',
         overflow: 'hidden',
+        minHeight: 44,
     },
     inputWrapper: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 8,
-        paddingVertical: 8,
-        minHeight: 40,
-        maxHeight: 100,
-        gap: 4,
+        paddingHorizontal: 12,
+        paddingVertical: 4,
+        minHeight: 44,
+        maxHeight: 120,
     },
     attachButton: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        backgroundColor: 'rgba(255, 255, 255, 0.05)',
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: 'rgba(255, 255, 255, 0.08)',
         alignItems: 'center',
         justifyContent: 'center',
-        borderWidth: 1,
+        borderWidth: 1.2,
         borderColor: 'rgba(255, 255, 255, 0.22)',
         flexShrink: 0,
+        marginBottom: 0,
+        overflow: 'hidden',
     },
     input: {
         flex: 1,
@@ -2533,19 +2594,19 @@ const styles = StyleSheet.create({
         fontWeight: '300',
     },
     sendButton: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        backgroundColor: 'rgba(255, 255, 255, 0.05)',
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: 'rgba(255, 255, 255, 0.08)',
         alignItems: 'center',
         justifyContent: 'center',
-        borderWidth: 1,
+        borderWidth: 1.2,
         borderColor: 'rgba(255, 255, 255, 0.22)',
         flexShrink: 0,
+        overflow: 'hidden',
     },
     sendButtonActive: {
-        backgroundColor: 'rgba(245, 0, 87, 0.1)',
-        borderColor: 'rgba(245, 0, 87, 0.3)',
+        // Handled via inline themeAccent for dynamic switching
     },
     errorText: {
         color: 'rgba(255,255,255,0.5)',
@@ -2578,9 +2639,9 @@ const styles = StyleSheet.create({
         width: 140,
         borderRadius: 16,
         overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
-        backgroundColor: 'rgba(18, 16, 26, 0.8)', // Fallback
+        borderWidth: 1.2,
+        borderColor: 'rgba(255, 255, 255, 0.22)',
+        backgroundColor: 'rgba(15, 15, 20, 0.4)',
     },
     callDropdownContent: {
         borderRadius: 16,
@@ -2744,11 +2805,16 @@ const styles = StyleSheet.create({
         gap: 4,
     },
     optionsMenu: {
-        width: '100%',
+        position: 'absolute',
+        width: SCREEN_WIDTH - 32,
         flexDirection: 'row',
-        flexWrap: 'wrap',
+        flexWrap: 'nowrap',
         justifyContent: 'space-around',
         overflow: 'hidden',
+        backgroundColor: 'transparent',
+        borderWidth: 1.2,
+        borderColor: 'rgba(255, 255, 255, 0.18)',
+        paddingHorizontal: 8,
     },
     optionItem: {
         alignItems: 'center',
@@ -2775,7 +2841,6 @@ const styles = StyleSheet.create({
         width: 8,
         height: 8,
         borderRadius: 4,
-        backgroundColor: '#BC002A',
         marginRight: 8,
     },
     deleteIconWrap: {
@@ -2800,7 +2865,6 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         borderRadius: 20,
         overflow: 'hidden',
-        shadowColor: '#FF1E56',
         shadowOpacity: 0.55,
         shadowRadius: 12,
         shadowOffset: { width: 0, height: 0 },
@@ -2817,7 +2881,6 @@ const styles = StyleSheet.create({
         borderRadius: 21,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#BC002A',
         marginLeft: 6,
     },
     searchBarWrap: {

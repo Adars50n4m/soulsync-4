@@ -13,6 +13,7 @@ import {
 import { GlassView } from './ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
 import { COUNTRIES, Country } from '../constants/Countries';
+import { useApp } from '../context/AppContext';
 
 interface CountryPickerProps {
   visible: boolean;
@@ -27,8 +28,10 @@ export const CountryPicker: React.FC<CountryPickerProps> = ({
   onClose,
   onSelect,
   selectedCountry,
-  themeColor = '#BC002A', // Default midnight red
+  themeColor,
 }) => {
+  const { activeTheme } = useApp();
+  const currentThemeColor = themeColor || activeTheme?.primary || '#BC002A';
   const [search, setSearch] = useState('');
 
   const filteredCountries = useMemo(() => {
@@ -59,13 +62,13 @@ export const CountryPicker: React.FC<CountryPickerProps> = ({
       >
         <Text style={styles.flag}>{item.flag}</Text>
         <View style={styles.countryInfo}>
-          <Text style={[styles.countryName, isSelected && { color: themeColor }]}>
+          <Text style={[styles.countryName, isSelected && { color: currentThemeColor }]}>
             {item.name}
           </Text>
           <Text style={styles.dialCode}>{item.dialCode}</Text>
         </View>
         {isSelected && (
-          <MaterialIcons name="check" size={20} color={themeColor} />
+          <MaterialIcons name="check" size={20} color={currentThemeColor} />
         )}
       </TouchableOpacity>
     );

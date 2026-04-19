@@ -26,7 +26,7 @@ export const SecurityLockOverlay = () => {
             const enrolled = await LocalAuthentication.isEnrolledAsync();
             if (enrolled) {
                 const result = await LocalAuthentication.authenticateAsync({
-                    promptMessage: 'Unlock SoulSync',
+                    promptMessage: 'Unlock Soul',
                     fallbackLabel: pinEnabled ? 'Use PIN' : undefined,
                 });
 
@@ -64,7 +64,7 @@ export const SecurityLockOverlay = () => {
                     <View style={[styles.iconContainer, { backgroundColor: `${activeTheme.primary}20` }]}>
                         <MaterialIcons name="lock" size={48} color={activeTheme.primary} />
                     </View>
-                    <Text style={styles.title}>SoulSync Locked</Text>
+                    <Text style={styles.title}>Soul Locked</Text>
                     <Text style={styles.subtitle}>
                         {pinEnabled ? 'Enter your 6-digit PIN' : 'Authenticate to unlock'}
                     </Text>

@@ -152,7 +152,23 @@ class StatusService {
     if (!actor?.id) return [];
     
     const now = Date.now();
-    const cachedUsers = await db.getAllAsync<CachedUser>('SELECT id, username, display_name as displayName, avatar_url as avatarUrl, local_avatar_uri as localAvatarUri, soul_note as soulNote, soul_note_at as soulNoteAt FROM cached_users');
+    let cachedUsers: CachedUser[] = [];
+    try {
+      cachedUsers = await db.getAllAsync<CachedUser>('SELECT id, username, display_name as displayName, avatar_url as avatarUrl, avatar_type as avatarType, teddy_variant as teddyVariant, local_avatar_uri as localAvatarUri, soul_note as soulNote, soul_note_at as soulNoteAt FROM cached_users');
+    } catch (e: any) {
+      // Fallback for migration race condition: if avatar_type doesn't exist yet, query without it
+      if (e?.message?.includes('no such column') || e?.message?.includes('avatar_type')) {
+        console.warn('[StatusService] Database columns missing (migration pending?), using fallback query.');
+        const fallbackRows = await db.getAllAsync<any>('SELECT id, username, display_name as displayName, avatar_url as avatarUrl, local_avatar_uri as localAvatarUri, soul_note as soulNote, soul_note_at as soulNoteAt FROM cached_users');
+        cachedUsers = fallbackRows.map(r => ({
+          ...r,
+          avatarType: 'default' as const,
+          teddyVariant: undefined
+        }));
+      } else {
+        throw e; // Re-throw other errors
+      }
+    }
     const cachedStatuses = await db.getAllAsync<any>('SELECT id, user_id as userId, media_local_path as mediaLocalPath, media_key as mediaKey, media_type as mediaType, caption, duration, expires_at as expiresAt, is_viewed as isViewed, is_mine as isMine, created_at as createdAt FROM cached_statuses WHERE expires_at > ? ORDER BY created_at ASC', [now]);
 
     const groupsMap: Map<string, UserStatusGroup> = new Map();
@@ -187,7 +203,10 @@ class StatusService {
         if (profiles) {
           for (const profile of profiles) {
             const contact = await db.getFirstAsync<any>('SELECT local_avatar_uri FROM contacts WHERE id = ?', [profile.id]);
-            await db.runAsync('INSERT OR REPLACE INTO cached_users (id, username, display_name, avatar_url, local_avatar_uri, soul_note, soul_note_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [profile.id, profile.username, profile.display_name, profile.avatar_url, contact?.local_avatar_uri, profile.soul_note, profile.soul_note_at ? Date.parse(profile.soul_note_at) : null]);
+            await db.runAsync(
+              'INSERT OR REPLACE INTO cached_users (id, username, display_name, avatar_url, avatar_type, teddy_variant, local_avatar_uri, soul_note, soul_note_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', 
+              [profile.id, profile.username, profile.display_name, profile.avatar_url, profile.avatar_type || 'default', profile.teddy_variant, contact?.local_avatar_uri, profile.soul_note, profile.soul_note_at ? Date.parse(profile.soul_note_at) : null]
+            );
           }
         }
       }
@@ -337,6 +356,55 @@ class StatusService {
           this.downloadStatusToCache(status.id).catch(() => {});
         }
       }
+    }
+  }
+
+  async likeStatus(statusId: string): Promise<boolean> {
+    const actor = await this.resolveStatusActor();
+    if (!actor?.id) return false;
+    
+    try {
+      const { error } = await supabase.from('status_likes').insert({
+        status_id: statusId,
+        user_id: actor.id
+      });
+      if (error) {
+        // Handle unique constraint violation (already liked)
+        if (error.code === '23505') return true;
+        throw error;
+      }
+      return true;
+    } catch (err) {
+      console.warn('[Status] Failed to like status:', err);
+      return false;
+    }
+  }
+
+  async unlikeStatus(statusId: string): Promise<boolean> {
+    const actor = await this.resolveStatusActor();
+    if (!actor?.id) return false;
+
+    try {
+      const { error } = await supabase.from('status_likes').delete().match({
+        status_id: statusId,
+        user_id: actor.id
+      });
+      if (error) throw error;
+      return true;
+    } catch (err) {
+      console.warn('[Status] Failed to unlike status:', err);
+      return false;
+    }
+  }
+
+  async getStatusLikesCount(statusId: string): Promise<number> {
+    try {
+      const { count, error } = await supabase.from('status_likes').select('*', { count: 'exact', head: true }).eq('status_id', statusId);
+      if (error) throw error;
+      return count || 0;
+    } catch (err) {
+      console.warn('[Status] Failed to get likes count:', err);
+      return 0;
     }
   }
 }

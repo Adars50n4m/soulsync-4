@@ -105,8 +105,34 @@ export async function downloadMedia(
     
     await offlineService.updateMessageLocalUri(messageId, downloadResult.uri, fileSize);
 
-    // Don't auto-save to device gallery — WhatsApp only saves when user explicitly taps "Save"
-    // Gallery save was triggering permission dialogs on every incoming media
+    // 🛡️ [Minimizing Server Cost] Delete-on-Download
+    // Once we have a confirmed local copy, we can request deletion from the server (R2/Supabase)
+    // This ensures media only lives on the server until it's delivered to the recipient.
+    try {
+      // Import storageService dynamically to avoid circular dependency
+      const { storageService } = require('./StorageService');
+      
+      // Extract key from remoteUrl (assuming it might be a full URL or a relative key)
+      let deleteKey = remoteUrl;
+      if (remoteUrl.includes('?')) {
+        deleteKey = remoteUrl.split('?')[0]; // Remove query params/signatures
+      }
+      
+      // If it's a full URL from our R2 base, extract just the path-key
+      const { R2_CONFIG } = require('../config/r2');
+      const r2Base = R2_CONFIG.PUBLIC_URL;
+      if (r2Base && deleteKey.startsWith(r2Base)) {
+        deleteKey = deleteKey.replace(r2Base, '').replace(/^\//, '');
+      }
+
+      console.log(`[MediaDownload] Download confirmed. Requesting server-side deletion of: ${deleteKey}`);
+      // Fire and forget (don't block the UI for deletion success)
+      storageService.deleteMedia(deleteKey).catch((e: any) => {
+        console.warn(`[MediaDownload] Server-side deletion failed (will be caught by cleanup daemon):`, e.message);
+      });
+    } catch (e) {
+      console.warn('[MediaDownload] Could not trigger server-side deletion:', e);
+    }
 
     return { success: true, localUri: downloadResult.uri, fileSize };
   } catch (error) {

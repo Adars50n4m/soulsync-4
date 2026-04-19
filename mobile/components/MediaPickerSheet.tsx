@@ -2,11 +2,13 @@ import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { View, Pressable, StyleSheet, Animated, PanResponder, useWindowDimensions, FlatList, Text, ActivityIndicator, Platform, ScrollView } from 'react-native';
 import { Image } from 'expo-image';
 import GlassView from './ui/GlassView';
+import { hapticService } from '../services/HapticService';
 import * as Haptics from 'expo-haptics';
 import * as MediaLibrary from 'expo-media-library';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import Reanimated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { SwiftUIButton } from './SwiftUIButton';
+import { useApp } from '../context/AppContext';
 
 interface MediaPickerSheetProps {
   visible: boolean;
@@ -31,6 +33,9 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
   onSelectLocation,
   onSelectContact,
 }) => {
+  const { activeTheme } = useApp();
+  const themeAccent = activeTheme?.primary || '#BC002A';
+  
   const slideAnim = useMemo(() => new Animated.Value(0), []);
   const opacityAnim = useMemo(() => new Animated.Value(0), []);
   const { height: screenHeight, width: screenWidth } = useWindowDimensions();
@@ -184,7 +189,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
   };
 
   const handleHaptic = () => {
-    // Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    hapticService.impact(Haptics.ImpactFeedbackStyle.Light);
   };
 
   // Grid Render Items
@@ -228,8 +233,8 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
                 contentFit="cover"
               />
               {isSelected && (
-                  <View style={styles.selectedOverlay}>
-                      <View style={styles.checkCircle}>
+                  <View style={[styles.selectedOverlay, { borderColor: themeAccent }]}>
+                      <View style={[styles.checkCircle, { backgroundColor: themeAccent }]}>
                           <Ionicons name="checkmark" size={16} color="#fff" />
                       </View>
                   </View>
@@ -376,7 +381,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
                 onEndReachedThreshold={0.5}
                 ListFooterComponent={() => isLowerLoading ? (
                     <View style={{ padding: 20 }}>
-                        <ActivityIndicator color="#BC002A" />
+                        <ActivityIndicator color={themeAccent} />
                     </View>
                 ) : null}
             />
@@ -386,7 +391,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
           {selectedAssets.length > 0 && (
               <Reanimated.View entering={FadeInDown} exiting={FadeOutDown} style={styles.floatingConfirm}>
                   <Pressable 
-                      style={styles.confirmButton}
+                      style={[styles.confirmButton, { backgroundColor: themeAccent }]}
                       onPress={() => {
                           if (onSelectAssets) onSelectAssets(selectedAssets);
                           setSelectedAssets([]);
@@ -394,7 +399,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
                   >
                       <Text style={styles.confirmText}>Send {selectedAssets.length} item{selectedAssets.length > 1 ? 's' : ''}</Text>
                       <View style={styles.confirmIconWrap}>
-                         <MaterialIcons name="arrow-forward" size={18} color="#BC002A" />
+                         <MaterialIcons name="arrow-forward" size={18} color={themeAccent} />
                       </View>
                   </Pressable>
               </Reanimated.View>
@@ -585,7 +590,6 @@ const styles = StyleSheet.create({
       ...StyleSheet.absoluteFillObject,
       backgroundColor: 'rgba(0,0,0,0.4)',
       borderWidth: 2,
-      borderColor: '#BC002A',
   },
   checkCircle: {
       position: 'absolute',
@@ -594,7 +598,6 @@ const styles = StyleSheet.create({
       width: 24,
       height: 24,
       borderRadius: 12,
-      backgroundColor: '#BC002A',
       alignItems: 'center',
       justifyContent: 'center',
   },
@@ -608,7 +611,6 @@ const styles = StyleSheet.create({
   confirmButton: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: '#BC002A',
       paddingHorizontal: 20,
       paddingVertical: 12,
       borderRadius: 30,

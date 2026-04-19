@@ -48,7 +48,10 @@ export async function smartFetch(
         // (retrying a "Tunnel Unavailable" response won't help and adds ~7s of unnecessary delay)
         const isTunnelDown = response.status === 503 && isTunnel;
         if (retries > 0 && !isTunnelDown && (response.status >= 500 || response.status === 429)) {
-            console.warn(`[Network] Retrying ${url} (${response.status})... ${retries} attempts left`);
+            // Only log if it's the last retry or a persistent error to avoid spamming for cold starts
+            if (retries === 1) {
+                console.warn(`[Network] Final retry for ${url} (${response.status})...`);
+            }
             await new Promise(resolve => setTimeout(resolve, backoff));
             return smartFetch(url, init, retries - 1, backoff * 2);
         }

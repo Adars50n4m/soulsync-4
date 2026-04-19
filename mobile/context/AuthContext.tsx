@@ -42,6 +42,7 @@ export interface User {
     noteTimestamp?: string;
     country?: string;
     countryCode?: string;
+    isSuperUser?: boolean;
 }
 
 interface AuthContextType {
@@ -65,6 +66,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [sessionError, setSessionError] = useState<string | null>(null);
     const currentUserRef = useRef<User | null>(null);
     const deviceSessionIdRef = useRef<string | null>(null);
+    const isInitializingRef = useRef(true);
+    const suppressMismatchUntilRef = useRef(0);
 
     useEffect(() => {
         deviceSessionIdRef.current = deviceSessionId;
@@ -77,11 +80,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const isSyncingRef = useRef(false);
     const syncQueueRef = useRef<string | null>(null);
 
-    const isDeveloperBypassId = useCallback((userId?: string | null): boolean => {
+    const isSuperUser = useCallback((userId?: string | null): boolean => {
         if (!userId) return false;
         return userId === LEGACY_TO_UUID['shri']
             || userId === LEGACY_TO_UUID['hari']
             || userId.startsWith('f00f00f0-0000-0000-0000-00000000000');
+    }, []);
+
+    const getSuperUserProfile = useCallback((userId?: string | null): User | null => {
+        if (userId === LEGACY_TO_UUID['shri']) {
+            return {
+                id: userId,
+                name: 'Shri',
+                username: 'shri',
+                avatar: '',
+                avatarType: 'teddy',
+                teddyVariant: 'boy',
+                bio: 'SoulSync Founder | Jai Shree Ram',
+                isSuperUser: true,
+            };
+        }
+
+        if (userId === LEGACY_TO_UUID['hari']) {
+            return {
+                id: userId,
+                name: 'Hari',
+                username: 'hari',
+                avatar: '',
+                avatarType: 'teddy',
+                teddyVariant: 'boy',
+                bio: 'SoulSync Dev | Om Namah Shivay',
+                isSuperUser: true,
+            };
+        }
+
+        return null;
     }, []);
 
     const synchronizeSession = useCallback(async (userId: string) => {
@@ -95,15 +128,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         try {
             console.log('[AuthContext] Synchronizing session for:', userId);
-            // Add timeout to prevent hanging
-            const profile = await Promise.race([
-                authService.getProfile(userId),
-                new Promise<null>((resolve) => setTimeout(() => {
-                    console.warn('[AuthContext] getProfile timed out');
-                    resolve(null);
-                }, 5000))
-            ]);
-            // Session Management: Generate and sync device session ID
+            // Session Management: Generate local device session ID immediately.
             let localSessionId = await AsyncStorage.getItem('ss_device_session_id');
             if (!localSessionId) {
                 localSessionId = `soul_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
@@ -111,16 +136,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
             setDeviceSessionId(localSessionId);
 
-            // Update profile with the new session ID
-            await supabase
-                .from('profiles')
-                .update({ active_session_id: localSessionId })
-                .eq('id', userId);
+            const bypassBase = getSuperUserProfile(userId);
+            if (bypassBase) {
+                console.log('[AuthContext] Initializing super user from bypass base:', bypassBase.username);
+                setCurrentUser(bypassBase);
+            }
+
+            let profileTimeoutId: ReturnType<typeof setTimeout> | undefined;
+            const profile = await Promise.race([
+                authService.getProfile(userId),
+                new Promise<null>((resolve) => {
+                    profileTimeoutId = setTimeout(() => {
+                        profileTimeoutId = undefined;
+                        console.warn('[AuthContext] getProfile timed out');
+                        resolve(null);
+                    }, 5000);
+                })
+            ]).finally(() => {
+                if (profileTimeoutId) clearTimeout(profileTimeoutId);
+            });
+
+            const rawName = profile?.displayName || '';
+             
+            const getProperName = () => {
+                if (rawName && !rawName.startsWith('user_')) return rawName;
+                if (profile?.username && !profile.username.startsWith('user_')) return profile.username;
+                return profile?.username || rawName || 'User';
+            };
+
+            const shouldPersistRemoteSession = !!profile;
+            if (shouldPersistRemoteSession) {
+                // Set a 10s cooldown to prevent Realtime from triggering a mismatch on our own update
+                suppressMismatchUntilRef.current = Date.now() + 10000;
+                
+                void (async () => {
+                    try {
+                        const { error } = await supabase
+                            .from('profiles')
+                            .update({ active_session_id: localSessionId })
+                            .eq('id', userId);
+
+                        if (error) {
+                            console.warn('[AuthContext] Failed to persist active_session_id:', error.message);
+                        }
+                    } catch (err) {
+                        console.warn('[AuthContext] Failed to persist active_session_id:', err);
+                    }
+                })();
+            }
 
             if (profile) {
                 const userObj: User = {
                     id: profile.id,
-                    name: profile.displayName || profile.username || 'User',
+                    name: getProperName(),
                     username: profile.username,
                     avatar: proxySupabaseUrl(profile.avatarUrl) || '',
                     avatarType: profile.avatarType || 'default',
@@ -130,39 +198,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     note: profile.note,
                     noteTimestamp: profile.note_timestamp,
                     country: profile.country || undefined,
-                    countryCode: profile.countryCode || undefined
+                    countryCode: profile.countryCode || undefined,
+                    isSuperUser: isSuperUser(userId)
                 };
                 setCurrentUser(userObj);
                 await AsyncStorage.setItem('ss_current_user', userId);
                 await AsyncStorage.setItem('ss_cached_user_profile', JSON.stringify(userObj));
                 await AsyncStorage.setItem('ss_cached_user_profile_at', String(Date.now()));
             } else {
-                // FALLBACK: For Developer Bypass users (shri/hari) who don't exist in Supabase DB
-                console.log('[AuthContext] Profile not found, applying bypass logic for:', userId);
-                if (userId === LEGACY_TO_UUID['shri']) {
-                    const bypassUser: User = {
-                        id: userId,
-                        name: 'Shri',
-                        username: 'shri',
-                        avatar: 'https://avatar.iran.liara.run/public/boy?username=shri',
-                        avatarType: 'teddy',
-                        bio: 'SoulSync Founder | Jai Shree Ram'
-                    };
-                    setCurrentUser(bypassUser);
-                    await AsyncStorage.setItem('ss_current_user', userId);
-                    await AsyncStorage.setItem('ss_cached_user_profile', JSON.stringify(bypassUser));
-                } else if (userId === LEGACY_TO_UUID['hari']) {
-                    const bypassUser: User = {
-                        id: userId,
-                        name: 'Hari',
-                        username: 'hari',
-                        avatar: 'https://avatar.iran.liara.run/public/boy?username=hari',
-                        avatarType: 'teddy',
-                        bio: 'SoulSync Dev | Om Namah Shivay'
-                    };
-                    setCurrentUser(bypassUser);
-                    await AsyncStorage.setItem('ss_current_user', userId);
-                    await AsyncStorage.setItem('ss_cached_user_profile', JSON.stringify(bypassUser));
+                const cachedProfileRaw = await AsyncStorage.getItem('ss_cached_user_profile');
+                if (cachedProfileRaw) {
+                    try {
+                        const cachedProfile = JSON.parse(cachedProfileRaw) as User;
+                        if (cachedProfile?.id === userId) {
+                            console.warn('[AuthContext] Profile lookup failed, restoring cached profile for:', userId);
+                            setCurrentUser(cachedProfile);
+                            await AsyncStorage.setItem('ss_current_user', userId);
+                        }
+                    } catch (parseError) {
+                        console.warn('[AuthContext] Failed to parse cached profile during sync fallback:', parseError);
+                    }
                 }
             }
 
@@ -204,16 +259,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 synchronizeSession(queued);
             }
         }
-    }, []);
+    }, [getSuperUserProfile]);
 
     const synchronizeSessionWithTimeout = useCallback(async (userId: string, timeoutMs = 7000) => {
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
         await Promise.race([
             synchronizeSession(userId),
-            new Promise((resolve) => setTimeout(() => {
-                console.warn(`[AuthContext] synchronizeSession timed out after ${timeoutMs}ms for ${userId}`);
-                resolve(null);
-            }, timeoutMs))
-        ]);
+            new Promise((resolve) => {
+                timeoutId = setTimeout(() => {
+                    timeoutId = undefined;
+                    console.warn(`[AuthContext] synchronizeSession timed out after ${timeoutMs}ms for ${userId}`);
+                    resolve(null);
+                }, timeoutMs);
+            })
+        ]).finally(() => {
+            if (timeoutId) clearTimeout(timeoutId);
+        });
     }, [synchronizeSession]);
 
     const refreshProfile = useCallback(async (userId: string) => {
@@ -249,6 +310,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') {
                 const user = session?.user;
                 if (user) {
+                    const cachedUserId = await AsyncStorage.getItem('ss_current_user');
+                    if (isSuperUser(cachedUserId) && !isSuperUser(user.id)) {
+                        console.log('[AuthContext] Ignoring Supabase auth event while super user cache is active');
+                        return;
+                    }
                     await synchronizeSession(user.id);
                 }
             } else if (event === 'SIGNED_OUT') {
@@ -256,7 +322,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 // (e.g. token refresh failures, network issues). They are only
                 // cleared via the explicit logout() call.
                 const cachedUserId = await AsyncStorage.getItem('ss_current_user');
-                if (isDeveloperBypassId(cachedUserId)) {
+                if (isSuperUser(cachedUserId)) {
                     console.log('[AuthContext] Super user preserved through SIGNED_OUT event');
                     return;
                 }
@@ -281,7 +347,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             subscription.unsubscribe();
             cleanupTokenRefresh();
         };
-    }, [isDeveloperBypassId, synchronizeSession]);
+    }, [isSuperUser, synchronizeSession]);
 
     useEffect(() => {
         let isMounted = true;
@@ -309,15 +375,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 const dbTimeout = new Promise<boolean>((resolve) => {
                     dbTimeoutId = setTimeout(() => {
                         dbTimeoutId = undefined;
-                        console.warn(`[AuthContext] Database initialization HUNG after 5s - continuing without DB for now`);
+                        console.warn(`[AuthContext] Database initialization HUNG after 4s - continuing to UI`);
                         resolve(false);
-                    }, 5000);
+                    }, 4000); // Shorter timeout for faster boot
                 });
 
                 await Promise.race([dbPromise, dbTimeout]);
                 if (!isMounted) return;
 
                 console.log(`[AuthContext] DB phase complete after ${Date.now() - startInit}ms, starting session check...`);
+
+                const cachedUserId = await AsyncStorage.getItem('ss_current_user');
+                if (cachedUserId && isSuperUser(cachedUserId)) {
+                    console.log('[AuthContext] Prioritizing cached super user during boot:', cachedUserId);
+                    await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+                    await synchronizeSessionWithTimeout(cachedUserId, 2000);
+                    return;
+                }
                 
                 // 2. Session Phase
                 const sessionPromise = (async () => {
@@ -332,9 +406,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 const sessionTimeout = new Promise<null>((resolve) => {
                     sessionTimeoutId = setTimeout(() => {
                         sessionTimeoutId = undefined;
-                        console.log(`[AuthContext] Session check TIMED OUT after ${Date.now() - startInit}ms, continuing to UI...`);
+                        console.log(`[AuthContext] Session check TIMED OUT after 3s, continuing to UI...`);
                         resolve(null);
-                    }, 10000);
+                    }, 3000); // Reduced from 10s for snappier startup
                 });
 
                 const sessionResult = await Promise.race([sessionPromise, sessionTimeout]);
@@ -364,11 +438,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     await synchronizeSessionWithTimeout(session.user.id);
                 } else {
                     console.log('[AuthContext] No session found, checking cache...');
-                    const cachedUserId = await AsyncStorage.getItem('ss_current_user');
                     if (!isMounted) return;
 
                     if (cachedUserId) {
-                        if (isDeveloperBypassId(cachedUserId)) {
+                        if (isSuperUser(cachedUserId)) {
                             console.log('[AuthContext] Restoring developer bypass user from local cache:', cachedUserId);
                             await synchronizeSessionWithTimeout(cachedUserId);
                         } else {
@@ -414,6 +487,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 if (isMounted) {
                     console.log(`[AuthContext] Reached ready state (total init time: ${Date.now() - startInit}ms)`);
                     setIsReady(true);
+                    isInitializingRef.current = false;
                 }
             }
         };
@@ -425,7 +499,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (dbTimeoutId) clearTimeout(dbTimeoutId);
             if (sessionTimeoutId) clearTimeout(sessionTimeoutId);
         };
-    }, [isDeveloperBypassId, synchronizeSession, synchronizeSessionWithTimeout]);
+    }, [isSuperUser, synchronizeSession, synchronizeSessionWithTimeout]);
 
     const login = useCallback(async (emailOrUsername: string, password: string): Promise<boolean> => {
         const result = await authService.signInWithPassword(emailOrUsername, password);
@@ -523,11 +597,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     filter: `id=eq.${currentUser.id}`
                 },
                 (payload) => {
+                    // Superusers are exempt from session enforcement rules
+                    if (isSuperUser(currentUser.id)) {
+                        return;
+                    }
+
                     const newSessionId = payload.new.active_session_id;
                     const currentLocalId = deviceSessionIdRef.current;
                     
                     console.log(`[AuthContext] Session update detected: DB=${newSessionId}, Local=${currentLocalId}`);
                     
+                    if (isInitializingRef.current || Date.now() < suppressMismatchUntilRef.current) {
+                        console.log('[AuthContext] Mismatch check suppressed (Initializing or Cooldown)');
+                        return;
+                    }
+
                     if (newSessionId && currentLocalId && newSessionId !== currentLocalId) {
                         console.warn('[AuthContext] Session mismatch detected! Scheduling alert...');
                         setSessionError('You have been logged out because you logged in on another device.');
@@ -557,6 +641,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         const dbSessionId = data.active_session_id;
                         const localId = deviceSessionIdRef.current;
                         
+                        if (isInitializingRef.current || Date.now() < suppressMismatchUntilRef.current) {
+                            console.log('[AuthContext] Foreground mismatch check suppressed');
+                            return;
+                        }
+
                         if (dbSessionId && localId && dbSessionId !== localId) {
                             console.warn('[AuthContext] Foreground session mismatch! Scheduling alert...');
                             setSessionError('Account active on another device. Please log in again to continue.');

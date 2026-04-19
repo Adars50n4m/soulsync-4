@@ -6,8 +6,8 @@
 import { supabase } from '../config/supabase';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import * as Crypto from 'expo-crypto';
-import { SUPABASE_ENDPOINT } from '../config/api';
-import { offlineService, type QueuedMessage, type MessageStatus } from './LocalDBService';
+import { proxySupabaseUrl, SUPABASE_ENDPOINT } from '../config/api';
+import { offlineService, getDb, type QueuedMessage, type MessageStatus } from './LocalDBService';
 import { storageService } from './StorageService';
 import { AppState, AppStateStatus } from 'react-native';
 import * as FileSystem from 'expo-file-system';
@@ -21,6 +21,7 @@ export interface ChatMessage {
   id: string;
   sender_id: string;
   receiver_id: string;
+  group_id?: string;
   text: string;
   timestamp: string;
   status: MessageStatus;
@@ -33,6 +34,7 @@ export interface ChatMessage {
     duration?: number;
   };
   reply_to?: string;
+  senderName?: string;
   reactions?: string[];
   localFileUri?: string;
 }
@@ -58,6 +60,31 @@ const ACTIVE_POLL_INTERVAL = 2_000;   // 2 seconds
 const IDLE_POLL_INTERVAL   = 3_000;   // 3 seconds
 const REALTIME_POLL_INTERVAL = 30_000; // 30 seconds
 const MEDIA_GROUP_MARKER = '__MEDIA_GROUP_V1__:';
+const SUPABASE_INSERT_TIMEOUT_MS = 20_000;
+
+const createTimeoutError = (label: string, timeoutMs: number) => {
+  const seconds = Math.round(timeoutMs / 1000);
+  const error = new Error(`${label} timed out after ${seconds}s`);
+  (error as Error & { code?: string }).code = 'ETIMEDOUT';
+  return error;
+};
+
+const withTimeout = async <T>(promise: PromiseLike<T>, timeoutMs: number, label: string): Promise<T> => {
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(createTimeoutError(label, timeoutMs)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+};
 
 type GroupMediaItem = {
   type: 'image' | 'video' | 'audio' | 'file' | 'status_reply';
@@ -87,6 +114,7 @@ class ChatService {
   private channel:              ReturnType<typeof supabase.channel> | null = null;
   private userId:               string | null = null;
   private partnerId:            string | null = null;
+  private isGroup:              boolean = false;
   private senderName:           string = 'Someone';
 
   private onNewMessage:         MessageCallback       | null = null;
@@ -114,6 +142,7 @@ class ChatService {
 
   private pollTimer:            ReturnType<typeof setInterval> | null = null;
   private lastPollAt:           string | null = null;
+  private lastFetchTimestamps:  Map<string, number> = new Map();
   private isPolling:            boolean = false;
   private appStateListener:     any = null;
   private isRealtimeConnecting: boolean = false;
@@ -122,6 +151,7 @@ class ChatService {
     userId: string,
     partnerId: string,
     senderName: string,
+    isGroup: boolean = false,
     onMessage: MessageCallback,
     onStatus: StatusCallback,
     onNetworkStatus?: NetworkStatusCallback,
@@ -129,7 +159,7 @@ class ChatService {
     onAcknowledgment?: (messageId: string, status: 'delivered' | 'read', timestamp: string) => void,
     onDeleteMessage?: (messageId: string) => void
   ): Promise<void> {
-    if (this.isInitialized && this.userId === userId && this.partnerId === partnerId) {
+    if (this.isInitialized && this.userId === userId && this.partnerId === partnerId && this.isGroup === isGroup) {
       // Same session — just refresh callback references to avoid stale closures
       this.onNewMessage          = onMessage;
       this.onStatusUpdate        = onStatus;
@@ -137,6 +167,7 @@ class ChatService {
       this.onUploadProgressCb    = onUploadProgress ?? null;
       this.onAcknowledgment      = onAcknowledgment ?? null;
       this.onDeleteMessage       = onDeleteMessage ?? null;
+      await this.repairGroupedMediaThumbnails();
       return;
     }
 
@@ -144,6 +175,7 @@ class ChatService {
 
     this.userId      = userId;
     this.partnerId   = partnerId;
+    this.isGroup     = isGroup;
     this.senderName  = senderName;
 
     this.onNewMessage          = onMessage;
@@ -161,10 +193,83 @@ class ChatService {
       if (resetCount > 0) console.log(`[ChatService] ♻️ Reset ${resetCount} failed media messages for retry`);
     } catch (_) {}
 
+    try {
+      const repairedPendingCount = await offlineService.resetIncompleteOutgoingMediaMessages();
+      if (repairedPendingCount > 0) {
+        console.log(`[ChatService] ♻️ Re-queued ${repairedPendingCount} incomplete outgoing media messages`);
+      }
+    } catch (_) {}
+
     await this.setupNetworkListener();
     await this.fetchMissedMessages();
+    await this.repairGroupedMediaThumbnails();
     await this.subscribeToRealtime();
     this.startMessagePolling();
+  }
+
+  private isPreviewOnlyGroupedThumbnail(thumbnail?: string | null): boolean {
+    const items = decodeGroupedItems(thumbnail ?? undefined);
+    if (!items.length) return false;
+
+    return items.some((item) => !!item.thumbnail) && items.every((item) => !item.url && !item.localFileUri);
+  }
+
+  private hasRecoverableGroupedMedia(thumbnail?: string | null): boolean {
+    const items = decodeGroupedItems(thumbnail ?? undefined);
+    if (!items.length) return false;
+
+    return items.some((item) => !!item.url || !!item.localFileUri);
+  }
+
+  /** Repair old grouped-media rows that still point to tiny preview-only thumbnails. */
+  private async repairGroupedMediaThumbnails(): Promise<void> {
+    if (!this.userId || !this.partnerId) return;
+
+    try {
+      const db = await getDb();
+      const rows = await db.getAllAsync<{ id: string; media_thumbnail: string | null }>(
+        `SELECT id, media_thumbnail
+           FROM messages
+          WHERE chat_id = ?
+            AND media_thumbnail LIKE ?
+          ORDER BY timestamp DESC
+          LIMIT 40;`,
+        [this.partnerId, `${MEDIA_GROUP_MARKER}%`]
+      );
+
+      const candidates = rows.filter((row) => this.isPreviewOnlyGroupedThumbnail(row.media_thumbnail));
+      if (!candidates.length) return;
+
+      const localThumbnailById = new Map(candidates.map((row) => [row.id, row.media_thumbnail ?? '']));
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .in('id', candidates.map((row) => row.id));
+
+      if (error || !data?.length) return;
+
+      let repairedCount = 0;
+      for (const row of data) {
+        const localThumbnail = localThumbnailById.get(row.id?.toString?.() ?? String(row.id));
+        if (!localThumbnail) continue;
+        if (!this.hasRecoverableGroupedMedia(row.media_thumbnail)) continue;
+        if (row.media_thumbnail === localThumbnail) continue;
+
+        const message = this.mapDbRowToChatMessage(row);
+        const isCurrentChat =
+          (message.sender_id === this.userId && message.receiver_id === this.partnerId)
+          || (message.sender_id === this.partnerId && message.receiver_id === this.userId);
+
+        await this.persistRemoteMessageRow(row, isCurrentChat ? 'always' : 'never');
+        repairedCount += 1;
+      }
+
+      if (repairedCount > 0) {
+        console.log(`[ChatService] 🔧 Repaired ${repairedCount} historical grouped media message(s)`);
+      }
+    } catch (error) {
+      console.warn('[ChatService] Grouped media repair failed:', error);
+    }
   }
 
   private async subscribeToRealtime(): Promise<void> {
@@ -172,7 +277,7 @@ class ChatService {
     if (this.isRealtimeConnecting) return;
 
     this.isRealtimeConnecting = true;
-    const channelName = `chat_${this.userId}`;
+    const channelName = this.isGroup ? `group_chat_${this.partnerId}` : `chat_${this.userId}`;
 
     if (this.channel) {
       try {
@@ -191,18 +296,12 @@ class ChatService {
           const incoming = this.mapDbRowToChatMessage(payload.new);
           if (incoming.receiver_id !== this.userId) return;
 
-          await offlineService.saveMessage(incoming.sender_id, {
-            id:        incoming.id,
-            sender:    'them',
-            text:      incoming.text,
-            timestamp: incoming.timestamp,
-            status:    'delivered',
-            media:     incoming.media,
-            replyTo:   incoming.reply_to,
-          });
+          await this.persistRemoteMessageRow(
+            payload.new,
+            incoming.sender_id === this.partnerId ? 'if_new' : 'never'
+          );
 
           if (incoming.sender_id === this.partnerId) {
-            this.onNewMessage?.(incoming);
             this.updateMessageStatusOnServer(incoming.id, 'delivered');
           }
         }
@@ -212,14 +311,59 @@ class ChatService {
         { event: 'UPDATE', schema: 'public', table: 'messages' },
         async (payload) => {
           const updated = payload.new as any;
-          if (updated.sender !== this.userId) return;
-          if (updated.status) {
-            await offlineService.updateMessageStatus(updated.id.toString(), updated.status as MessageStatus);
-            this.onStatusUpdate?.(updated.id.toString(), updated.status);
-            if (updated.status === 'delivered' || updated.status === 'read') {
-              const timestamp = updated.status === 'delivered' ? (updated.delivered_at || new Date().toISOString()) : (updated.read_at || new Date().toISOString());
-              this.onAcknowledgment?.(updated.id.toString(), updated.status, timestamp);
+          const messageId = updated.id?.toString?.() ?? String(updated.id);
+
+          if (updated.sender === this.userId) {
+            if (updated.status) {
+              await offlineService.updateMessageStatus(messageId, updated.status as MessageStatus);
+              this.onStatusUpdate?.(messageId, updated.status);
+              if (updated.status === 'delivered' || updated.status === 'read') {
+                const timestamp = updated.status === 'delivered'
+                  ? (updated.delivered_at || new Date().toISOString())
+                  : (updated.read_at || new Date().toISOString());
+                this.onAcknowledgment?.(messageId, updated.status, timestamp);
+              }
             }
+
+            if (updated.media_url || updated.media_thumbnail) {
+              const existing = await offlineService.getMessageById(messageId);
+              const nextMediaUrl = typeof updated.media_url === 'string' ? proxySupabaseUrl(updated.media_url) : '';
+              const nextThumbnail = typeof updated.media_thumbnail === 'string' ? updated.media_thumbnail : '';
+              const needsMediaRefresh =
+                (!!nextMediaUrl && nextMediaUrl !== (existing?.media?.url ?? '')) ||
+                (!!nextThumbnail && nextThumbnail !== (existing?.media?.thumbnail ?? ''));
+
+              if (needsMediaRefresh) {
+                const outgoing = this.mapDbRowToChatMessage(updated);
+                await offlineService.saveMessage(outgoing.receiver_id, {
+                  id: outgoing.id,
+                  sender: 'me',
+                  text: outgoing.text,
+                  timestamp: outgoing.timestamp,
+                  status: outgoing.status,
+                  media: outgoing.media,
+                  replyTo: outgoing.reply_to,
+                });
+
+                if (outgoing.receiver_id === this.partnerId) {
+                  this.onNewMessage?.(outgoing);
+                }
+              }
+            }
+
+            return;
+          }
+
+          if (updated.receiver !== this.userId) return;
+
+          const incoming = this.mapDbRowToChatMessage(updated);
+          await this.persistRemoteMessageRow(
+            updated,
+            incoming.sender_id === this.partnerId ? 'always' : 'never'
+          );
+
+          if (incoming.sender_id === this.partnerId) {
+            this.updateMessageStatusOnServer(incoming.id, 'delivered');
           }
         }
       )
@@ -322,7 +466,7 @@ class ChatService {
   private syncConnectivityState(): void {
     const isActuallyOnline = this.isDeviceOnline && this.isServerReachable;
     this.onNetworkStatusChange?.(isActuallyOnline);
-    if (isActuallyOnline) this.processQueue();
+    if (isActuallyOnline) this.startQueueProcessing();
   }
 
   private syncConnected(): void {
@@ -334,22 +478,204 @@ class ChatService {
   }
 
   private startQueueProcessing(): void {
-    if (this.processQueueTimer || !this.isActuallyOnline) return;
-    this.processQueue();
+    if (!this.isActuallyOnline) return;
+    this.clearQueueTimer();
+    if (this.isProcessingQueue) {
+      this.hasPendingProcessQueueTrigger = true;
+      return;
+    }
+    void this.processQueue();
   }
 
   private stopQueueProcessing(): void {
-    if (this.processQueueTimer) {
-      clearInterval(this.processQueueTimer as any);
-      this.processQueueTimer = null;
-    }
+    this.clearQueueTimer();
     this.sendingIds.clear();
   }
 
   private isProcessingQueue: boolean = false;
   private hasPendingProcessQueueTrigger: boolean = false;
 
+  private clearQueueTimer(): void {
+    if (this.processQueueTimer) {
+      clearTimeout(this.processQueueTimer as any);
+      this.processQueueTimer = null;
+    }
+  }
+
+  private scheduleQueueProcessing(delayMs: number): void {
+    this.clearQueueTimer();
+    if (!this.isActuallyOnline) return;
+
+    this.processQueueTimer = setTimeout(() => {
+      this.processQueueTimer = null;
+      void this.processQueue();
+    }, delayMs) as any;
+  }
+
+  private messageNeedsLocalUpload(message: QueuedMessage): boolean {
+    const groupedItems = decodeGroupedItems(message.media?.thumbnail);
+    if (groupedItems.some((item) => !!item.localFileUri && !item.url)) {
+      return true;
+    }
+
+    return !!(
+      message.localFileUri &&
+      message.media &&
+      message.media.type !== 'status_reply' &&
+      !message.media.url
+    );
+  }
+
+  private getPrioritizedPendingMessages(messages: QueuedMessage[]): QueuedMessage[] {
+    return [...messages].sort((a, b) => {
+      const aNeedsUpload = this.messageNeedsLocalUpload(a);
+      const bNeedsUpload = this.messageNeedsLocalUpload(b);
+
+      if (aNeedsUpload !== bNeedsUpload) {
+        return aNeedsUpload ? 1 : -1;
+      }
+
+      return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+    });
+  }
+
+  private async findServerMessageById(messageId: string): Promise<ChatMessage | null> {
+    try {
+      const result = await withTimeout<{ data: any; error: any }>(
+        supabase.from('messages').select('*').eq('id', messageId).maybeSingle() as PromiseLike<{ data: any; error: any }>,
+        SUPABASE_INSERT_TIMEOUT_MS,
+        `Message lookup ${messageId}`
+      );
+      const { data, error } = result;
+      if (error || !data) return null;
+      return this.mapDbRowToChatMessage(data);
+    } catch {
+      return null;
+    }
+  }
+
+  private async persistRemoteMessageRow(
+    row: any,
+    emitMode: 'never' | 'if_new' | 'always' = 'if_new'
+  ): Promise<{ message: ChatMessage; existed: boolean }> {
+    const message = this.mapDbRowToChatMessage(row);
+    const chatId = message.group_id || (message.sender_id === this.userId ? message.receiver_id : message.sender_id);
+    const existing = await offlineService.getMessageById(message.id);
+
+    await offlineService.saveMessage(chatId, {
+      id: message.id,
+      sender: message.sender_id === this.userId ? 'me' : 'them',
+      text: message.text,
+      timestamp: message.timestamp,
+      status: message.status,
+      media: message.media,
+      replyTo: message.reply_to,
+      senderName: message.senderName,
+      groupId: message.group_id,
+    });
+
+    if (emitMode === 'always' || (emitMode === 'if_new' && !existing)) {
+      this.onNewMessage?.(message);
+    }
+
+    return { message, existed: !!existing };
+  }
+
+  private async repairIncompleteIncomingMediaMessages(): Promise<void> {
+    if (!this.userId || !this.partnerId) return;
+
+    try {
+      const incompleteIds = await offlineService.getIncompleteIncomingMediaMessageIds(this.partnerId, 25);
+      if (!incompleteIds.length) return;
+
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .in('id', incompleteIds);
+
+      if (error || !data?.length) return;
+
+      const rows = [...data].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+
+      for (const row of rows) {
+        if (!this.isGroup && row.receiver !== this.userId) continue;
+        if (this.isGroup && row.group_id !== this.partnerId) continue;
+        if (!row.media_url && !row.media_thumbnail) continue;
+        await this.persistRemoteMessageRow(
+          row,
+          row.sender === this.partnerId ? 'always' : 'never'
+        );
+      }
+    } catch (error) {
+      console.warn('[ChatService] Incomplete incoming media repair failed:', error);
+    }
+  }
+
+  private async finalizeSentMessage(message: QueuedMessage, row: any, finalMediaUrl?: string, mediaThumbnail?: string): Promise<void> {
+    this.syncConnected();
+
+    const serverId = row.id.toString();
+    if (message.id !== serverId) {
+      await offlineService.updateMessageId(message.id, serverId);
+    }
+    if (finalMediaUrl && finalMediaUrl !== message.media?.url) {
+      await offlineService.updateMessageMediaUrl(serverId, finalMediaUrl);
+    }
+    // For grouped media: update thumbnail JSON with uploaded URLs in local SQLite
+    if (mediaThumbnail && mediaThumbnail.includes('__MEDIA_GROUP')) {
+      try {
+        const db = await getDb();
+        await db.runAsync(`UPDATE messages SET media_thumbnail = ? WHERE id = ?`, [mediaThumbnail, serverId]);
+      } catch (_) {}
+    }
+
+    await offlineService.updateMessageStatus(serverId, 'sent');
+    await offlineService.removePendingSyncOpsForEntity('message', message.id);
+    this.onStatusUpdate?.(message.id, 'sent', serverId);
+  }
+
+  private async repairServerMessageMedia(
+    messageId: string,
+    payload: {
+      mediaUrl: string;
+      mediaType?: string | null;
+      mediaThumbnail?: string | null;
+      mediaDuration?: number | null;
+    }
+  ): Promise<void> {
+    if (!payload.mediaUrl) return;
+
+    const { error } = await withTimeout(
+      supabase
+        .from('messages')
+        .update({
+          media_url: payload.mediaUrl,
+          media_type: payload.mediaType ?? null,
+          media_thumbnail: payload.mediaThumbnail ?? null,
+          media_duration: payload.mediaDuration ?? null,
+        })
+        .eq('id', messageId),
+      SUPABASE_INSERT_TIMEOUT_MS,
+      `Media repair ${messageId}`
+    );
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  private isDuplicateInsertError(error: any): boolean {
+    const message = typeof error?.message === 'string' ? error.message.toLowerCase() : '';
+    return error?.code === '23505'
+      || message.includes('duplicate key')
+      || message.includes('unique constraint')
+      || message.includes('already exists');
+  }
+
   private async processQueue(): Promise<void> {
+    this.clearQueueTimer();
     if (!this.isActuallyOnline || this.isProcessingQueue) {
       if (this.isProcessingQueue) this.hasPendingProcessQueueTrigger = true;
       return;
@@ -359,7 +685,7 @@ class ChatService {
     this.hasPendingProcessQueueTrigger = false;
 
     try {
-      const pendingMessages = await offlineService.getPendingMessages();
+      const pendingMessages = this.getPrioritizedPendingMessages(await offlineService.getPendingMessages());
       const pollInterval = this.isRealtimeConnected ? REALTIME_POLL_INTERVAL : IDLE_POLL_INTERVAL;
       const nextInterval = pendingMessages.length > 0 ? ACTIVE_POLL_INTERVAL : pollInterval;
 
@@ -369,15 +695,18 @@ class ChatService {
       }
 
       if (this.isActuallyOnline) {
-        this.processQueueTimer = setTimeout(() => this.processQueue(), nextInterval) as any;
+        this.scheduleQueueProcessing(nextInterval);
       }
     } catch (error) {
       if (this.isActuallyOnline) {
-        this.processQueueTimer = setTimeout(() => this.processQueue(), REALTIME_POLL_INTERVAL) as any;
+        this.scheduleQueueProcessing(REALTIME_POLL_INTERVAL);
       }
     } finally {
       this.isProcessingQueue = false;
-      if (this.hasPendingProcessQueueTrigger && this.isActuallyOnline) this.processQueue();
+      if (this.hasPendingProcessQueueTrigger && this.isActuallyOnline) {
+        this.hasPendingProcessQueueTrigger = false;
+        this.scheduleQueueProcessing(0);
+      }
     }
   }
 
@@ -385,6 +714,10 @@ class ChatService {
     const senderId = this.userId;
     if (!senderId) return;
     this.sendingIds.add(message.id);
+    let finalMediaUrl = message.media?.url;
+    let mediaType = message.media?.type ?? null;
+    let mediaThumbnail = message.media?.thumbnail ?? null;
+    let mediaDuration = message.media?.duration ?? null;
 
     try {
       // Hard stop: don't retry forever — mark as permanently failed
@@ -403,50 +736,65 @@ class ChatService {
         return;
       }
 
-      let finalMediaUrl = message.media?.url;
-      let mediaType = message.media?.type ?? null;
-      let mediaThumbnail = message.media?.thumbnail ?? null;
-      let mediaDuration = message.media?.duration ?? null;
-      // ── STEP 1: Upload media (best-effort, don't block message send) ──
       const groupedItems = decodeGroupedItems(message.media?.thumbnail);
-      let uploadSucceeded = false;
+      let uploadSucceeded = !this.messageNeedsLocalUpload(message);
 
       if (groupedItems.length > 0) {
         const uploadedItems: GroupMediaItem[] = [];
         const totalItems = groupedItems.length;
+        let allGroupedUploadsSucceeded = true;
         for (let gi = 0; gi < totalItems; gi++) {
           const item = groupedItems[gi];
           let uploadedUrl = item.url || '';
           if (!uploadedUrl && item.localFileUri) {
             try {
-              let aborted = false;
               uploadedUrl = await storageService.uploadImage(item.localFileUri, 'chat-media', senderId, (progress) => {
-                if (aborted) return; // Guard: progress callback can fire after abort
                 try {
                   const overallProgress = (gi + progress) / totalItems;
                   this.onUploadProgressCb?.(message.id, overallProgress);
                 } catch (_) {}
               }) || '';
             } catch (uploadErr: any) {
-              // Suppress — upload failure is non-fatal, message will send without media URL
+              allGroupedUploadsSucceeded = false;
+              console.warn(`[ChatService] Group media upload failed for ${message.id}:`, uploadErr?.message || uploadErr);
             }
           }
+
+          if (!uploadedUrl && item.localFileUri) {
+            allGroupedUploadsSucceeded = false;
+          }
+
           uploadedItems.push({
             ...item,
             url: uploadedUrl || '',
-            localFileUri: item.localFileUri, // Keep local URI for retry
+            localFileUri: uploadedUrl ? undefined : item.localFileUri,
           });
         }
 
-        uploadSucceeded = uploadedItems.some(i => !!i.url);
-        if (uploadSucceeded) {
-          finalMediaUrl = uploadedItems.find(i => !!i.url)?.url || finalMediaUrl;
-          mediaType = uploadedItems[0]?.type || mediaType;
-          mediaDuration = uploadedItems[0]?.duration || mediaDuration;
-          mediaThumbnail = encodeGroupedItems(uploadedItems.map(i => ({
+        if (!allGroupedUploadsSucceeded) {
+          // Save partial progress so already-uploaded items aren't re-uploaded on retry
+          const partialThumbnail = encodeGroupedItems(uploadedItems.map(i => ({
             ...i,
             localFileUri: i.url ? undefined : i.localFileUri,
           })));
+          try {
+            const db = await getDb();
+            await db.runAsync(`UPDATE messages SET media_thumbnail = ? WHERE id = ?`, [partialThumbnail, message.id]);
+          } catch (_) {}
+          throw new Error('Media upload incomplete');
+        }
+
+        uploadSucceeded = true;
+        finalMediaUrl = uploadedItems.find(i => !!i.url)?.url || finalMediaUrl;
+        mediaType = uploadedItems[0]?.type || mediaType;
+        mediaDuration = uploadedItems[0]?.duration || mediaDuration;
+        mediaThumbnail = encodeGroupedItems(uploadedItems.map(i => ({
+          ...i,
+          localFileUri: undefined,
+        })));
+
+        if (!finalMediaUrl) {
+          throw new Error('Media upload completed without a storage key');
         }
       } else if (message.localFileUri && !finalMediaUrl && message.media) {
         // Verify local file still exists before attempting upload
@@ -462,65 +810,74 @@ class ChatService {
         } catch (_) {}
 
         console.log(`[ChatService] 📸 Uploading single media: ${message.localFileUri.substring(0, 60)}...`);
-        try {
-          finalMediaUrl = await storageService.uploadImage(message.localFileUri, 'chat-media', senderId, (progress) => {
-            try { this.onUploadProgressCb?.(message.id, progress); } catch (_) {}
-          }) || undefined;
-          if (finalMediaUrl) {
-            uploadSucceeded = true;
-            console.log(`[ChatService] ✅ Upload success: ${finalMediaUrl}`);
-          }
-        } catch (uploadErr: any) {
-          console.warn(`[ChatService] ⚠️ Upload failed (non-fatal): ${uploadErr.message}`);
+        finalMediaUrl = await storageService.uploadImage(message.localFileUri, 'chat-media', senderId, (progress) => {
+          try { this.onUploadProgressCb?.(message.id, progress); } catch (_) {}
+        }) || undefined;
+        if (!finalMediaUrl) {
+          throw new Error('Media upload returned no storage key');
         }
+        uploadSucceeded = true;
+        console.log(`[ChatService] ✅ Upload success: ${finalMediaUrl}`);
       }
 
       if (finalMediaUrl) await offlineService.updateMessageMediaUrl(message.id, finalMediaUrl);
 
-      // ── STEP 2: Send message to Supabase (always, even if upload failed) ──
-      // If upload failed, send without media URL but keep thumbnail/type so receiver
-      // knows it's a media message and can see a preview.
       console.log(`[ChatService] 📤 Inserting message ${message.id} to Supabase | media_url: ${finalMediaUrl ? 'YES' : 'NO'} | media_type: ${mediaType} | uploadOk: ${uploadSucceeded}`);
-      const { data, error } = await supabase
-        .from('messages')
-        .insert({
-          id:            message.id.startsWith('temp_') ? undefined : message.id,
-          sender:        senderId,
-          receiver:      message.chatId,
-          text:          message.text,
-          media_type:    mediaType,
-          media_url:     finalMediaUrl          ?? null,
-          media_caption: message.media?.caption ?? null,
-          media_thumbnail: uploadSucceeded ? mediaThumbnail : (message.media?.thumbnail && !message.media.thumbnail.startsWith(MEDIA_GROUP_MARKER) ? message.media.thumbnail : null),
-          reply_to_id:   message.replyTo        ?? null,
-          created_at:    message.timestamp,
-          media_duration: mediaDuration,
-        })
-        .select()
-        .single();
+      const result = await withTimeout<{ data: any; error: any }>(
+        supabase
+          .from('messages')
+          .insert({
+            id:            message.id.startsWith('temp_') ? undefined : message.id,
+            sender:        senderId,
+            receiver:      this.isGroup ? null : message.chatId,
+            group_id:      this.isGroup ? message.chatId : null,
+            text:          message.text,
+            media_type:    mediaType,
+            media_url:     finalMediaUrl          ?? null,
+            media_caption: message.media?.caption ?? null,
+            media_thumbnail: mediaThumbnail,
+            reply_to_id:   message.replyTo        ?? null,
+            created_at:    message.timestamp,
+            media_duration: mediaDuration,
+          })
+          .select()
+          .single() as PromiseLike<{ data: any; error: any }>,
+        SUPABASE_INSERT_TIMEOUT_MS,
+        `Message insert ${message.id}`
+      );
+      const { data, error } = result;
 
       if (error) {
         console.warn(`[ChatService] ❌ Supabase INSERT failed for ${message.id}:`, error.message);
         throw error;
       }
       console.log(`[ChatService] ✅ Message ${message.id} inserted as ${data.id}`);
-      this.syncConnected();
-
-      const serverId = data.id.toString();
-      if (message.id !== serverId) await offlineService.updateMessageId(message.id, serverId);
-      if (finalMediaUrl && finalMediaUrl !== message.media?.url) await offlineService.updateMessageMediaUrl(serverId, finalMediaUrl);
-      
-      await offlineService.updateMessageStatus(serverId, 'sent');
-      await offlineService.removePendingSyncOpsForEntity('message', message.id);
-      this.onStatusUpdate?.(message.id, 'sent', serverId);
+      await this.finalizeSentMessage(message, data, finalMediaUrl, mediaThumbnail ?? undefined);
 
       try {
         await supabase.functions.invoke('send-message-push', {
-          body: { receiverId: message.chatId, senderId: senderId, senderName: this.senderName, text: message.text, messageId: serverId },
+          body: { receiverId: message.chatId, senderId: senderId, senderName: this.senderName, text: message.text, messageId: data.id?.toString?.() || message.id },
         });
       } catch (_) {}
 
     } catch (error: any) {
+      if (this.isDuplicateInsertError(error)) {
+        const existingServerMessage = await this.findServerMessageById(message.id);
+        if (existingServerMessage) {
+          const existingMediaUrl = existingServerMessage.media?.url?.trim();
+          if (finalMediaUrl && !existingMediaUrl) {
+            await this.repairServerMessageMedia(existingServerMessage.id, {
+              mediaUrl: finalMediaUrl,
+              mediaType,
+              mediaThumbnail,
+              mediaDuration,
+            });
+          }
+          await this.finalizeSentMessage(message, { id: existingServerMessage.id }, finalMediaUrl || existingServerMessage.media?.url);
+          return;
+        }
+      }
+
       const errMsg = error?.message ?? 'Network error';
       console.warn(`[ChatService] Message ${message.id} send failed (attempt ${message.retryCount + 1}):`, errMsg);
       const newRetryCount = message.retryCount + 1;
@@ -538,15 +895,30 @@ class ChatService {
   private async fetchMissedMessages(): Promise<void> {
     if (this.isFetchingMissed) return;
     if (!this.userId || !this.partnerId) return;
+
+    // 🛡️ THROTTLE: Don't sync more than once every 10 seconds per chat
+    const now = Date.now();
+    const lastFetch = this.lastFetchTimestamps.get(this.partnerId) || 0;
+    if (now - lastFetch < 10000) {
+        // console.log(`[ChatService] Skipping redundant sync for ${this.partnerId} (last fetch was ${Math.round((now - lastFetch) / 1000)}s ago)`);
+        return;
+    }
+
     this.isFetchingMissed = true;
+    this.lastFetchTimestamps.set(this.partnerId, now);
     try {
       // 1. Get the latest message timestamp from local DB to avoid redundant fetching
       const latestLocalTimestamp = await offlineService.getLatestMessageTimestamp(this.partnerId);
       
       let query = supabase
         .from('messages')
-        .select('*')
-        .or(`and(sender.eq.${this.partnerId},receiver.eq.${this.userId}),and(sender.eq.${this.userId},receiver.eq.${this.partnerId})`);
+        .select('*');
+
+      if (this.isGroup) {
+        query = query.eq('group_id', this.partnerId);
+      } else {
+        query = query.or(`and(sender.eq.${this.partnerId},receiver.eq.${this.userId}),and(sender.eq.${this.userId},receiver.eq.${this.partnerId})`);
+      }
 
       if (latestLocalTimestamp) {
         // Only fetch messages NEWER than what we already have
@@ -587,12 +959,11 @@ class ChatService {
         const msg = this.mapDbRowToChatMessage(row);
         if (msg.sender_id === this.userId && this.sendingIds.has(msg.id)) continue;
 
-        const existing = await offlineService.getMessageById(msg.id);
-        await offlineService.saveMessage(msg.sender_id === this.userId ? msg.receiver_id : msg.sender_id, {
-          id: msg.id, sender: msg.sender_id === this.userId ? 'me' : 'them', text: msg.text, timestamp: msg.timestamp, status: msg.status, media: msg.media, replyTo: msg.reply_to,
-        });
-        if (!existing) this.onNewMessage?.(msg);
+        await this.persistRemoteMessageRow(row, 'if_new');
       }
+
+      await this.repairIncompleteIncomingMediaMessages();
+      await this.repairGroupedMediaThumbnails();
     } catch (e) {
       console.warn('[ChatService] fetchMissedMessages error:', e);
     } finally {
@@ -638,7 +1009,7 @@ class ChatService {
     }
 
     const queuedMsg: QueuedMessage = {
-      id: messageId, chatId: targetChatId, sender: 'me', text, timestamp, status: 'pending', media: media ? { ...media } : undefined, replyTo, retryCount: 0, localFileUri: finalLocalUri,
+      id: messageId, chatId: targetChatId, sender: 'me', text, timestamp, status: 'pending', media: media ? { ...media } : undefined, replyTo, senderName: this.senderName, retryCount: 0, localFileUri: finalLocalUri,
     };
 
     try {
@@ -648,11 +1019,11 @@ class ChatService {
     } catch (e) {}
 
     const uiMessage: ChatMessage = {
-      id: messageId, sender_id: this.userId, receiver_id: targetChatId, text, timestamp, status: 'pending', media, reply_to: replyTo, localFileUri: finalLocalUri,
+      id: messageId, sender_id: this.userId, receiver_id: targetChatId, text, timestamp, status: 'pending', media, reply_to: replyTo, senderName: this.senderName, localFileUri: finalLocalUri,
     };
 
     this.onNewMessage?.(uiMessage);
-    if (this.isActuallyOnline) this.processQueue();
+    if (this.isActuallyOnline) this.startQueueProcessing();
     return uiMessage;
   }
 
@@ -677,7 +1048,7 @@ class ChatService {
     if (!message) return;
     await offlineService.updateMessageRetry(messageId, 0);
     await offlineService.updateMessageStatus(messageId, 'pending');
-    if (this.isActuallyOnline) this.processQueue();
+    if (this.isActuallyOnline) this.startQueueProcessing();
   }
 
   getNetworkStatus(): boolean {
@@ -746,9 +1117,11 @@ class ChatService {
 
   private mapDbRowToChatMessage(row: any): ChatMessage {
     return {
-      id: row.id.toString(), sender_id: row.sender, receiver_id: row.receiver, text: row.text ?? '', timestamp: row.created_at, status: (row.status as ChatMessage['status']) ?? 'sent',
-      media: (row.media_url || row.media_type || row.media_thumbnail) ? { type: row.media_type ?? 'image', url: row.media_url ?? '', caption: row.media_caption, thumbnail: row.media_thumbnail, duration: row.media_duration } : undefined,
-      reply_to: row.reply_to_id ? row.reply_to_id.toString() : undefined, reactions: row.reaction ? [row.reaction] : undefined,
+      id: row.id.toString(), sender_id: row.sender, receiver_id: row.receiver, group_id: row.group_id, text: row.text ?? '', timestamp: row.created_at, status: (row.status as ChatMessage['status']) ?? 'sent',
+      media: (row.media_url || row.media_type || row.media_thumbnail) ? { type: row.media_type ?? 'image', url: proxySupabaseUrl(row.media_url ?? ''), caption: row.media_caption, thumbnail: row.media_thumbnail, duration: row.media_duration } : undefined,
+      reply_to: row.reply_to_id ? row.reply_to_id.toString() : undefined, 
+      senderName: row.sender_name ?? undefined,
+      reactions: row.reaction ? [row.reaction] : undefined,
     };
   }
 
@@ -775,17 +1148,19 @@ class ChatService {
     if (!this.userId || !this.partnerId || !this.lastPollAt || this.isPolling || !this.isActuallyOnline) return;
     this.isPolling = true;
     try {
-      const { data, error } = await supabase.from('messages').select('*').or(`and(sender.eq.${this.partnerId},receiver.eq.${this.userId}),and(sender.eq.${this.userId},receiver.eq.${this.partnerId})`).gt('created_at', this.lastPollAt).order('created_at', { ascending: true });
+      let query = supabase.from('messages').select('*');
+      if (this.isGroup) {
+        query = query.eq('group_id', this.partnerId);
+      } else {
+        query = query.or(`and(sender.eq.${this.partnerId},receiver.eq.${this.userId}),and(sender.eq.${this.userId},receiver.eq.${this.partnerId})`);
+      }
+      const { data, error } = await query.gt('created_at', this.lastPollAt).order('created_at', { ascending: true });
       if (error) return;
       this.lastPollAt = data?.[data.length - 1]?.created_at || new Date().toISOString();
       if (!data) return;
       for (const row of data) {
         const msg = this.mapDbRowToChatMessage(row);
-        const existing = await offlineService.getMessageById(msg.id);
-        await offlineService.saveMessage(msg.sender_id === this.userId ? msg.receiver_id : msg.sender_id, {
-          id: msg.id, sender: msg.sender_id === this.userId ? 'me' : 'them', text: msg.text, timestamp: msg.timestamp, status: msg.status, media: msg.media, replyTo: msg.reply_to,
-        });
-        if (!existing) this.onNewMessage?.(msg);
+        await this.persistRemoteMessageRow(row, 'if_new');
         if (msg.sender_id === this.partnerId) this.updateMessageStatusOnServer(msg.id, 'delivered');
       }
     } catch (_) {} finally { this.isPolling = false; }

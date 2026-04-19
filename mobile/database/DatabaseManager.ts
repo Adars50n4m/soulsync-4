@@ -28,20 +28,23 @@ class DatabaseManager {
 
   /**
    * Validates that a cached DB connection is still alive.
-   * Returns false if the connection is stale/broken.
+   * Returns false if the connection is stale/broken or HUNG.
    */
   private async isConnectionHealthy(db: SQLite.SQLiteDatabase, name: string): Promise<boolean> {
     try {
-      const row = await db.getFirstAsync<{ ok: number }>('SELECT 1 as ok;');
-      return row?.ok === 1;
+      // 🛡️ FAIL FAST: If DB is locked, don't hang the whole app boot.
+      // 200ms is plenty for a simple 'SELECT 1' unless there is a severe lock.
+      const healthCheck = db.getFirstAsync<{ ok: number }>('SELECT 1 as ok;');
+      const result = await DatabaseManager.withTimeout(healthCheck, 200, `HealthCheck-${name}`);
+      return result?.ok === 1;
     } catch (e) {
-      console.warn(`[DatabaseManager] Health check failed for ${name}:`, e);
+      console.warn(`[DatabaseManager] Health check failed/timed-out for ${name}`);
       return false;
     }
   }
 
   /**
-   * Opens a database with standard SoulSync configuration (WAL, Foreign Keys)
+   * Opens a database with standard Soul configuration (WAL, Foreign Keys)
    * and runs migrations.
    */
   public async getDatabase(config: DatabaseConfig): Promise<SQLite.SQLiteDatabase> {
@@ -50,11 +53,11 @@ class DatabaseManager {
     // Return cached instance if available AND healthy
     if (this.databases.has(name)) {
       const cached = this.databases.get(name)!;
+      const startHealth = Date.now();
       if (await this.isConnectionHealthy(cached, name)) {
         return cached;
       }
-      // Stale connection — evict and re-open
-      console.warn(`[DatabaseManager] Evicting stale connection for ${name}`);
+      console.warn(`[DatabaseManager] Health check slow/failed after ${Date.now() - startHealth}ms. Re-initializing ${name}.`);
       this.databases.delete(name);
     }
 
@@ -64,19 +67,26 @@ class DatabaseManager {
     }
 
     const openPromise = (async () => {
+      const startOpen = Date.now();
       try {
-        console.log(`[DatabaseManager] Opening database: ${name}`);
+        console.log(`[DatabaseManager] ⏳ Opening database: ${name}`);
         const db = await SQLite.openDatabaseAsync(name);
+        console.log(`[DatabaseManager] 📑 DB file opened in ${Date.now() - startOpen}ms`);
 
         // Standard configuration
+        console.log(`[DatabaseManager] ⚙️ Configuring PRAGMAs...`);
+        const startPragma = Date.now();
         await db.execAsync('PRAGMA journal_mode = WAL;');
         await db.execAsync('PRAGMA foreign_keys = ON;');
-        // Prevent queries from hanging indefinitely (5 seconds busy timeout)
         await db.execAsync('PRAGMA busy_timeout = 5000;');
+        console.log(`[DatabaseManager] ✅ PRAGMAs set in ${Date.now() - startPragma}ms`);
 
         // Run migrations
         if (migrations) {
+          console.log(`[DatabaseManager] 🔨 Running migrations...`);
+          const startMigrate = Date.now();
           await migrations(db);
+          console.log(`[DatabaseManager] ✅ Migrations complete in ${Date.now() - startMigrate}ms`);
         }
 
         // Custom post-open logic
@@ -84,10 +94,11 @@ class DatabaseManager {
           await onOpen(db);
         }
 
+        console.log(`[DatabaseManager] ✨ Database ${name} is fully ready after ${Date.now() - startOpen}ms`);
         this.databases.set(name, db);
         return db;
       } catch (error) {
-        console.error(`[DatabaseManager] Failed to open database ${name}:`, error);
+        console.error(`[DatabaseManager] ❌ Failed to open database ${name} after ${Date.now() - startOpen}ms:`, error);
         this.openPromises.delete(name);
         throw error;
       } finally {

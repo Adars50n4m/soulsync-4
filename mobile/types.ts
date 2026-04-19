@@ -4,6 +4,8 @@ export type MediaStatus = 'not_downloaded' | 'downloading' | 'downloaded' | 'dow
 export interface Message {
     id: string;
     sender: 'me' | 'them';
+    senderId?: string;
+    senderName?: string;
     text: string;
     timestamp: string;
     status?: 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
@@ -62,6 +64,7 @@ export interface Contact {
     note?: string; // New field for Soul Notes (status bubble)
     noteTimestamp?: string; // ISO date string
     isArchived?: boolean;
+    isGroup?: boolean; // Indicates if this contact is actually a chat_group
     last_updated_at?: string; // Server timestamp for profile validation
     localAvatarUri?: string; // Local file path for offline DP
     avatarUpdatedAt?: string; // Timestamp of the last successful DP download
@@ -123,6 +126,8 @@ export interface CachedUser {
     username?: string;
     displayName?: string;
     avatarUrl?: string;
+    avatarType?: 'default' | 'teddy' | 'custom';
+    teddyVariant?: 'boy' | 'girl';
     localAvatarUri?: string; // Local cached avatar file
     soulNote?: string;
     soulNoteAt?: number;
@@ -164,6 +169,8 @@ export interface ActiveCall {
     contactAvatar?: string;
     avatar?: string; // Alias for flexibility
     roomId?: string; // Added for debugging and signaling
+    groupId?: string; // Room is actually a group
+    participantIds?: string[]; // All users in the group call
     remoteMuted?: boolean;
     remoteVideoOff?: boolean;
 }

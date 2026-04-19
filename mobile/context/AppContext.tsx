@@ -3,10 +3,10 @@ import * as React from 'react';
 import { useState, useEffect, useRef, createContext, useContext, useCallback } from 'react';
 import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useAuth, AuthProvider } from './AuthContext';
+import { useAuth, AuthProvider, PrivacySettings, PrivacyValue, DEFAULT_PRIVACY } from './AuthContext';
 import { useChat, ChatProvider } from './ChatContext';
 import { useCall, CallProvider } from './CallContext';
-import { useMusic, MusicProvider } from './MusicContext';
+import { useMusic, MusicProvider, RepeatMode } from './MusicContext';
 import { useStatus, StatusProvider } from './StatusContext';
 import { UserStatusGroup, CachedStatus, PendingUpload } from '../types';
 
@@ -83,14 +83,7 @@ interface AppContextType {
     toggleVideo: () => void;
     deleteCall: (id: string) => Promise<void>;
     clearCalls: () => Promise<void>;
-
-    // Music
-    musicState: any;
-    playSong: any;
-    togglePlayMusic: any;
-    toggleFavoriteSong: (song: any) => Promise<void>;
-    seekTo: (position: number) => Promise<void>;
-    getPlaybackPosition: () => Promise<number>;
+    startGroupCall: (groupId: string, participantIds: string[], type: 'audio' | 'video') => Promise<void>;
 
     // Core Settings
     theme: ThemeName;
@@ -102,6 +95,10 @@ interface AppContextType {
         isRealtimeConnected: boolean;
     };
     
+    // Privacy
+    privacySettings: PrivacySettings;
+    updatePrivacy: (updates: Partial<PrivacySettings>) => Promise<void>;
+
     // Security
     isLocked: boolean;
     unlockApp: () => void;
@@ -112,6 +109,28 @@ interface AppContextType {
     pin: string | null;
     setPin: (pin: string | null) => void;
     refreshLocalCache: () => Promise<void>;
+    offlineService: any;
+
+    // Music
+    musicState: any;
+    playSong: (song: any, broadcast?: boolean) => Promise<void>;
+    togglePlayMusic: () => Promise<void>;
+    toggleFavoriteSong: (song: any) => Promise<void>;
+    seekTo: (position: number) => Promise<void>;
+    getPlaybackPosition: () => Promise<number>;
+    repeatMode: RepeatMode;
+    toggleRepeat: () => void;
+    shuffle: boolean;
+    toggleShuffle: () => void;
+    queue: any[];
+    addToQueue: (song: any) => void;
+    removeFromQueue: (songId: string) => void;
+    clearQueue: () => void;
+    playNext: () => Promise<void>;
+    playPrevious: () => Promise<void>;
+    sleepTimerMinutes: number | null;
+    setSleepTimer: (minutes: number | null) => void;
+    setMusicPartner: (partnerId: string) => void;
 }
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -133,19 +152,36 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
     const [biometricEnabled, setBiometricEnabledState] = useState(false);
     const [pinEnabled, setPinEnabledState] = useState(false);
     const [pin, setPinState] = useState<string | null>(null);
+    const [privacySettings, setPrivacySettings] = useState<PrivacySettings>(DEFAULT_PRIVACY);
 
-    // Load security settings on mount
+    // Load security & privacy settings on mount
     useEffect(() => {
         Promise.all([
             AsyncStorage.getItem('ss_biometric_enabled'),
             AsyncStorage.getItem('ss_pin_enabled'),
             AsyncStorage.getItem('ss_pin'),
-        ]).then(([bio, pinEn, pinVal]) => {
+            AsyncStorage.getItem('ss_privacy_settings'),
+        ]).then(([bio, pinEn, pinVal, privacyVal]) => {
             if (bio === 'true') setBiometricEnabledState(true);
             if (pinEn === 'true') setPinEnabledState(true);
             if (pinVal) setPinState(pinVal);
+            if (privacyVal) {
+                try {
+                    setPrivacySettings(JSON.parse(privacyVal));
+                } catch (e) {
+                    console.warn('[AppContext] Failed to parse privacy settings:', e);
+                }
+            }
             // Lock app on startup if any security is enabled
             if (bio === 'true' || pinEn === 'true') setIsLocked(true);
+        });
+    }, []);
+
+    const updatePrivacy = useCallback(async (updates: Partial<PrivacySettings>) => {
+        setPrivacySettings(prev => {
+            const next = { ...prev, ...updates };
+            AsyncStorage.setItem('ss_privacy_settings', JSON.stringify(next));
+            return next;
         });
     }, []);
 
@@ -253,6 +289,7 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         toggleVideo: call.toggleVideo,
         deleteCall: call.deleteCall,
         clearCalls: call.clearCalls,
+        startGroupCall: call.startGroupCall,
 
         // Music
         musicState: music.musicState,
@@ -288,7 +325,10 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         setPinEnabled,
         pin,
         setPin,
-        refreshLocalCache: chat.refreshLocalCache
+        privacySettings,
+        updatePrivacy,
+        refreshLocalCache: chat.refreshLocalCache,
+        offlineService: chat.offlineService
     };
 
     return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
@@ -341,6 +381,7 @@ export const useAppContext = (): AppContextType => {
             isStatusSyncing: false,
             calls: [],
             activeCall: null,
+            startGroupCall: async () => {},
             musicState: { isPlaying: false },
             theme: 'midnight',
             activeTheme: THEME_MAP['midnight'],
@@ -354,6 +395,8 @@ export const useAppContext = (): AppContextType => {
             setPinEnabled: () => {},
             pin: null,
             setPin: () => {},
+            privacySettings: DEFAULT_PRIVACY,
+            updatePrivacy: async () => {},
             refreshLocalCache: async () => {},
             // Default no-ops for functions
             sendChatMessage: async () => {},
@@ -387,6 +430,20 @@ export const useAppContext = (): AppContextType => {
             toggleFavoriteSong: async () => {},
             seekTo: async () => {},
             getPlaybackPosition: async () => 0,
+            repeatMode: 'off',
+            toggleRepeat: () => {},
+            shuffle: false,
+            toggleShuffle: () => {},
+            queue: [],
+            addToQueue: () => {},
+            removeFromQueue: () => {},
+            clearQueue: () => {},
+            playNext: async () => {},
+            playPrevious: async () => {},
+            sleepTimerMinutes: null,
+            setSleepTimer: () => {},
+            setMusicPartner: () => {},
+            offlineService: null,
         } as any;
     }
     

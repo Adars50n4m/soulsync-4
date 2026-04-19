@@ -10,6 +10,7 @@ import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { Alert } from 'react-native';
 import { useApp } from '../context/AppContext';
 import { SoulAvatar } from '../components/SoulAvatar';
+import { proxySupabaseUrl } from '../config/api';
 import { SUPPORT_SHARED_TRANSITIONS } from '../constants/sharedTransitions';
 import Animated, {
     FadeIn,
@@ -84,6 +85,16 @@ export default function ProfileScreen() {
         opacity: interpolate(scrollY.value, [HEADER_HEIGHT / 2, HEADER_HEIGHT], [0, 1], Extrapolation.CLAMP),
     }));
 
+    const profileHeroUri = React.useMemo(() => {
+        if (!currentUser?.avatar) return '';
+        if (currentUser.avatarType === 'teddy' || currentUser.avatarType === 'memoji') {
+            const variant = currentUser.avatarType === 'memoji' ? 'girl' : (currentUser.teddyVariant || 'boy');
+            const fallbackId = currentUser.username || currentUser.name || 'soul';
+            return `https://avatar.iran.liara.run/public/${variant}?username=${fallbackId}`;
+        }
+        return proxySupabaseUrl(currentUser.avatar);
+    }, [currentUser?.avatar, currentUser?.avatarType, currentUser?.name, currentUser?.teddyVariant, currentUser?.username]);
+
     if (!currentUser) {
         return (
             <View style={styles.container}>
@@ -157,13 +168,13 @@ export default function ProfileScreen() {
                 <Animated.View style={[styles.heroSection, avatarAnimatedStyle]}>
                     <View style={styles.avatarContainer}>
                         <Pressable onPress={handleEditProfile} style={styles.avatarPressable}>
-                            {currentUser.avatar ? (
+                            {profileHeroUri ? (
                                 <AnimatedImage
                                     {...(SUPPORT_SHARED_TRANSITIONS ? {
                                         sharedTransitionTag: "profile-avatar",
                                         sharedTransitionStyle: profileTransition,
                                     } : {})}
-                                    source={{ uri: currentUser.avatar.startsWith('http') ? currentUser.avatar : `https://xuipxbyvsawhuldopvjn.supabase.co/storage/v1/object/public/avatars/${currentUser.avatar}` }}
+                                    source={{ uri: profileHeroUri }}
                                     style={StyleSheet.absoluteFill}
                                     contentFit="cover"
                                 />

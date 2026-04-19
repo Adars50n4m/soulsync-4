@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { authService } from '../services/AuthService';
+import { useApp } from '../context/AppContext';
 
 const OTP_LENGTH  = 6;
 const RESEND_WAIT = 60;
@@ -22,6 +23,9 @@ const RESEND_WAIT = 60;
 export default function OTPScreen() {
   const router = useRouter();
   const { email, phone } = useLocalSearchParams<{ email?: string; phone?: string }>();
+  const { activeTheme } = useApp();
+  const themeAccent = activeTheme?.primary || '#BC002A';
+
 
   // Determine if this is phone auth
   const isPhoneAuth = !!phone;
@@ -180,7 +184,7 @@ export default function OTPScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.root}
+      style={{ flex: 1, backgroundColor: activeTheme?.background || '#000' }}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <StatusBar barStyle="light-content" backgroundColor="#000000" />
@@ -190,14 +194,14 @@ export default function OTPScreen() {
           style={styles.backBtn}
           onPress={() => router.back()}
         >
-          <Text style={styles.backBtnText}>← Change {isPhoneAuth ? 'phone' : 'email'}</Text>
+          <Text style={[styles.backBtnText, { color: themeAccent }]}>← Change {isPhoneAuth ? 'phone' : 'email'}</Text>
         </TouchableOpacity>
 
         <View style={styles.header}>
           <Text style={styles.title}>{isPhoneAuth ? 'Check your phone' : 'Check your inbox'}</Text>
           <Text style={styles.subtitle}>
             We sent a 6-digit code to{'\n'}
-            <Text style={styles.emailHighlight}>{getMaskedTarget()}</Text>
+            <Text style={[styles.emailHighlight, { color: themeAccent }]}>{getMaskedTarget()}</Text>
           </Text>
         </View>
 
@@ -210,7 +214,7 @@ export default function OTPScreen() {
               ref={ref => { inputRefs.current[index] = ref; }}
               style={[
                 styles.otpBox,
-                digit && styles.otpBoxFilled,
+                digit && [styles.otpBoxFilled, { borderColor: themeAccent }],
                 error && styles.otpBoxError,
               ]}
               value={digit}
@@ -219,7 +223,7 @@ export default function OTPScreen() {
               keyboardType="number-pad"
               maxLength={OTP_LENGTH}
               textAlign="center"
-              selectionColor={AMBER}
+              selectionColor={themeAccent}
               caretHidden
               autoFocus={index === 0}
             />
@@ -236,7 +240,7 @@ export default function OTPScreen() {
 
         {filledCount === OTP_LENGTH && (
           <TouchableOpacity
-            style={[styles.verifyBtn, loading && styles.btnDisabled]}
+            style={[styles.verifyBtn, { backgroundColor: themeAccent }, loading && styles.btnDisabled]}
             onPress={() => verifyCode(digits.join(''))}
             disabled={loading}
             activeOpacity={0.85}
@@ -250,8 +254,8 @@ export default function OTPScreen() {
 
         {loading && filledCount === OTP_LENGTH && (
           <View style={styles.loadingRow}>
-            <ActivityIndicator color={AMBER} size="small" />
-            <Text style={styles.loadingText}>Verifying...</Text>
+            <ActivityIndicator color={themeAccent} size="small" />
+            <Text style={[styles.loadingText, { color: themeAccent }]}>Verifying...</Text>
           </View>
         )}
 
@@ -259,8 +263,8 @@ export default function OTPScreen() {
           {canResend ? (
             <TouchableOpacity onPress={handleResend} disabled={resending}>
               {resending
-                ? <ActivityIndicator color={AMBER} size="small" />
-                : <Text style={styles.resendActive}>Resend code</Text>
+                ? <ActivityIndicator color={themeAccent} size="small" />
+                : <Text style={[styles.resendActive, { color: themeAccent }]}>Resend code</Text>
               }
             </TouchableOpacity>
           ) : (
@@ -286,32 +290,32 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: BG },
   container: { flex: 1, paddingHorizontal: 28, paddingTop: 60 },
   backBtn: { marginBottom: 40, alignSelf: 'flex-start' },
-  backBtnText: { color: AMBER, fontSize: 15, fontWeight: '500' },
+  backBtnText: { fontSize: 15, fontWeight: '500' },
   header: { marginBottom: 40 },
   title: { fontSize: 28, fontWeight: '700', color: '#E8E8F0', marginBottom: 10 },
   subtitle: { fontSize: 15, color: '#888899', lineHeight: 22 },
-  emailHighlight: { color: AMBER, fontWeight: '600' },
+  emailHighlight: { fontWeight: '600' },
   otpRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },
   otpBox: {
     width: 48, height: 58, borderRadius: 12, borderWidth: 1.5,
     borderColor: BORDER, backgroundColor: '#13131C',
     color: '#E8E8F0', fontSize: 24, fontWeight: '700',
   },
-  otpBoxFilled: { borderColor: AMBER, backgroundColor: '#1A1408' },
+  otpBoxFilled: { backgroundColor: '#1A1408' },
   otpBoxError: { borderColor: '#FF4444', backgroundColor: '#1A0808' },
   errorText: { color: '#FF6B6B', fontSize: 14, textAlign: 'center', marginBottom: 16 },
   hintText: { color: '#555566', fontSize: 13, textAlign: 'center', marginBottom: 16 },
   verifyBtn: {
-    backgroundColor: AMBER, borderRadius: 12, height: 52,
+    borderRadius: 12, height: 52,
     alignItems: 'center', justifyContent: 'center', marginBottom: 16,
   },
   btnDisabled: { opacity: 0.6 },
   verifyBtnText: { color: '#0A0A0F', fontSize: 16, fontWeight: '700' },
   loadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16 },
-  loadingText: { color: AMBER, fontSize: 14 },
+  loadingText: { fontSize: 14 },
   resendContainer: { alignItems: 'center', marginTop: 8, marginBottom: 16, height: 30 },
   resendTimer: { color: '#555566', fontSize: 14 },
   resendTimerNum: { color: '#888899', fontWeight: '600' },
-  resendActive: { color: AMBER, fontSize: 15, fontWeight: '600' },
+  resendActive: { fontSize: 15, fontWeight: '600' },
   tip: { color: '#444455', fontSize: 12, textAlign: 'center', marginTop: 8 },
 });

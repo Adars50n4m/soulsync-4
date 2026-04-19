@@ -16,15 +16,21 @@ import { useCall } from '../../context/CallContext';
 import { offlineService } from '../../services/LocalDBService';
 import { normalizeId, getSuperuserName, getSuperuserHandle } from '../../utils/idNormalization';
 import {
-    PROFILE_AVATAR_SHARED_TRANSITION,
-    PROFILE_AVATAR_TRANSITION_TAG,
+    getProfileAvatarTransitionTag,
     SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION,
+    PROFILE_AVATAR_SHARED_TRANSITION,
 } from '../../constants/sharedTransitions';
 import Animated, {
-    useSharedValue, useAnimatedStyle, withTiming, interpolate, runOnJS, Easing,
+    useSharedValue, useAnimatedStyle, withTiming, withDelay, withSpring, interpolate, runOnJS, Easing,
     useAnimatedScrollHandler, Extrapolation
 } from 'react-native-reanimated';
 import ProgressiveBlur from '../../components/chat/ProgressiveBlur';
+import { SheetScreen } from 'react-native-sheet-transitions';
+import { useRouter } from 'expo-router';
+import { hapticService } from '../../services/HapticService';
+import * as Haptics from 'expo-haptics';
+
+
 
 const MediaGalleryItem = ({ item, activeCategory, morphProgress }: any) => {
     const { width, height } = useWindowDimensions();
@@ -63,9 +69,11 @@ const MediaGalleryItem = ({ item, activeCategory, morphProgress }: any) => {
 };
 
 export default function ProfileScreen() {
+    const router = useRouter();
+
     const { width, height } = useWindowDimensions();
 
-    const params = useLocalSearchParams<{ id: string; avatarX?: string; avatarY?: string; avatarW?: string; avatarH?: string }>();
+    const params = useLocalSearchParams<{ id: string; avatarX?: string; avatarY?: string; avatarW?: string; avatarH?: string; avatarTransition?: string }>();
     const id = normalizeId(Array.isArray(params.id) ? params.id[0] : params.id);
     const navigation = useNavigation();
     const { currentUser, otherUser, contacts, messages, activeTheme, clearChatMessages, connectivity, fetchOtherUserProfile } = useApp();
@@ -104,7 +112,12 @@ export default function ProfileScreen() {
         width: Number(Array.isArray(params.avatarW) ? params.avatarW[0] : params.avatarW),
         height: Number(Array.isArray(params.avatarH) ? params.avatarH[0] : params.avatarH),
     }), [params.avatarH, params.avatarW, params.avatarX, params.avatarY]);
-    const hasAvatarMorph = Number.isFinite(avatarOrigin.x)
+    const avatarTransitionParam = Array.isArray(params.avatarTransition) ? params.avatarTransition[0] : params.avatarTransition;
+    const profileAvatarTransitionTag = useMemo(() => (
+        id ? getProfileAvatarTransitionTag(id) : undefined
+    ), [id]);
+    const useSharedAvatarTransition = SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION && avatarTransitionParam === '1' && !!profileAvatarTransitionTag;
+    const hasAvatarMorph = !useSharedAvatarTransition && Number.isFinite(avatarOrigin.x)
         && Number.isFinite(avatarOrigin.y)
         && Number.isFinite(avatarOrigin.width)
         && Number.isFinite(avatarOrigin.height)
@@ -122,7 +135,7 @@ export default function ProfileScreen() {
     const slideAnim = useSharedValue(0);
     const scrollY = useSharedValue(0);
     const heroMorphProgress = useSharedValue(hasAvatarMorph ? 0 : 1);
-    const headerOpacity = useSharedValue(hasAvatarMorph ? 0 : 1);
+    const headerOpacity = useSharedValue(hasAvatarMorph || useSharedAvatarTransition ? 0 : 1);
     const isClosingRef = useRef(false);
     const allowNativePopRef = useRef(false);
 
@@ -194,6 +207,11 @@ export default function ProfileScreen() {
     const bgMorphStyle = useAnimatedStyle(() => ({
         opacity: morphProgress.value,
         backgroundColor: 'black'
+    }));
+
+    const pageBackgroundStyle = useAnimatedStyle(() => ({
+        // Delay the background "fog-in" until the avatar has expanded significantly
+        opacity: interpolate(heroMorphProgress.value, [0, 0.4, 1], [0, 1, 1], Extrapolation.CLAMP),
     }));
 
     const galleryStyle = useAnimatedStyle(() => ({
@@ -370,21 +388,31 @@ export default function ProfileScreen() {
     }, [id, profileUser]);
 
     useEffect(() => {
+        if (useSharedAvatarTransition) {
+            heroMorphProgress.value = 1;
+            headerOpacity.value = withTiming(1, {
+                duration: 220,
+                easing: Easing.out(Easing.cubic),
+            });
+            return;
+        }
+
         if (!hasAvatarMorph) {
             heroMorphProgress.value = 1;
             headerOpacity.value = 1;
             return;
         }
 
-        heroMorphProgress.value = withTiming(1, {
-            duration: 460,
-            easing: Easing.bezier(0.22, 1, 0.36, 1),
+        heroMorphProgress.value = withSpring(1, {
+            damping: 26,
+            stiffness: 180,
+            mass: 1.1,
         });
         headerOpacity.value = withTiming(1, {
-            duration: 220,
+            duration: 250,
             easing: Easing.out(Easing.cubic),
         });
-    }, [hasAvatarMorph, headerOpacity, heroMorphProgress]);
+    }, [hasAvatarMorph, headerOpacity, heroMorphProgress, useSharedAvatarTransition]);
 
     const finishDismiss = useCallback((action?: any) => {
         allowNativePopRef.current = true;
@@ -401,23 +429,35 @@ export default function ProfileScreen() {
         if (isClosingRef.current) return;
         isClosingRef.current = true;
 
-        if (!hasAvatarMorph) {
-            headerOpacity.value = withTiming(0, { duration: 150 });
-            setTimeout(() => finishDismiss(action), 150);
+        if (useSharedAvatarTransition) {
+            finishDismiss(action);
             return;
         }
 
-        headerOpacity.value = withTiming(0, { duration: 150 });
-        heroMorphProgress.value = withTiming(0, {
-            duration: 350,
-            easing: Easing.bezier(0.4, 0, 0.2, 1),
+        if (!hasAvatarMorph) {
+            headerOpacity.value = withTiming(0, { duration: 200 });
+            setTimeout(() => finishDismiss(action), 200);
+            return;
+        }
+
+        hapticService.selection();
+
+        headerOpacity.value = withTiming(0, { duration: 250 });
+        heroMorphProgress.value = withSpring(0, {
+            damping: 28,
+            stiffness: 180,
+            mass: 1.0,
         });
         setTimeout(() => {
             finishDismiss(action);
-        }, 320);
-    }, [finishDismiss, hasAvatarMorph, headerOpacity, heroMorphProgress]);
+        }, 500);
+    }, [finishDismiss, hasAvatarMorph, headerOpacity, heroMorphProgress, useSharedAvatarTransition]);
 
     useEffect(() => {
+        if (useSharedAvatarTransition) {
+            return;
+        }
+
         const unsubscribe = navigation.addListener('beforeRemove', (event: any) => {
             if (!hasAvatarMorph || isClosingRef.current || allowNativePopRef.current) {
                 return;
@@ -439,7 +479,7 @@ export default function ProfileScreen() {
             unsubscribe();
             backSubscription.remove();
         };
-    }, [hasAvatarMorph, navigation, runDismissAnimation]);
+    }, [hasAvatarMorph, navigation, runDismissAnimation, useSharedAvatarTransition]);
 
     const headerContentAnimatedStyle = useAnimatedStyle(() => ({
         opacity: fadeAnim.value * headerOpacity.value
@@ -450,283 +490,302 @@ export default function ProfileScreen() {
         transform: [{ translateY: slideAnim.value + interpolate(headerOpacity.value, [0, 1], [28, 0]) }]
     }));
 
+    const heroAvatarUri = useMemo(() => {
+        const avatarType = profileUser?.avatarType || profileUser?.avatar_type || 'default';
+        const uri = profileUser?.avatar || profileUser?.avatar_url;
+        const localUri = profileUser?.localAvatarUri || profileUser?.local_avatar_uri;
+        const fallbackId = profileUser?.id || id || 'default';
+        const proxiedUri = proxySupabaseUrl(uri);
+
+        if (avatarType === 'teddy') {
+            return `https://avatar.iran.liara.run/public/boy?username=${fallbackId}`;
+        }
+        if (avatarType === 'memoji') {
+            return `https://avatar.iran.liara.run/public/girl?username=${fallbackId}`;
+        }
+        return localUri || proxiedUri || uri || '';
+    }, [id, profileUser]);
+
     const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
     if (!profileUser) {
         return (
-            <View style={styles.container}>
-                <StatusBar barStyle="light-content" translucent />
-                <View style={styles.header}>
-                    <Pressable 
-                        onPress={() => runDismissAnimation()}
-                        style={styles.backButton}
-                    >
-                        <Ionicons name="chevron-back" size={28} color="#ffffff" />
-                    </Pressable>
+            <SheetScreen onClose={() => router.back()}>
+                <View style={styles.container}>
+                    <StatusBar barStyle="light-content" translucent />
+                    <View style={styles.header}>
+                        <Pressable 
+                            onPress={() => runDismissAnimation()}
+                            style={styles.backButton}
+                        >
+                            <Ionicons name="chevron-back" size={28} color="#ffffff" />
+                        </Pressable>
+                    </View>
+                    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                        <Text style={styles.errorText}>User profile not found</Text>
+                    </View>
                 </View>
-                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                    <Text style={styles.errorText}>User profile not found</Text>
-                </View>
-            </View>
+            </SheetScreen>
         );
     }
 
     return (
-        <View style={styles.container}>
-            <StatusBar barStyle="light-content" translucent />
+        <SheetScreen
+            onClose={() => {
+                hapticService.impact(Haptics.ImpactFeedbackStyle.Light);
+                router.back();
+            }}
+            onCloseStart={() => hapticService.selection()}
+            style={{ backgroundColor: 'transparent' }}
+            opacityOnGestureMove
+            customBackground={
+                <Animated.View style={[StyleSheet.absoluteFill, pageBackgroundStyle]}>
+                    <GlassView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
+                </Animated.View>
+            }
+        >
+            <View style={styles.container}>
+                <StatusBar barStyle="light-content" translucent />
 
+                {/* Immersive Hero Background */}
+                <View style={styles.heroBackgroundContainer}>
+                    <Animated.View
+                        collapsable={false}
+                        style={[styles.heroMediaShell, headerAnimatedStyle, heroEntryAnimatedStyle]}
+                        {...(useSharedAvatarTransition && profileAvatarTransitionTag ? {
+                            sharedTransitionTag: profileAvatarTransitionTag,
+                            sharedTransition: PROFILE_AVATAR_SHARED_TRANSITION,
+                        } : {})}
+                    >
+                        {heroAvatarUri ? (
+                            <Image
+                                source={{ uri: heroAvatarUri }}
+                                style={[styles.heroImage, { backgroundColor: '#111' }]}
+                                resizeMode="cover"
+                            />
+                        ) : (
+                            <View style={styles.heroFallbackAvatar}>
+                                <MaterialIcons name="person" size={140} color="rgba(255,255,255,0.72)" />
+                            </View>
+                        )}
+                    </Animated.View>
 
-
-            {/* Immersive Hero Background */}
-            <Animated.View style={[styles.heroBackgroundContainer, headerAnimatedStyle, heroEntryAnimatedStyle]}>
-                {(() => {
-                    const avatarType = profileUser?.avatarType || profileUser?.avatar_type || 'default';
-                    const uri = profileUser?.avatar || profileUser?.avatar_url;
-                    const localUri = profileUser?.localAvatarUri || profileUser?.local_avatar_uri;
-                    const fallbackId = profileUser?.id || id || 'default';
-                    
-                    const proxiedUri = proxySupabaseUrl(uri);
-                    // Use local if available, otherwise remote or special types
-                    let finalUri: string;
-                    if (avatarType === 'teddy') {
-                        finalUri = `https://avatar.iran.liara.run/public/boy?username=${fallbackId}`;
-                    } else if (avatarType === 'memoji') {
-                        finalUri = `https://avatar.iran.liara.run/public/girl?username=${fallbackId}`;
-                    } else {
-                        finalUri = localUri || proxiedUri || uri || '';
-                    }
-
-                    return (
-                        <Animated.Image
-                            source={{ uri: finalUri }}
-                            style={[styles.heroImage, { backgroundColor: '#111' }]}
-                            resizeMode="cover"
-                            {...(SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION ? {
-                                sharedTransitionTag: PROFILE_AVATAR_TRANSITION_TAG,
-                                sharedTransitionStyle: PROFILE_AVATAR_SHARED_TRANSITION,
-                            } : {})}
-                        />
-                    );
-                })()}
-
-                {/* Progressive Blur — subtle bottom fade */}
-                <ProgressiveBlur
-                    position="bottom"
-                    height={240}
-                    intensity={Platform.OS === 'ios' ? 80 : 40}
-                    tint="dark"
-                    maxAlpha={1}
-                />
-            </Animated.View>
-
-
-            {/* Header - Transparent & Minimal */}
-            <Animated.View style={[styles.header, chromeAnimatedStyle]}>
-                <Pressable 
-                    onPress={() => runDismissAnimation()}
-                    style={styles.headerGlassCircle}
-                >
-                    <GlassView intensity={40} tint="dark" style={styles.headerIconGlass}>
-                        <Ionicons name="chevron-back" size={24} color="#ffffff" />
-                    </GlassView>
-                </Pressable>
-
-                <View style={styles.headerTitlePill}>
-                    <GlassView intensity={40} tint="dark" style={styles.headerTitleGlass}>
-                        <Animated.Text style={styles.headerTitle}>PROFILE</Animated.Text>
-                    </GlassView>
+                    {/* Progressive Blur — subtle bottom fade */}
+                    <ProgressiveBlur
+                        position="bottom"
+                        height={240}
+                        intensity={Platform.OS === 'ios' ? 80 : 40}
+                        tint="dark"
+                        maxAlpha={1}
+                    />
                 </View>
 
-                <Pressable style={styles.headerGlassCircle}>
-                    <GlassView intensity={40} tint="dark" style={styles.headerIconGlass}>
-                        <Ionicons name="ellipsis-horizontal" size={24} color="#ffffff" />
-                    </GlassView>
-                </Pressable>
-            </Animated.View>
-
-            <Animated.ScrollView
-                style={[styles.scrollView, scrollDismissAnimatedStyle]}
-                contentContainerStyle={styles.scrollContent}
-                showsVerticalScrollIndicator={false}
-                onScroll={onScroll}
-                scrollEventThrottle={16}
-            >
-                <Animated.View
-                    style={[
-                        styles.heroSection,
-                        contentAnimatedStyle,
-                        headerContentAnimatedStyle
-                    ]}
-                >
-                    {/* Spacer pushes content below the hero image */}
-                    <View style={styles.heroSpacer} />
-
-                    {/* Integrated Identity Overlay — moved from absolute to relative for better spacing */}
-                    <View style={styles.heroNameOverlay}>
-                        <Text style={styles.heroName}>{profileName}</Text>
-                        <View style={styles.heroHandleRow}>
-                             {/* Correct Username formatting: Handle-first, fallback-second, no status dot */}
-                             <Text style={styles.heroHandle}>
-                                @{profileUser?.username || getSuperuserHandle(id) || (id ? id.substring(0, 8) : 'soul_user')}
-                            </Text>
-                        </View>
-                    </View>
-
-                    {/* Optimized Multi-Action Row */}
-                    {!isOwnProfile && (
-                        <View style={styles.actionRow}>
-                             <Pressable 
-                                style={styles.actionPill}
-                                onPress={() => startCall(profileUser.id, 'audio')}
-                            >
-                                <GlassView intensity={40} tint="light" style={styles.actionPillContent}>
-                                    <Ionicons name="call" size={24} color="#fff" />
-                                </GlassView>
-                            </Pressable>
-
-                            <Pressable 
-                                style={styles.actionPill}
-                                onPress={() => startCall(profileUser.id, 'video')}
-                            >
-                                <GlassView intensity={40} tint="light" style={styles.actionPillContent}>
-                                    <Ionicons name="videocam" size={24} color="#fff" />
-                                </GlassView>
-                            </Pressable>
-
-                            <Pressable 
-                                style={[styles.actionPill, { borderColor: 'rgba(255,68,68,0.3)' }]}
-                                onPress={handleClearChat}
-                            >
-                                <GlassView intensity={40} tint="dark" style={[styles.actionPillContent, { backgroundColor: 'rgba(255,68,68,0.1)' }]}>
-                                    <MaterialIcons name="delete-sweep" size={24} color="#ff4444" />
-                                </GlassView>
-                            </Pressable>
-                        </View>
-                    )}
-                </Animated.View>
-
-                {/* Shared Media Section */}
-                <Animated.View
-                    style={[
-                        styles.mediaSection,
-                        mediaSectionAnimatedStyle
-                    ]}
-                >
-                    {/* Message Search */}
+                {/* Header - Transparent & Minimal */}
+                <Animated.View style={[styles.header, chromeAnimatedStyle]}>
                     <Pressable
-                        onPress={() => setIsSearching(prev => !prev)}
-                        style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            backgroundColor: 'rgba(255,255,255,0.06)',
-                            borderRadius: 12,
-                            paddingHorizontal: 14,
-                            paddingVertical: 12,
-                            marginBottom: 20,
-                        }}
+                        onPress={() => runDismissAnimation()}
+                        style={styles.headerGlassCircle}
                     >
-                        <MaterialIcons name="search" size={20} color="rgba(255,255,255,0.5)" />
-                        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 14, marginLeft: 10, flex: 1 }}>
-                            Search in conversation
-                        </Text>
+                        <GlassView intensity={40} tint="dark" style={styles.headerIconGlass}>
+                            <Ionicons name="chevron-back" size={24} color="#ffffff" />
+                        </GlassView>
                     </Pressable>
 
-                    {isSearching && (
-                        <View style={{ marginBottom: 20 }}>
-                            <View style={{
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                                backgroundColor: 'rgba(255,255,255,0.08)',
-                                borderRadius: 10,
-                                paddingHorizontal: 12,
-                                marginBottom: 10,
-                            }}>
-                                <MaterialIcons name="search" size={18} color="rgba(255,255,255,0.4)" />
-                                <TextInput
-                                    autoFocus
-                                    placeholder="Type to search..."
-                                    placeholderTextColor="rgba(255,255,255,0.3)"
-                                    value={searchQuery}
-                                    onChangeText={handleMessageSearch}
-                                    style={{ flex: 1, color: '#fff', fontSize: 14, marginLeft: 8, paddingVertical: 10 }}
-                                    returnKeyType="search"
-                                />
-                                {searchQuery.length > 0 && (
-                                    <Pressable onPress={() => { setSearchQuery(''); setSearchResults([]); }} hitSlop={8}>
-                                        <MaterialIcons name="close" size={16} color="rgba(255,255,255,0.4)" />
-                                    </Pressable>
-                                )}
-                            </View>
-                            {searchResults.length > 0 && (
-                                <View style={{ maxHeight: 240 }}>
-                                    <FlatList
-                                        data={searchResults}
-                                        keyExtractor={item => item.id}
-                                        renderItem={({ item }) => (
-                                            <View style={{
-                                                paddingVertical: 8,
-                                                paddingHorizontal: 12,
-                                                borderBottomWidth: StyleSheet.hairlineWidth,
-                                                borderBottomColor: 'rgba(255,255,255,0.06)',
-                                            }}>
-                                                <Text style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>
-                                                    {item.sender === 'me' ? 'You' : profileUser?.name || 'Them'} · {new Date(item.timestamp).toLocaleDateString()}
-                                                </Text>
-                                                <Text style={{ color: '#fff', fontSize: 13, marginTop: 2 }} numberOfLines={2}>
-                                                    {item.text}
-                                                </Text>
-                                            </View>
-                                        )}
-                                    />
-                                </View>
-                            )}
-                            {searchQuery.length > 0 && searchResults.length === 0 && (
-                                <Text style={{ color: 'rgba(255,255,255,0.3)', fontSize: 13, textAlign: 'center', paddingVertical: 12 }}>
-                                    No messages found
-                                </Text>
-                            )}
-                        </View>
-                    )}
-
-                    <Text style={styles.sectionTitle}>SHARED MEDIA</Text>
-                    
-                    {/* Category Tabs */}
-                    <View style={styles.tabContainer}>
-                        <GlassView intensity={20} tint="dark" style={styles.tabGlass} >
-                            {(['photos', 'videos', 'audio', 'docs'] as const).map((cat) => (
-                                <Pressable
-                                    key={cat}
-                                    onPress={() => setActiveCategory(cat)}
-                                    style={[
-                                        styles.tabBtn,
-                                        activeCategory === cat && styles.tabBtnActive
-                                    ]}
-                                >
-                                    <Text style={[
-                                        styles.tabText,
-                                        activeCategory === cat && styles.tabTextActive
-                                    ]}>
-                                        {cat.toUpperCase()}
-                                    </Text>
-                                </Pressable>
-                            ))}
+                    <View style={styles.headerTitlePill}>
+                        <GlassView intensity={40} tint="dark" style={styles.headerTitleGlass}>
+                            <Animated.Text style={styles.headerTitle}>PROFILE</Animated.Text>
                         </GlassView>
                     </View>
+
+                    <Pressable style={styles.headerGlassCircle}>
+                        <GlassView intensity={40} tint="dark" style={styles.headerIconGlass}>
+                            <Ionicons name="ellipsis-horizontal" size={24} color="#ffffff" />
+                        </GlassView>
+                    </Pressable>
+                </Animated.View>
+
+                <Animated.ScrollView
+                    style={[styles.scrollView, scrollDismissAnimatedStyle]}
+                    contentContainerStyle={styles.scrollContent}
+                    showsVerticalScrollIndicator={false}
+                    onScroll={onScroll}
+                    scrollEventThrottle={16}
+                >
+                    <Animated.View
+                        style={[
+                            styles.heroSection,
+                            contentAnimatedStyle,
+                            headerContentAnimatedStyle
+                        ]}
+                    >
+                        {/* Spacer pushes content below the hero image */}
+                        <View style={styles.heroSpacer} />
+
+                        {/* Integrated Identity Overlay — moved from absolute to relative for better spacing */}
+                        <View style={styles.heroNameOverlay}>
+                            <Text style={styles.heroName}>{profileName}</Text>
+                            <View style={styles.heroHandleRow}>
+                                {/* Correct Username formatting: Handle-first, fallback-second, no status dot */}
+                                <Text style={styles.heroHandle}>
+                                    @{profileUser?.username || getSuperuserHandle(id) || (id ? id.substring(0, 8) : 'soul_user')}
+                                </Text>
+                            </View>
+                        </View>
+
+                        {/* Optimized Multi-Action Row */}
+                        {!isOwnProfile && (
+                            <View style={styles.actionRow}>
+                                <Pressable
+                                    style={styles.actionPill}
+                                    onPress={() => startCall(profileUser.id, 'audio')}
+                                >
+                                    <GlassView intensity={40} tint="light" style={styles.actionPillContent}>
+                                        <Ionicons name="call" size={24} color="#fff" />
+                                    </GlassView>
+                                </Pressable>
+
+                                <Pressable
+                                    style={styles.actionPill}
+                                    onPress={() => startCall(profileUser.id, 'video')}
+                                >
+                                    <GlassView intensity={40} tint="light" style={styles.actionPillContent}>
+                                        <Ionicons name="videocam" size={24} color="#fff" />
+                                    </GlassView>
+                                </Pressable>
+
+                                <Pressable
+                                    style={[styles.actionPill, { borderColor: 'rgba(255,68,68,0.3)' }]}
+                                    onPress={handleClearChat}
+                                >
+                                    <GlassView intensity={40} tint="dark" style={[styles.actionPillContent, { backgroundColor: 'rgba(255,68,68,0.1)' }]}>
+                                        <MaterialIcons name="delete-sweep" size={24} color="#ff4444" />
+                                    </GlassView>
+                                </Pressable>
+                            </View>
+                        )}
+                    </Animated.View>
+
+                    {/* Shared Media Section */}
+                    <Animated.View
+                        style={[
+                            styles.mediaSection,
+                            mediaSectionAnimatedStyle
+                        ]}
+                    >
+                        {/* Message Search */}
+                        <Pressable
+                            onPress={() => setIsSearching(prev => !prev)}
+                            style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                backgroundColor: 'rgba(255,255,255,0.06)',
+                                borderRadius: 12,
+                                paddingHorizontal: 14,
+                                paddingVertical: 12,
+                                marginBottom: 20,
+                            }}
+                        >
+                            <MaterialIcons name="search" size={20} color="rgba(255,255,255,0.5)" />
+                            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 14, marginLeft: 10, flex: 1 }}>
+                                Search in conversation
+                            </Text>
+                        </Pressable>
+
+                        {isSearching && (
+                            <View style={{ marginBottom: 20 }}>
+                                <View style={{
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    backgroundColor: 'rgba(255,255,255,0.08)',
+                                    borderRadius: 10,
+                                    paddingHorizontal: 12,
+                                    marginBottom: 10,
+                                }}>
+                                    <MaterialIcons name="search" size={18} color="rgba(255,255,255,0.4)" />
+                                    <TextInput
+                                        autoFocus
+                                        placeholder="Type to search..."
+                                        placeholderTextColor="rgba(255,255,255,0.3)"
+                                        value={searchQuery}
+                                        onChangeText={handleMessageSearch}
+                                        style={{ flex: 1, color: '#fff', fontSize: 14, marginLeft: 8, paddingVertical: 10 }}
+                                        returnKeyType="search"
+                                    />
+                                    {searchQuery.length > 0 && (
+                                        <Pressable onPress={() => { setSearchQuery(''); setSearchResults([]); }} hitSlop={8}>
+                                            <MaterialIcons name="close" size={16} color="rgba(255,255,255,0.4)" />
+                                        </Pressable>
+                                    )}
+                                </View>
+                                {searchResults.length > 0 && (
+                                    <View style={{ maxHeight: 240 }}>
+                                        <FlatList
+                                            data={searchResults}
+                                            keyExtractor={item => item.id}
+                                            renderItem={({ item }) => (
+                                                <View style={{
+                                                    paddingVertical: 8,
+                                                    paddingHorizontal: 12,
+                                                    borderBottomWidth: StyleSheet.hairlineWidth,
+                                                    borderBottomColor: 'rgba(255,255,255,0.06)',
+                                                }}>
+                                                    <Text style={{ color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>
+                                                        {item.sender === 'me' ? 'You' : profileUser?.name || 'Them'} · {new Date(item.timestamp).toLocaleDateString()}
+                                                    </Text>
+                                                    <Text style={{ color: '#fff', fontSize: 13, marginTop: 2 }} numberOfLines={2}>
+                                                        {item.text}
+                                                    </Text>
+                                                </View>
+                                            )}
+                                        />
+                                    </View>
+                                )}
+                                {searchQuery.length > 0 && searchResults.length === 0 && (
+                                    <Text style={{ color: 'rgba(255,255,255,0.3)', fontSize: 13, textAlign: 'center', paddingVertical: 12 }}>
+                                        No messages found
+                                    </Text>
+                                )}
+                            </View>
+                        )}
+
+                        <Text style={styles.sectionTitle}>SHARED MEDIA</Text>
+
+                        {/* Category Tabs */}
+                        <View style={styles.tabContainer}>
+                            <GlassView intensity={20} tint="dark" style={styles.tabGlass} >
+                                {(['photos', 'videos', 'audio', 'docs'] as const).map((cat) => (
+                                    <Pressable
+                                        key={cat}
+                                        onPress={() => setActiveCategory(cat)}
+                                        style={[
+                                            styles.tabBtn,
+                                            activeCategory === cat && styles.tabBtnActive
+                                        ]}
+                                    >
+                                        <Text style={[
+                                            styles.tabText,
+                                            activeCategory === cat && styles.tabTextActive
+                                        ]}>
+                                            {cat.toUpperCase()}
+                                        </Text>
+                                    </Pressable>
+                                ))}
+                            </GlassView>
+                        </View>
 
                         {sharedMedia.length > 0 ? (
                             <View style={activeCategory === 'audio' || activeCategory === 'docs' ? styles.mediaList : styles.mediaGrid}>
                                 {sharedMedia.map((item: any, index: number) => {
                                     if (activeCategory === 'photos' || activeCategory === 'videos') {
                                         return (
-                                            <Pressable 
-                                                key={index} 
+                                            <Pressable
+                                                key={index}
                                                 ref={(el) => { gridRefs.current[index] = el; }}
                                                 style={[
-                                                    styles.mediaItem, 
-                                                    { width: (width - 60) / 3, height: (width - 60) / 3 },
+                                                    styles.mediaItem,
+                                                    { width: (screenWidth - 60) / 3, height: (screenWidth - 60) / 3 },
                                                     (viewerVisible && selectedIndex === index) && { opacity: 0 }
                                                 ]}
-
                                                 onPress={() => {
                                                     gridRefs.current[index]?.measure((x: number, y: number, width: number, height: number, px: number, py: number) => {
                                                         openViewer(index, { x: px, y: py, width, height });
@@ -746,10 +805,10 @@ export default function ProfileScreen() {
                                             <Pressable key={index} style={styles.listItemGlass} onPress={() => handleDownload(item)}>
                                                 <GlassView intensity={10} tint="dark" style={styles.listItemContent} >
                                                     <View style={[styles.listIconContainer, { backgroundColor: activeCategory === 'audio' ? 'rgba(168, 85, 247, 0.1)' : 'rgba(59, 130, 246, 0.1)' }]}>
-                                                        <Ionicons 
-                                                            name={activeCategory === 'audio' ? 'musical-notes' : 'document-text'} 
-                                                            size={20} 
-                                                            color={activeCategory === 'audio' ? '#a855f7' : '#3b82f6'} 
+                                                        <Ionicons
+                                                            name={activeCategory === 'audio' ? 'musical-notes' : 'document-text'}
+                                                            size={20}
+                                                            color={activeCategory === 'audio' ? '#a855f7' : '#3b82f6'}
                                                         />
                                                     </View>
                                                     <View style={styles.listTextContainer}>
@@ -767,103 +826,101 @@ export default function ProfileScreen() {
                                     }
                                 })}
                             </View>
-                    ) : (
-                        <View style={styles.emptyMedia}>
-                            <Ionicons 
-                                name={
-                                    activeCategory === 'photos' ? 'images-outline' : 
-                                    activeCategory === 'videos' ? 'videocam-outline' :
-                                    activeCategory === 'audio' ? 'musical-note-outline' : 'document-outline'
-                                } 
-                                size={40} 
-                                color="rgba(255,255,255,0.05)" 
-                            />
-                            <Text style={styles.emptyText}>No {activeCategory} found</Text>
-                        </View>
-                    )}
-                </Animated.View>
-
-                {/* Connection Info */}
-                <GlassView intensity={30} tint="dark" style={styles.infoCard} >
-                    <View style={styles.infoRow}>
-                        <MaterialIcons name="access-time" size={18} color="rgba(255,255,255,0.4)" />
-                        <Text style={styles.infoText}>Connected since the beginning</Text>
-                    </View>
-                    <View style={styles.infoRow}>
-                        <MaterialIcons name="favorite" size={18} color={activeTheme.primary} />
-                        <Text style={styles.infoText}>Synced forever</Text>
-                    </View>
-
-                </GlassView>
-            </Animated.ScrollView>
-
-            {/* Liquid Glass Media Viewer Modal with Seamless Morph Transition */}
-            <Modal
-                visible={viewerVisible}
-                transparent={true}
-                animationType="none"
-                onRequestClose={closeViewer}
-            >
-                <View style={[styles.viewerContainer, { backgroundColor: 'transparent' }]}>
-                    <Animated.View style={[StyleSheet.absoluteFill, bgMorphStyle]}>
-                        <GlassView intensity={90} tint="dark" style={StyleSheet.absoluteFill}  />
-                    </Animated.View>
-                    
-                    {/* Integrated Gallery & Transition Layer */}
-                    <Animated.View style={[StyleSheet.absoluteFill, galleryStyle]}>
-                        <FlatList
-                            data={sharedMedia}
-                            horizontal
-                            pagingEnabled
-                            initialScrollIndex={selectedIndex}
-                            getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
-                            onMomentumScrollEnd={(e) => {
-                                const index = Math.round(e.nativeEvent.contentOffset.x / width);
-                                if (index !== selectedIndex) {
-                                    setSelectedIndex(index);
-                                    // Dynamically update return origin for the new active index
-                                    gridRefs.current[index]?.measure((x: number, y: number, width: number, height: number, px: number, py: number) => {
-                                        origin.value = { x: px, y: py, width, height };
-                                    });
-                                }
-                            }}
-                            showsHorizontalScrollIndicator={false}
-                            keyExtractor={(_, i) => i.toString()}
-                            renderItem={renderViewerItem}
-                        />
-                    </Animated.View>
-
-                    {/* Morphing Overlay (GPU-Accelerated Butter-Smooth Transition) */}
-                    <Animated.View 
-                        style={[styles.morphingImageContainer, morphImageStyle]}
-                    >
-                        <Image 
-                            source={{ uri: sharedMedia[selectedIndex]?.url }} 
-                            style={styles.fullImage} 
-                            resizeMode="contain" 
-                        />
-                    </Animated.View>
-
-                    {/* Header/Footer Controls */}
-                    <Animated.View style={[styles.viewerControlsContainer, controlsStyle]}>
-                        <View style={styles.viewerHeader}>
-                            <Pressable onPress={closeViewer} style={styles.viewerHeaderBtn}>
-                                <Ionicons name="close" size={28} color="#fff" />
-                            </Pressable>
-                            <View style={styles.viewerHeaderCenter}>
-                                <Text style={styles.viewerTitle}>{activeCategory.toUpperCase()}</Text>
-                                <Text style={styles.viewerSubtitle}>{selectedIndex + 1} of {sharedMedia.length}</Text>
+                        ) : (
+                            <View style={styles.emptyMedia}>
+                                <Ionicons
+                                    name={
+                                        activeCategory === 'photos' ? 'images-outline' :
+                                        activeCategory === 'videos' ? 'videocam-outline' :
+                                        activeCategory === 'audio' ? 'musical-note-outline' : 'document-outline'
+                                    }
+                                    size={40}
+                                    color="rgba(255,255,255,0.05)"
+                                />
+                                <Text style={styles.emptyText}>No {activeCategory} found</Text>
                             </View>
-                            <Pressable onPress={() => handleShare(sharedMedia[selectedIndex])} style={styles.viewerHeaderBtn}>
-                                <Ionicons name="share-outline" size={24} color="#fff" />
-                            </Pressable>
-                        </View>
-
-
+                        )}
                     </Animated.View>
-                </View>
-            </Modal>
-        </View>
+
+                    {/* Connection Info */}
+                    <GlassView intensity={30} tint="dark" style={styles.infoCard} >
+                        <View style={styles.infoRow}>
+                            <MaterialIcons name="access-time" size={18} color="rgba(255,255,255,0.4)" />
+                            <Text style={styles.infoText}>Connected since the beginning</Text>
+                        </View>
+                        <View style={styles.infoRow}>
+                            <MaterialIcons name="favorite" size={18} color={activeTheme.primary} />
+                            <Text style={styles.infoText}>Synced forever</Text>
+                        </View>
+                    </GlassView>
+                </Animated.ScrollView>
+
+                {/* Liquid Glass Media Viewer Modal with Seamless Morph Transition */}
+                <Modal
+                    visible={viewerVisible}
+                    transparent={true}
+                    animationType="none"
+                    onRequestClose={closeViewer}
+                >
+                    <View style={[styles.viewerContainer, { backgroundColor: 'transparent' }]}>
+                        <Animated.View style={[StyleSheet.absoluteFill, bgMorphStyle]}>
+                            <GlassView intensity={90} tint="dark" style={StyleSheet.absoluteFill} />
+                        </Animated.View>
+
+                        {/* Integrated Gallery & Transition Layer */}
+                        <Animated.View style={[StyleSheet.absoluteFill, galleryStyle]}>
+                            <FlatList
+                                data={sharedMedia}
+                                horizontal
+                                pagingEnabled
+                                initialScrollIndex={selectedIndex}
+                                getItemLayout={(_, index) => ({ length: width, offset: width * index, index })}
+                                onMomentumScrollEnd={(e) => {
+                                    const index = Math.round(e.nativeEvent.contentOffset.x / width);
+                                    if (index !== selectedIndex) {
+                                        setSelectedIndex(index);
+                                        // Dynamically update return origin for the new active index
+                                        gridRefs.current[index]?.measure((x: number, y: number, width: number, height: number, px: number, py: number) => {
+                                            origin.value = { x: px, y: py, width, height };
+                                        });
+                                    }
+                                }}
+                                showsHorizontalScrollIndicator={false}
+                                keyExtractor={(_, i) => i.toString()}
+                                renderItem={renderViewerItem}
+                            />
+                        </Animated.View>
+
+                        {/* Morphing Overlay (GPU-Accelerated Butter-Smooth Transition) */}
+                        <Animated.View
+                            style={[styles.morphingImageContainer, morphImageStyle]}
+                        >
+                            <Image
+                                source={{ uri: sharedMedia[selectedIndex]?.url }}
+                                style={styles.fullImage}
+                                resizeMode="contain"
+                            />
+                        </Animated.View>
+
+                        {/* Header/Footer Controls */}
+                        <Animated.View style={[styles.viewerControlsContainer, controlsStyle]}>
+                            <View style={styles.viewerHeader}>
+                                <Pressable onPress={closeViewer} style={styles.viewerHeaderBtn}>
+                                    <Ionicons name="close" size={28} color="#fff" />
+                                </Pressable>
+                                <View style={styles.viewerHeaderCenter}>
+                                    <Text style={styles.viewerTitle}>{activeCategory.toUpperCase()}</Text>
+                                    <Text style={styles.viewerSubtitle}>{selectedIndex + 1} of {sharedMedia.length}</Text>
+                                </View>
+                                <Pressable onPress={() => handleShare(sharedMedia[selectedIndex])} style={styles.viewerHeaderBtn}>
+                                    <Ionicons name="share-outline" size={24} color="#fff" />
+                                </Pressable>
+                            </View>
+                        </Animated.View>
+                    </View>
+                </Modal>
+            </View>
+        </SheetScreen>
     );
 }
 
@@ -936,11 +993,26 @@ const styles = StyleSheet.create({
         right: 0,
         height: 540,
         overflow: 'hidden',
-        backgroundColor: '#000', // Ensure a solid base for the melt
+        backgroundColor: 'transparent',
+    },
+    heroMediaShell: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 540,
+        overflow: 'hidden',
+        backgroundColor: 'transparent',
     },
     heroImage: {
         width: '100%',
         height: '100%',
+    },
+    heroFallbackAvatar: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#111',
     },
     heroGradient: {
         ...StyleSheet.absoluteFillObject,

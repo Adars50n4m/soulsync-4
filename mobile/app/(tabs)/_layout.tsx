@@ -1,8 +1,10 @@
 import React, { useEffect } from 'react';
 import { Tabs } from 'expo-router';
 import { View, Pressable, StyleSheet, useWindowDimensions, Platform } from 'react-native';
+import Svg, { Defs, RadialGradient, Stop, Ellipse } from 'react-native-svg';
 import GlassView from '../../components/ui/GlassView';
-import { MaterialIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
+import { hapticService } from '../../services/HapticService';
 import * as Haptics from 'expo-haptics';
 import Animated, {
   useSharedValue,
@@ -10,6 +12,7 @@ import Animated, {
   withSpring,
   withTiming,
   withDelay,
+  withSequence,
   Easing,
 } from 'react-native-reanimated';
 import { useApp } from '../../context/AppContext';
@@ -21,24 +24,36 @@ export const unstable_settings = {
 
 let hasRenderedTabBarOnce = false;
 
-const TabIcon = ({ name, focused, size = 24 }: { name: any; focused: boolean; size?: number }) => {
+const TabIcon = ({ name, focused, size = 26 }: { name: string; focused: boolean; size?: number }) => {
   const { activeTheme } = useApp();
   const scale = useSharedValue(1);
 
   useEffect(() => {
-    scale.value = withSpring(focused ? 1.2 : 1, { damping: 15 });
+    // Premium spring pop animation
+    if (focused) {
+      scale.value = withSequence(
+        withSpring(1.25, { damping: 10, stiffness: 200 }),
+        withSpring(1.15, { damping: 12, stiffness: 150 })
+      );
+    } else {
+      scale.value = withSpring(1, { damping: 15 });
+    }
   }, [focused]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
+    opacity: withTiming(focused ? 1 : 0.7, { duration: 200 }),
   }));
+
+  // WhatsApp-style: Use filled version when focused, outline when not
+  const iconName = focused ? (name as any) : (`${name}-outline` as any);
 
   return (
     <Animated.View style={animatedStyle}>
-      <MaterialIcons
-        name={name}
+      <Ionicons
+        name={iconName}
         size={size}
-        color={focused ? activeTheme.primary : 'rgba(255,255,255,0.4)'}
+        color={focused ? activeTheme.primary : '#8E8E93'}
       />
     </Animated.View>
   );
@@ -93,12 +108,16 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
     backgroundColor: 'rgba(255, 255, 255, 0.07)',
   }));
 
-  // Soft glow blob — follows pill, fades in/out on switch
+  // Glow blob — always visible, locked to pill position
+  // offset centers the wider glow on the pill: (tabWidth - glowWidth) / 2
+  // iOS glowWidth = tabWidth * 4.5 → offset = -tabWidth * 1.75
+  // Android glowWidth = tabWidth * 1.5 → offset = -tabWidth * 0.25
   const glowStyle = useAnimatedStyle(() => {
     'worklet';
+    const offset = -tabWidth * 0.25; // Standardized offset for width=tabWidth*1.5
     return {
       transform: [
-        { translateX: translateX.value - tabWidth * 0.25 } as const,
+        { translateX: translateX.value + offset } as const,
       ] as const,
       opacity: glowProgress.value,
     };
@@ -140,11 +159,18 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
       <View style={styles.tabBarGlassContainer}>
         <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFillObject} />
 
-        {/* Shadow-only glow — no fill, no edge, just soft light */}
+        {/* Standardized Glow blob — Unified shadow-based bloom for both platforms */}
         <Animated.View
           style={[
             styles.glowBlob,
-            { width: tabWidth * 1.5, borderRadius: 30, shadowColor: activeTheme.primary },
+            { 
+              width: tabWidth * 1.5, 
+              borderRadius: 30, 
+              shadowColor: activeTheme.primary,
+              // iOS handles shadows differently, we boost them here to match Android's elevation intensity
+              shadowOpacity: Platform.OS === 'ios' ? 0.9 : 1,
+              shadowRadius: Platform.OS === 'ios' ? 25 : 30,
+            },
             glowStyle,
           ]}
           pointerEvents="none"
@@ -158,7 +184,7 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
             const isFocused = state.index === index;
 
             const onPress = () => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              hapticService.impact(Haptics.ImpactFeedbackStyle.Light);
               const event = navigation.emit({
                 type: 'tabPress',
                 target: route.key,
@@ -169,10 +195,10 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
               }
             };
 
-            let iconName: any = 'home';
-            if (route.name === 'index') iconName = 'chat-bubble';
+            let iconName: string = 'home';
+            if (route.name === 'index') iconName = 'chatbubble-ellipses';
             if (route.name === 'calls') iconName = 'call';
-            if (route.name === 'settings') iconName = 'tune';
+            if (route.name === 'settings') iconName = 'settings';
 
             return (
               <Pressable key={route.key} onPress={onPress} style={styles.tabButton}>
@@ -222,8 +248,8 @@ const styles = StyleSheet.create({
   },
   glowBlob: {
     position: 'absolute',
-    top: 10,
-    height: 52,
+    top: 8,
+    height: 48,
     left: 12,
     backgroundColor: 'transparent',
     shadowOffset: { width: 0, height: 0 },
@@ -234,16 +260,16 @@ const styles = StyleSheet.create({
   tabBarInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 8,
     paddingHorizontal: 12,
-    height: 72,
+    height: 64,
   },
   indicatorPill: {
     position: 'absolute',
-    top: 10,
+    top: 8,
     left: 12,
-    height: 52,
-    borderRadius: 26,
+    height: 48,
+    borderRadius: 24,
   },
   tabButton: {
     flex: 1,

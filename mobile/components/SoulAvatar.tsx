@@ -18,6 +18,7 @@ interface SoulAvatarProps {
   teddyVariant?: 'boy' | 'girl';
   sharedTransitionTag?: string;
   sharedTransitionStyle?: any;
+  sharedTransition?: any; // Reanimated 3 SharedTransition
   allowExperimentalSharedTransition?: boolean;
   isOnline?: boolean;
 }
@@ -37,6 +38,7 @@ export const SoulAvatar: React.FC<SoulAvatarProps> = ({
   teddyVariant,
   sharedTransitionTag,
   sharedTransitionStyle,
+  sharedTransition,
   allowExperimentalSharedTransition = false,
   isOnline = false
 }) => {
@@ -51,6 +53,7 @@ export const SoulAvatar: React.FC<SoulAvatarProps> = ({
     ? {
         sharedTransitionTag,
         sharedTransitionStyle,
+        sharedTransition,
       }
     : {};
 
@@ -65,6 +68,14 @@ export const SoulAvatar: React.FC<SoulAvatarProps> = ({
     setError(false);
   }, [uri, localUri, proxiedUri]);
 
+  const avatarShellStyle = {
+    width: size,
+    height: size,
+    borderRadius: size / 2,
+    overflow: 'hidden' as const,
+    backgroundColor: '#262626',
+  };
+
   const handleImageError = () => {
     if (localUri && currentSource === localUri && proxiedUri && !hasFallbackToRemote) {
       // Local failed, try remote once
@@ -78,41 +89,41 @@ export const SoulAvatar: React.FC<SoulAvatarProps> = ({
 
   const hasAvatar = !!currentSource && currentSource !== '' && !error;
 
-  const renderAvatar = () => {
+  const renderAvatarContent = () => {
     // Handling Teddy/Memoji types
-    if (avatarType === 'teddy' || avatarType === 'memoji') {
+    if ((avatarType === 'teddy' || avatarType === 'memoji') && !error) {
+        // IMPROVED: Use variant if provided, or derive from name/uri
+        let variant = teddyVariant;
+        
+        if (!variant) {
+          // If no variant provided, check the uri/fallbackId for hints
+          const nameHint = (uri || '').toLowerCase();
+          if (nameHint.includes('shri')) variant = 'girl';
+          else if (nameHint.includes('hari')) variant = 'boy';
+          else variant = avatarType === 'teddy' ? 'boy' : 'girl'; // legacy defaults
+        }
+
         const fallbackId = uri || 'default';
-        const avatarUrl = avatarType === 'teddy'
+        const avatarUrl = variant === 'boy'
             ? `https://avatar.iran.liara.run/public/boy?username=${fallbackId}`
             : `https://avatar.iran.liara.run/public/girl?username=${fallbackId}`;
 
         return (
             <Image
                 source={{ uri: avatarUrl }}
-                style={{ width: size, height: size, borderRadius: size / 2 }}
-                contentFit="contain"
+                style={{ width: '100%', height: '100%' }}
+                contentFit="cover"
+                onError={() => setError(true)}
             />
         );
     }
 
     // Show user photo if available
     if (hasAvatar) {
-      if (sharedTransitionTag) {
-        return (
-          <Animated.Image
-            source={{ uri: currentSource }}
-            {...sharedProps}
-            style={{ width: size, height: size, borderRadius: size / 2 }}
-            resizeMode="cover"
-            onError={handleImageError}
-          />
-        );
-      }
-
       return (
         <Image
           source={{ uri: currentSource }}
-          style={{ width: size, height: size, borderRadius: size / 2 }}
+          style={{ width: '100%', height: '100%' }}
           contentFit="cover"
           transition={200}
           onError={handleImageError}
@@ -124,14 +135,10 @@ export const SoulAvatar: React.FC<SoulAvatarProps> = ({
     return (
       <View
         style={{
-          width: size,
-          height: size,
-          borderRadius: size / 2,
-          backgroundColor: '#262626',
+          width: '100%',
+          height: '100%',
           justifyContent: 'center',
           alignItems: 'center',
-          borderWidth: 1,
-          borderColor: 'rgba(255,255,255,0.15)',
         }}
       >
         <MaterialIcons
@@ -145,7 +152,13 @@ export const SoulAvatar: React.FC<SoulAvatarProps> = ({
 
   return (
     <View style={[{ width: size, height: size }, style]}>
-      {renderAvatar()}
+      <Animated.View
+        collapsable={false}
+        {...sharedProps}
+        style={avatarShellStyle}
+      >
+        {renderAvatarContent()}
+      </Animated.View>
       {isOnline && (
         <View 
           style={{

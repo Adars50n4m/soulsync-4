@@ -9,7 +9,6 @@ import { Platform } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
 import { SERVER_URL, safeFetchJson } from '../config/api';
 import { R2_CONFIG } from '../config/r2';
-import { USE_R2 } from '../config/env';
 import { r2StorageService, UploadResponse, R2AuthError } from './R2StorageService';
 import { offlineService } from './LocalDBService';
 import { mediaDownloadService } from './MediaDownloadService';
@@ -34,9 +33,13 @@ const isR2AuthFailure = (error: any): boolean => {
 const isNetworkLikeError = (error: any): boolean => {
     const message = typeof error?.message === 'string' ? error.message : '';
     return error?.name === 'AbortError'
+        || message.includes('timeout')
         || message.includes('fetch')
-        || message.includes('Network');
+        || message.includes('Network')
+        || message.includes('Aborted');
 };
+
+const inFlightUploads = new Map<string, Promise<string | null>>();
 
 export const storageService = {
     /**
@@ -154,145 +157,70 @@ export const storageService = {
     async uploadImage(uri: string, bucket: string, folder: string = '', onProgress?: (progress: number) => void): Promise<string | null> {
         console.log(`[StorageService] Starting upload for: ${uri}`);
         let localUri = uri;
-        let r2AuthUnavailable = false;
         let contentType = 'application/octet-stream';
-        try {
-            // 1. Resolve URI to local file path
-            localUri = await this.resolveUri(uri);
+        // 1. Resolve URI to local file path
+        localUri = await this.resolveUri(uri);
 
-            // Guard: verify file exists before attempting native upload (prevents SIGABRT crash)
-            const fileInfo = await getInfoAsync(localUri);
-            if (!fileInfo.exists) {
-                console.warn(`[StorageService] Source file does not exist: ${localUri}`);
-                throw new Error('Source file not found');
-            }
+        // Guard: verify file exists before attempting native upload (prevents SIGABRT crash)
+        const fileInfo = await getInfoAsync(localUri);
+        if (!fileInfo.exists) {
+            console.warn(`[StorageService] Source file does not exist: ${localUri}`);
+            throw new Error('Source file not found');
+        }
 
-            contentType = this.getMimeType(localUri);
-            const ext = localUri.split('.').pop()?.toLowerCase() || 'jpg';
-            const fileName = `${folder ? folder + '-' : ''}${Date.now()}.${ext}`;
+        contentType = this.getMimeType(localUri);
+        const ext = localUri.split('.').pop()?.toLowerCase() || 'jpg';
+        const fileName = `${folder ? folder + '-' : ''}${Date.now()}.${ext}`;
+        const uploadKey = `${bucket}:${folder}:${localUri}:${(fileInfo as any).size || 0}`;
 
-            console.log(`[StorageService] Prepared: ${fileName} (${contentType})`);
+        console.log(`[StorageService] Prepared: ${fileName} (${contentType})`);
 
-            // 1. Priority: Direct R2 Worker path if enabled
-            if (USE_R2) {
+        const existingUpload = inFlightUploads.get(uploadKey);
+        if (existingUpload) {
+            console.log(`[StorageService] Reusing in-flight upload for ${uploadKey}`);
+            return existingUpload;
+        }
+
+        const uploadPromise = (async () => {
+            try {
+                if (!R2_CONFIG.USE_R2) {
+                    console.log(`[StorageService] Using server proxy upload for ${bucket}/${folder}`);
+                    return await this.uploadViaServerProxy(localUri, bucket, folder, contentType, onProgress);
+                }
+
+                console.log(`[StorageService] Uploading to R2: ${bucket}/${folder}`);
                 try {
-                    console.log(`[StorageService] Priority: Direct R2 upload to ${bucket}/${folder}`);
                     const r2Key = await r2StorageService.uploadImage(localUri, bucket, folder, onProgress, contentType);
                     if (r2Key) {
-                        console.log(`[StorageService] Direct R2 success: ${r2Key}`);
+                        console.log(`[StorageService] ✅ R2 upload success: ${r2Key}`);
                         return r2Key;
                     }
-                } catch (r2Err: any) {
-                    if (isR2AuthFailure(r2Err)) {
-                        r2AuthUnavailable = true;
-                        console.warn('[StorageService] Direct R2 skipped: no valid auth session. Falling back to server upload paths.');
-                    } else {
-                        console.warn(`[StorageService] Direct R2 failed: ${r2Err.message}. Falling back to Server Presigned.`);
+                    throw new Error('R2 upload returned no key');
+                } catch (r2Error: any) {
+                    if (isR2AuthFailure(r2Error)) {
+                        throw new Error('Upload requires an active session. Please log in again and retry.');
                     }
-                }
-            }
 
-            // 2. Preferred fallback on mobile: send multipart to local Node server.
-            // iOS `createUploadTask` is more reliable against our server than direct presigned PUT.
-            try {
-                const proxiedKey = await this.uploadViaServerProxy(localUri, bucket, folder, contentType, onProgress);
-                if (proxiedKey) {
-                    console.log(`[StorageService] Server proxy upload success: ${proxiedKey}`);
-                    return proxiedKey;
-                }
-            } catch (proxyErr: any) {
-                console.warn(`[StorageService] Server proxy upload failed: ${proxyErr.message}. Falling back to presigned PUT.`);
-            }
-
-            // 3. Final fallback: Get Presigned PUT URL from Node Server
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => {
-                console.warn(`[StorageService] Presign request timed out for: ${fileName}`);
-                controller.abort();
-            }, 30000); // 30s timeout for presign
-
-            const { success, data, error } = await safeFetchJson<{ presignedUrl: string, key: string }>(
-                `${SERVER_URL}/api/media/presign-upload`, 
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ fileName, contentType }),
-                    signal: controller.signal
-                }
-            ).catch(err => {
-                if (err.name === 'AbortError') throw new Error('Request timed out (30s)');
-                throw err;
-            }).finally(() => clearTimeout(timeoutId));
-            
-            if (!success || !data) {
-                console.warn(`[StorageService] Presign failed (${error}). Falling back to Direct R2.`);
-                // Fallback to direct R2 worker if server fails
-                if (!r2AuthUnavailable) {
-                    try {
-                        return await r2StorageService.uploadImage(localUri, bucket, folder, undefined, contentType);
-                    } catch (fallbackErr: any) {
-                        console.warn('[StorageService] Fallback also failed:', fallbackErr.message);
+                    if (!isNetworkLikeError(r2Error)) {
+                        throw r2Error;
                     }
+
+                    console.warn('[StorageService] R2 direct upload failed, falling back to server proxy:', r2Error.message);
+                    return await this.uploadViaServerProxy(localUri, bucket, folder, contentType, onProgress);
                 }
-                throw new Error(error || 'Failed to get presigned URL from server');
+            } catch (e: any) {
+                console.warn(`[StorageService] Upload failed:`, e.message);
+                throw e;
             }
-            
-            const { presignedUrl, key } = data;
+        })();
 
-            // 4. Perform the binary upload to R2 via presigned URL
-            // Use RN-compatible XMLHttpRequest for binary PUT (fetch + uri object only works with POST multipart)
-            onProgress?.(0.5);
-            const putResponse = await new Promise<{ ok: boolean; status: number }>((resolve, reject) => {
-                const xhr = new XMLHttpRequest();
-                xhr.open('PUT', presignedUrl);
-                xhr.setRequestHeader('Content-Type', contentType);
-                xhr.timeout = 60000;
-                xhr.onload = () => resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status });
-                xhr.onerror = () => reject(new Error('XHR upload failed'));
-                xhr.ontimeout = () => reject(new Error('Upload timed out'));
-                if (xhr.upload && onProgress) {
-                    xhr.upload.onprogress = (e) => {
-                        if (e.lengthComputable) onProgress(0.5 + (e.loaded / e.total) * 0.45);
-                    };
-                }
-                // Read file and send as blob
-                const fileUri = localUri.startsWith('file://') ? localUri : `file://${localUri}`;
-                fetch(fileUri).then(r => r.blob()).then(blob => xhr.send(blob)).catch(reject);
-            });
-            onProgress?.(0.95);
-
-            if (putResponse.ok) {
-                console.log(`[StorageService] Upload success: ${key}`);
-                return key;
-            } else {
-                try {
-                    const proxiedKey = await this.uploadViaServerProxy(localUri, bucket, folder, contentType, onProgress);
-                    if (proxiedKey) {
-                        console.log(`[StorageService] Recovered via server proxy after presigned failure: ${proxiedKey}`);
-                        return proxiedKey;
-                    }
-                } catch (proxyErr: any) {
-                    console.warn(`[StorageService] Recovery via server proxy failed: ${proxyErr.message}`);
-                }
-                throw new Error(`Upload failed with status ${putResponse?.status || 'unknown'}`);
+        inFlightUploads.set(uploadKey, uploadPromise);
+        try {
+            return await uploadPromise;
+        } finally {
+            if (inFlightUploads.get(uploadKey) === uploadPromise) {
+                inFlightUploads.delete(uploadKey);
             }
-        } catch (e: any) {
-            console.warn(`[StorageService] Upload catch error:`, e.message);
-            // Emergency fallback for network errors or timeouts
-            if (isNetworkLikeError(e) && !r2AuthUnavailable) {
-               try {
-                 console.log(`[StorageService] Emergency R2 fallback for: ${localUri}`);
-                 return await r2StorageService.uploadImage(localUri, bucket, folder, undefined, contentType);
-               } catch (finalErr) {
-                 console.warn('[StorageService] Emergency fallback failed:', finalErr);
-               }
-            }
-
-            if (isNetworkLikeError(e) && r2AuthUnavailable) {
-                throw new Error('Upload requires an active session or reachable sync server. Please log in again and retry.');
-            }
-
-            throw e; 
         }
     },
 
@@ -328,29 +256,15 @@ export const storageService = {
 
             let downloadUrl: string | undefined;
 
-            // For direct HTTP URLs, use them directly as download source (skip presign)
+            // For direct HTTP URLs, use them directly
             if (r2Key.startsWith('http')) {
                 downloadUrl = r2Key;
+            } else if (R2_PUBLIC_BASE) {
+                // For R2 keys, use public URL directly (no server presign needed)
+                downloadUrl = `${R2_PUBLIC_BASE}/${r2Key}`;
             } else {
-                // For R2 keys, get a presigned URL
-                const { success, data } = await safeFetchJson<{ presignedUrl: string }>(
-                    `${SERVER_URL}/api/media/presign-download`,
-                    {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ key: r2Key })
-                    }
-                );
-
-                downloadUrl = data?.presignedUrl;
-
-                if (!success || !downloadUrl) {
-                    if (R2_PUBLIC_BASE) {
-                        downloadUrl = `${R2_PUBLIC_BASE}/${r2Key}`;
-                    } else {
-                        return null;
-                    }
-                }
+                console.warn(`[StorageService] No R2_PUBLIC_BASE configured for key: ${r2Key}`);
+                return null;
             }
 
             if (messageId) {
@@ -400,7 +314,7 @@ export const storageService = {
     async downloadToDevice(signedUrl: string, statusId: string, mediaType: string): Promise<string | null> {
         try {
             const ext = mediaType === 'video' ? 'mp4' : 'jpg';
-            const directory = `${documentDirectory}soulsync_status/`;
+            const directory = `${documentDirectory}soul_status/`;
             const localPath = `${directory}${statusId}.${ext}`;
 
             // Ensure directory exists

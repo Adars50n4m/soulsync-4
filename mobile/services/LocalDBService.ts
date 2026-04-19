@@ -11,8 +11,10 @@ import {
   makeDirectoryAsync, 
   moveAsync 
 } from 'expo-file-system';
+import { proxySupabaseUrl } from '../config/api';
 import { MIGRATE_DB } from '../database/schema';
 import { dbManager } from '../database/DatabaseManager';
+import { mergeGroupedMediaThumbnail } from '../utils/chatUtils';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PUBLIC TYPES
@@ -41,6 +43,7 @@ export interface QueuedMessage {
     duration?: number;
   };
   replyTo?: string;
+  senderName?: string;
   retryCount: number;
   lastRetryAt?: string;
   errorMessage?: string;
@@ -55,7 +58,27 @@ export interface LocalMessage {
   status?: string;
   media?: QueuedMessage['media'];
   replyTo?: string;
+  senderName?: string;
   localFileUri?: string;
+  groupId?: string;
+}
+
+export interface LocalGroup {
+  id: string;
+  name: string;
+  description?: string;
+  avatarUrl?: string;
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface LocalGroupMember {
+  id: string;
+  groupId: string;
+  userId: string;
+  role: string;
+  joinedAt?: string;
 }
 
 export interface PendingSyncOperation {
@@ -68,55 +91,82 @@ export interface PendingSyncOperation {
   retryCount: number;
 }
 
+const MEDIA_GROUP_MARKER = '__MEDIA_GROUP_V1__:';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DATABASE SINGLETON
 // ─────────────────────────────────────────────────────────────────────────────
 
 const DB_NAME = 'soul_messages.db';
-const OLD_DB_NAME = 'soulsync.db';
+const LEGACY_DB_NAME = 'soulsync_messages.db';
+const SOUL_V1_DB_NAME = 'soul.db'; // Transient name from recent rename
+const SOULSYNC_V1_DB_NAME = 'soulsync.db'; // Original legacy name
 
 async function ensureDatabaseMigration(): Promise<void> {
   try {
     const dbDir = `${documentDirectory}SQLite/`;
-    const oldPath = `${dbDir}${OLD_DB_NAME}`;
     const newPath = `${dbDir}${DB_NAME}`;
 
-    const oldInfo = await getInfoAsync(oldPath);
-    const newInfo = await getInfoAsync(newPath);
+    // Priority 1: Check for soulsync_messages.db (Old system, same schema structure)
+    const legacyPath = `${dbDir}${LEGACY_DB_NAME}`;
+    const legacyInfo = await getInfoAsync(legacyPath);
+    if (legacyInfo.exists) {
+      console.log(`[SQLite] Migrating ${LEGACY_DB_NAME} -> ${DB_NAME}`);
+      await moveAsync({ from: legacyPath, to: newPath });
+      return;
+    }
 
-    if (oldInfo.exists && !newInfo.exists) {
-      console.log(`[SQLite] Migrating ${OLD_DB_NAME} -> ${DB_NAME}`);
-      await makeDirectoryAsync(dbDir, { intermediates: true });
-      await moveAsync({ from: oldPath, to: newPath });
-      console.log('[SQLite] Database migration successful');
+    // Priority 2: Check for soul.db (If it exists but soul_messages.db doesn't)
+    const soulV1Path = `${dbDir}${SOUL_V1_DB_NAME}`;
+    const soulV1Info = await getInfoAsync(soulV1Path);
+    if (soulV1Info.exists) {
+        console.log(`[SQLite] Migrating ${SOUL_V1_DB_NAME} -> ${DB_NAME}`);
+        await moveAsync({ from: soulV1Path, to: newPath });
+        return;
+    }
+
+    // Priority 3: Check for soulsync.db
+    const soulsyncPath = `${dbDir}${SOULSYNC_V1_DB_NAME}`;
+    const soulsyncInfo = await getInfoAsync(soulsyncPath);
+    if (soulsyncInfo.exists) {
+        console.log(`[SQLite] Migrating ${SOULSYNC_V1_DB_NAME} -> ${DB_NAME}`);
+        await moveAsync({ from: soulsyncPath, to: newPath });
+        return;
     }
   } catch (error) {
     console.warn('[SQLite] Database migration check failed:', error);
   }
 }
 
-// Cache the DB instance to avoid repeating migration/setup on every call
 let _dbInstance: SQLite.SQLiteDatabase | null = null;
 let _dbInitPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let _isInitializing = false;
 
 async function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (_dbInstance) return _dbInstance;
   if (_dbInitPromise) return _dbInitPromise;
 
   _dbInitPromise = (async () => {
-    await ensureDatabaseMigration();
-    const db = await dbManager.getDatabase({
-      name: DB_NAME,
-      migrations: async (dbInstance) => {
-          await MIGRATE_DB(dbInstance);
-      },
-      onOpen: async (db) => {
-        setupWalCheckpoint(db);
-      }
-    });
-    _dbInstance = db;
-    console.log('[SQLite] LocalDBService: database ready');
-    return db;
+    if (_isInitializing) return _dbInitPromise!; // Should not happen with current logic but safe
+    _isInitializing = true;
+    try {
+      await ensureDatabaseMigration();
+      const db = await dbManager.getDatabase({
+        name: DB_NAME,
+        migrations: async (dbInstance) => {
+            await MIGRATE_DB(dbInstance);
+        },
+        onOpen: async (db) => {
+          // Delay setup of WAL checkpoint slightly to allow other boot tasks to finish
+          setTimeout(() => setupWalCheckpoint(db), 5000);
+        }
+      });
+      _dbInstance = db;
+      console.log('[SQLite] LocalDBService: database ready');
+      return db;
+    } finally {
+      _isInitializing = false;
+    }
   })();
 
   return _dbInitPromise;
@@ -125,26 +175,25 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
 // Exported for other services (StatusService, etc.)
 export { getDb };
 
-
-
-
 // FIX #19: Periodic WAL checkpoint to prevent data loss on crash
 let checkpointInterval: NodeJS.Timeout | null = null;
 
 function setupWalCheckpoint(db: SQLite.SQLiteDatabase): void {
-  // Run checkpoint every 30 seconds to consolidate WAL data
+  // Consolidate WAL data to prevent the file from growing indefinitely
   if (checkpointInterval) {
     clearInterval(checkpointInterval);
   }
 
   checkpointInterval = setInterval(async () => {
     try {
-      await db.execAsync('PRAGMA wal_checkpoint(TRUNCATE);');
-      console.log('[SQLite] WAL checkpoint completed');
+      // 🛡️ Use execAsync to run the pragma without blocking long-running queries
+      await db.execAsync('PRAGMA wal_checkpoint(PASSIVE);'); 
+      // console.log('[SQLite] WAL checkpoint (passive)');
     } catch (error) {
-      console.warn('[SQLite] WAL checkpoint failed:', error);
+      // Periodic failures are expected if DB is very busy, just log it.
+      // console.debug('[SQLite] WAL checkpoint deferred');
     }
-  }, 30000);
+  }, 60000); // Reduce frequency to once per minute to lower lock contention
 }
 
 function rowToQueuedMessage(row: any): QueuedMessage {
@@ -152,7 +201,7 @@ function rowToQueuedMessage(row: any): QueuedMessage {
   if (row.media_url != null || row.media_type || row.local_file_uri) {
     media = {
       type: row.media_type ?? 'image',
-      url: row.media_url ?? '',
+      url: proxySupabaseUrl(row.media_url ?? ''),
       name: row.media_name ?? undefined,
       caption: row.media_caption ?? undefined,
       thumbnail: row.media_thumbnail ?? undefined,
@@ -168,6 +217,7 @@ function rowToQueuedMessage(row: any): QueuedMessage {
     status: (row.status as MessageStatus) ?? 'pending',
     media,
     replyTo: row.reply_to_id ?? undefined,
+    senderName: row.sender_name ?? undefined,
     retryCount: row.retry_count ?? 0,
     lastRetryAt: row.last_retry_at ?? undefined,
     errorMessage: row.error_message ?? undefined,
@@ -199,6 +249,75 @@ class OfflineService {
     );
   }
 
+  // ─── GROUP METHODS ───────────────────────────────────────────────────────
+
+  async saveGroup(group: LocalGroup): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `INSERT INTO groups (id, name, description, avatar_url, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name,
+         description = excluded.description,
+         avatar_url = excluded.avatar_url,
+         updated_at = excluded.updated_at;`,
+      [group.id, group.name, group.description ?? null, group.avatarUrl ?? null, group.createdBy ?? null, group.createdAt ?? null, group.updatedAt ?? null]
+    );
+
+    // Also ensure a contact entry exists for this group so it shows in chat list
+    await this.saveContact({
+        id: group.id,
+        name: group.name,
+        avatar: group.avatarUrl,
+        about: group.description,
+        isGroup: true
+    });
+  }
+
+  async getGroup(id: string): Promise<LocalGroup | null> {
+    const db = await getDb();
+    const row = await db.getFirstAsync(`SELECT * FROM groups WHERE id = ? LIMIT 1;`, [id]) as any;
+    if (!row) return null;
+    return {
+        id: row.id,
+        name: row.name,
+        description: row.description ?? undefined,
+        avatarUrl: row.avatar_url ?? undefined,
+        createdBy: row.created_by ?? undefined,
+        createdAt: row.created_at ?? undefined,
+        updatedAt: row.updated_at ?? undefined
+    };
+  }
+
+  async saveGroupMembers(groupId: string, members: LocalGroupMember[]): Promise<void> {
+    const db = await getDb();
+    await db.withTransactionAsync(async () => {
+        // WhatsApp style: usually we refresh the whole list for a group
+        // If we want to be surgical, we could just upsert
+        for (const member of members) {
+            await db.runAsync(
+                `INSERT INTO group_members (id, group_id, user_id, role, joined_at)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(group_id, user_id) DO UPDATE SET
+                   role = excluded.role;`,
+                [member.id, groupId, member.userId, member.role, member.joinedAt ?? null]
+            );
+        }
+    });
+  }
+
+  async getGroupMembers(groupId: string): Promise<LocalGroupMember[]> {
+    const db = await getDb();
+    const rows = await db.getAllAsync(`SELECT * FROM group_members WHERE group_id = ?;`, [groupId]);
+    return (rows as any[]).map(r => ({
+        id: r.id,
+        groupId: r.group_id,
+        userId: r.user_id,
+        role: r.role,
+        joinedAt: r.joined_at ?? undefined
+    }));
+  }
+
   private async enqueuePendingSyncOp(
     entityType: string,
     entityId: string,
@@ -219,22 +338,43 @@ class OfflineService {
     const receiver = msg.sender === 'me' ? chatId : 'me';
     
     await db.withTransactionAsync(async () => {
+      const existing = await db.getFirstAsync<{ id: string; media_thumbnail?: string | null }>(
+        `SELECT id, media_thumbnail FROM messages WHERE id = ? LIMIT 1;`,
+        [msg.id]
+      );
+      const mergedThumbnail = mergeGroupedMediaThumbnail(existing?.media_thumbnail ?? undefined, msg.media?.thumbnail);
+
       await db.runAsync(
         `INSERT INTO messages
            (id, chat_id, sender, receiver, text,
             media_type, media_url, media_caption, media_thumbnail,
-            reply_to_id, timestamp, status, local_file_uri, is_unsent, media_duration)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            reply_to_id, timestamp, status, local_file_uri, is_unsent, media_duration, group_id, sender_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
-           status = excluded.status,
-           media_url = COALESCE(excluded.media_url, messages.media_url),
-           media_thumbnail = COALESCE(excluded.media_thumbnail, messages.media_thumbnail),
+           text = COALESCE(NULLIF(excluded.text, ''), messages.text),
+           status = CASE
+             WHEN messages.status = 'read' OR excluded.status = 'read' THEN 'read'
+             WHEN messages.status = 'delivered' OR excluded.status = 'delivered' THEN 'delivered'
+             WHEN messages.status = 'sent' OR excluded.status = 'sent' THEN 'sent'
+             WHEN messages.status = 'pending' OR excluded.status = 'pending' THEN 'pending'
+             ELSE COALESCE(excluded.status, messages.status)
+           END,
+           media_type = COALESCE(excluded.media_type, messages.media_type),
+           media_url = COALESCE(NULLIF(excluded.media_url, ''), messages.media_url),
+           media_caption = COALESCE(NULLIF(excluded.media_caption, ''), messages.media_caption),
+           media_thumbnail = COALESCE(NULLIF(excluded.media_thumbnail, ''), messages.media_thumbnail),
+           reply_to_id = COALESCE(NULLIF(excluded.reply_to_id, ''), messages.reply_to_id),
+           media_duration = COALESCE(excluded.media_duration, messages.media_duration),
+           group_id = COALESCE(excluded.group_id, messages.group_id),
+           sender_name = COALESCE(excluded.sender_name, messages.sender_name),
            local_file_uri = COALESCE(messages.local_file_uri, excluded.local_file_uri);`,
-        [msg.id, chatId, msg.sender, receiver, msg.text ?? '', msg.media?.type ?? null, msg.media?.url ?? null, msg.media?.caption ?? null, msg.media?.thumbnail ?? null, msg.replyTo ?? null, msg.timestamp, msg.status ?? 'delivered', msg.localFileUri ?? null, msg.media?.duration ?? null]
+        [msg.id, chatId, msg.sender, receiver, msg.text ?? '', msg.media?.type ?? null, msg.media?.url ?? null, msg.media?.caption ?? null, mergedThumbnail ?? null, msg.replyTo ?? null, msg.timestamp, msg.status ?? 'delivered', msg.localFileUri ?? null, msg.media?.duration ?? null, msg.groupId ?? null, msg.senderName ?? null]
       );
 
-      const preview = msg.text?.trim() || (msg.media ? 'Media' : '');
-      await this.upsertChatSummary(chatId, preview, msg.timestamp, msg.sender === 'them' ? 1 : 0);
+      if (!existing) {
+        const preview = msg.text?.trim() || (msg.media ? 'Media' : '');
+        await this.upsertChatSummary(chatId, preview, msg.timestamp, msg.sender === 'them' ? 1 : 0);
+      }
     });
   }
 
@@ -245,15 +385,16 @@ class OfflineService {
         `INSERT INTO messages
            (id, chat_id, sender, receiver, text,
             media_type, media_url, media_caption, media_thumbnail,
-            reply_to_id, timestamp, status, retry_count, local_file_uri, is_unsent, media_duration)
-         VALUES (?, ?, 'me', ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, 1, ?)
+            reply_to_id, timestamp, status, retry_count, local_file_uri, is_unsent, media_duration, sender_name)
+         VALUES (?, ?, 'me', ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, 1, ?, ?)
         ON CONFLICT(id) DO UPDATE SET 
            status = 'pending', 
            is_unsent = 1,
            media_url = COALESCE(excluded.media_url, messages.media_url),
            media_thumbnail = COALESCE(excluded.media_thumbnail, messages.media_thumbnail),
-           local_file_uri = COALESCE(messages.local_file_uri, excluded.local_file_uri);`,
-        [msg.id, chatId, chatId, msg.text ?? '', msg.media?.type ?? null, msg.media?.url ?? null, msg.media?.caption ?? null, msg.media?.thumbnail ?? null, msg.replyTo ?? null, msg.timestamp, msg.localFileUri ?? null, msg.media?.duration ?? null]
+           local_file_uri = COALESCE(messages.local_file_uri, excluded.local_file_uri),
+           sender_name = COALESCE(excluded.sender_name, messages.sender_name);`,
+        [msg.id, chatId, chatId, msg.text ?? '', msg.media?.type ?? null, msg.media?.url ?? null, msg.media?.caption ?? null, msg.media?.thumbnail ?? null, msg.replyTo ?? null, msg.timestamp, msg.localFileUri ?? null, msg.media?.duration ?? null, msg.senderName ?? null]
       );
 
       await this.enqueuePendingSyncOp('message', msg.id, 'insert', {
@@ -294,6 +435,22 @@ class OfflineService {
     const db = await getDb();
     const rows = await db.getAllAsync(`SELECT * FROM messages WHERE status = 'pending' ORDER BY timestamp ASC;`);
     return (rows as any[]).map(rowToQueuedMessage);
+  }
+
+  async getIncompleteIncomingMediaMessageIds(chatId: string, limit = 25): Promise<string[]> {
+    const db = await getDb();
+    const rows = await db.getAllAsync<{ id: string }>(
+      `SELECT id
+         FROM messages
+        WHERE chat_id = ?
+          AND sender = 'them'
+          AND media_type IS NOT NULL
+          AND (media_url IS NULL OR TRIM(media_url) = '')
+        ORDER BY timestamp DESC
+        LIMIT ?;`,
+      [chatId, limit]
+    );
+    return (rows as { id: string }[]).map((row) => row.id).filter(Boolean);
   }
 
   async getMessageById(messageId: string): Promise<QueuedMessage | null> {
@@ -373,6 +530,11 @@ class OfflineService {
     await db.runAsync(`UPDATE messages SET media_url = ? WHERE id = ?;`, [url, messageId]);
   }
 
+  async updateMessageMediaThumbnail(messageId: string, thumbnail: string): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(`UPDATE messages SET media_thumbnail = ? WHERE id = ?;`, [thumbnail, messageId]);
+  }
+
   async updateMessageLocalUri(messageId: string, uri: string, fileSize?: number): Promise<void> {
     const db = await getDb();
     await db.runAsync(`UPDATE messages SET local_file_uri = ?, file_size = ?, media_status = 'downloaded' WHERE id = ?;`, [uri, fileSize ?? null, messageId]);
@@ -423,7 +585,30 @@ class OfflineService {
     const db = await getDb();
     const result = await db.runAsync(
       `UPDATE messages SET status = 'pending', retry_count = 0, error_message = NULL
-       WHERE status = 'failed' AND sender = 'me' AND (media_type IS NOT NULL OR local_file_uri IS NOT NULL);`
+       WHERE status = 'failed' AND sender = 'me' AND (media_type IS NOT NULL OR local_file_uri IS NOT NULL)
+       AND (error_message IS NULL OR error_message NOT LIKE '%Source file deleted%');`
+    );
+    return result.changes;
+  }
+
+  async resetIncompleteOutgoingMediaMessages(): Promise<number> {
+    const db = await getDb();
+    const result = await db.runAsync(
+      `UPDATE messages
+       SET status = 'pending',
+           is_unsent = 1,
+           retry_count = 0,
+           error_message = NULL
+       WHERE sender = 'me'
+         AND media_type IS NOT NULL
+         AND (
+           local_file_uri IS NOT NULL
+           OR (media_thumbnail IS NOT NULL AND media_thumbnail LIKE ?)
+         )
+         AND (media_url IS NULL OR TRIM(media_url) = '')
+         AND status IN ('sent', 'delivered', 'read', 'failed');`
+      ,
+      [`${MEDIA_GROUP_MARKER}%`]
     );
     return result.changes;
   }
@@ -482,7 +667,9 @@ class OfflineService {
         note: r.note ?? undefined,
         noteTimestamp: r.note_timestamp ?? undefined,
         localAvatarUri: r.local_avatar_uri ?? undefined,
-        avatarUpdatedAt: r.avatar_updated_at ?? undefined
+        avatarUpdatedAt: r.avatar_updated_at ?? undefined,
+        isArchived: r.is_archived === 1,
+        isGroup: r.is_group === 1
     }));
   }
 
@@ -498,7 +685,9 @@ class OfflineService {
         teddyVariant: row.teddy_variant ?? undefined,
         localAvatarUri: row.local_avatar_uri ?? undefined,
         avatarUpdatedAt: row.avatar_updated_at ?? undefined,
-        updatedAt: row.updated_at ?? undefined
+        updatedAt: row.updated_at ?? undefined,
+        isArchived: row.is_archived === 1,
+        isGroup: row.is_group === 1
     };
   }
 
@@ -519,9 +708,9 @@ class OfflineService {
       const cachedUserId = await require('@react-native-async-storage/async-storage').default.getItem('ss_current_user');
       const myId = cachedUserId;
       if (myId) {
-        const { LEGACY_TO_UUID } = require('../config/supabase');
-        const cid = LEGACY_TO_UUID[contact.id] || contact.id;
-        const mid = LEGACY_TO_UUID[myId] || myId;
+        const { LEGACY_TO_UUID: MAPPING } = require('../config/supabase');
+        const cid = MAPPING[contact.id] || contact.id;
+        const mid = MAPPING[myId] || myId;
         if (cid === mid) {
           console.log('[SQLite] Blocking self-contact save for:', contact.id);
           return;
@@ -532,9 +721,26 @@ class OfflineService {
     }
 
     await db.runAsync(
-        `INSERT OR REPLACE INTO contacts 
-            (id, name, avatar, avatar_type, teddy_variant, status, last_message, unread_count, about, last_seen, last_synced_at, updated_at, note, note_timestamp, local_avatar_uri, avatar_updated_at) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`, 
+        `INSERT INTO contacts 
+            (id, name, avatar, avatar_type, teddy_variant, status, last_message, unread_count, about, last_seen, last_synced_at, updated_at, note, note_timestamp, local_avatar_uri, avatar_updated_at, is_group) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            avatar = COALESCE(excluded.avatar, contacts.avatar),
+            avatar_type = COALESCE(excluded.avatar_type, contacts.avatar_type),
+            teddy_variant = COALESCE(excluded.teddy_variant, contacts.teddy_variant),
+            status = excluded.status,
+            last_message = excluded.last_message,
+            unread_count = excluded.unread_count,
+            about = excluded.about,
+            last_seen = excluded.last_seen,
+            last_synced_at = excluded.last_synced_at,
+            updated_at = excluded.updated_at,
+            note = excluded.note,
+            note_timestamp = excluded.note_timestamp,
+            local_avatar_uri = COALESCE(excluded.local_avatar_uri, contacts.local_avatar_uri),
+            avatar_updated_at = COALESCE(excluded.avatar_updated_at, contacts.avatar_updated_at),
+            is_group = excluded.is_group;`, 
         [
             contact.id, 
             contact.name, 
@@ -551,7 +757,8 @@ class OfflineService {
             contact.note ?? null,
             contact.noteTimestamp ?? null,
             contact.localAvatarUri ?? null,
-            contact.avatarUpdatedAt ?? null
+            contact.avatarUpdatedAt ?? null,
+            contact.isGroup ? 1 : 0
         ]
     );
   }

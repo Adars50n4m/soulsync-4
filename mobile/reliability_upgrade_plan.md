@@ -1,6 +1,6 @@
 # Reliability & Performance Upgrade Plan
 
-This plan addresses the critical architectural issues identified to make Soulsync-4 as reliable as WhatsApp.
+This plan addresses the critical architectural issues identified to make Soul-4 as reliable as WhatsApp.
 
 ## 1. Offline-First Architecture (Critical)
 

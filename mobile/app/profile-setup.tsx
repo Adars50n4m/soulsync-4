@@ -15,15 +15,19 @@ import {
   StatusBar,
   Modal,
 } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { useRouter, useLocalSearchParams } from 'expo-router';
 import { authService } from '../services/AuthService';
+import { useApp } from '../context/AppContext';
 import { CountryPicker } from '../components/CountryPicker';
 import { Country } from '../constants/Countries';
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
   const { username, password } = useLocalSearchParams<{ username: string; password: string }>();
+  const { activeTheme } = useApp();
+  const themeAccent = activeTheme.primary;
+
 
   const [displayName,  setDisplayName]  = useState('');
   const [avatarUri,    setAvatarUri]    = useState<string | null>(null);
@@ -110,7 +114,7 @@ export default function ProfileSetupScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.root}
+      style={{ flex: 1, backgroundColor: activeTheme.background }}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <StatusBar barStyle="light-content" backgroundColor="#000000" />
@@ -121,7 +125,7 @@ export default function ProfileSetupScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Text style={styles.step}>Step 2 of 2</Text>
+          <Text style={[styles.step, { color: themeAccent }]}>Step 2 of 2</Text>
           <Text style={styles.title}>Set up your profile</Text>
           <Text style={styles.subtitle}>Let people know who you are</Text>
         </View>
@@ -134,13 +138,15 @@ export default function ProfileSetupScreen() {
             activeOpacity={0.85}
           >
             {avatarUri ? (
-              <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
+              <Image source={{ uri: avatarUri }} style={[styles.avatarImage, { borderColor: themeAccent }]} />
             ) : (
-              <View style={styles.avatarPlaceholder}>
-                <Text style={styles.avatarInitials}>{initials || '?'}</Text>
+              <View style={[styles.avatarPlaceholder, { borderColor: themeAccent }]}>
+                <Text style={[styles.avatarInitials, { color: themeAccent }]}>
+                  {displayName ? displayName.charAt(0).toUpperCase() : '?'}
+                </Text>
               </View>
             )}
-            <View style={styles.cameraOverlay}>
+            <View style={[styles.cameraOverlay, { backgroundColor: themeAccent }]}>
               <Text style={styles.cameraIcon}>📷</Text>
             </View>
           </TouchableOpacity>
@@ -199,11 +205,14 @@ export default function ProfileSetupScreen() {
 
         {/* Preview */}
         <View style={styles.previewCard}>
-          <View style={styles.previewAvatar}>
-            {avatarUri
-              ? <Image source={{ uri: avatarUri }} style={styles.previewAvatarImg} />
-              : <Text style={styles.previewInitials}>{initials || '?'}</Text>
-            }
+          <View style={[styles.previewAvatar, { borderColor: themeAccent }]}>
+            {avatarUri ? (
+              <Image source={{ uri: avatarUri }} style={styles.previewAvatarImg} />
+            ) : (
+              <Text style={[styles.previewInitials, { color: themeAccent }]}>
+                {displayName ? displayName.charAt(0).toUpperCase() : '?'}
+              </Text>
+            )}
           </View>
           <View>
             <Text style={styles.previewName}>
@@ -216,7 +225,7 @@ export default function ProfileSetupScreen() {
         {!!error && <Text style={styles.errorText}>{error}</Text>}
 
         <TouchableOpacity
-          style={[styles.finishBtn, loading && styles.btnDisabled]}
+          style={[styles.finishBtn, { backgroundColor: themeAccent }, loading && styles.btnDisabled]}
           onPress={handleFinish}
           disabled={loading}
           activeOpacity={0.85}
@@ -272,7 +281,7 @@ export default function ProfileSetupScreen() {
             setError('');
         }}
         selectedCountry={country?.name}
-        themeColor={AMBER}
+        themeColor={themeAccent}
       />
     </KeyboardAvoidingView>
   );
@@ -286,21 +295,21 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: BG },
   scrollContent: { paddingHorizontal: 24, paddingTop: 60, paddingBottom: 40, alignItems: 'center' },
   header: { width: '100%', marginBottom: 36 },
-  step: { color: AMBER, fontSize: 12, fontWeight: '600', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 },
+  step: { fontSize: 12, fontWeight: '600', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 },
   title: { fontSize: 26, fontWeight: '700', color: '#E8E8F0', marginBottom: 8 },
   subtitle: { fontSize: 14, color: '#888899' },
   avatarSection: { alignItems: 'center', marginBottom: 36 },
   avatarTouchable: { position: 'relative', marginBottom: 10 },
-  avatarImage: { width: 110, height: 110, borderRadius: 55, borderWidth: 3, borderColor: AMBER },
+  avatarImage: { width: 110, height: 110, borderRadius: 55, borderWidth: 3 },
   avatarPlaceholder: {
     width: 110, height: 110, borderRadius: 55, backgroundColor: '#1C1408',
-    borderWidth: 2, borderColor: AMBER, borderStyle: 'dashed',
+    borderWidth: 2, borderStyle: 'dashed',
     alignItems: 'center', justifyContent: 'center',
   },
-  avatarInitials: { fontSize: 36, fontWeight: '700', color: AMBER },
+  avatarInitials: { fontSize: 36, fontWeight: '700' },
   cameraOverlay: {
     position: 'absolute', bottom: 2, right: 2, width: 32, height: 32,
-    borderRadius: 16, backgroundColor: AMBER, alignItems: 'center', justifyContent: 'center',
+    borderRadius: 16, alignItems: 'center', justifyContent: 'center',
   },
   cameraIcon: { fontSize: 14 },
   avatarHint: { color: '#888899', fontSize: 13, marginBottom: 4 },
@@ -325,11 +334,11 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
   },
   previewAvatarImg: { width: 50, height: 50 },
-  previewInitials: { fontSize: 18, fontWeight: '700', color: AMBER },
+  previewInitials: { fontSize: 18, fontWeight: '700' },
   previewName: { fontSize: 16, fontWeight: '600', color: '#E8E8F0', marginBottom: 2 },
   previewUsername: { fontSize: 13, color: '#888899' },
   errorText: { color: '#FF6B6B', fontSize: 14, textAlign: 'center', marginBottom: 16, width: '100%' },
-  finishBtn: { width: '100%', backgroundColor: AMBER, borderRadius: 12, height: 52, alignItems: 'center', justifyContent: 'center' },
+  finishBtn: { width: '100%', borderRadius: 12, height: 52, alignItems: 'center', justifyContent: 'center' },
   btnDisabled: { opacity: 0.6 },
   finishBtnText: { color: '#0A0A0F', fontSize: 16, fontWeight: '700' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
@@ -342,3 +351,9 @@ const styles = StyleSheet.create({
   modalCancel: { marginTop: 16, alignItems: 'center', paddingVertical: 12 },
   modalCancelText: { color: '#FF6B6B', fontSize: 16, fontWeight: '500' },
 });
+
+const C = {
+  card:         'rgba(26, 26, 28, 0.40)',
+  cardBorder:   'rgba(255, 255, 255, 0.10)',
+  accent:       '#BC002A',
+};

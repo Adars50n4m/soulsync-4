@@ -1,4 +1,4 @@
--- Offline-first TTL relay migration for SoulSync local sync engine
+-- Offline-first TTL relay migration for Soul local sync engine
 -- Keeps messages ephemeral on Supabase and optimized for local-first clients.
 
 create extension if not exists pg_cron;
@@ -103,14 +103,14 @@ $$;
 
 do $$
 begin
-  perform cron.unschedule('purge-expired-soulsync-messages');
+  perform cron.unschedule('purge-expired-soul-messages');
 exception
   when others then
     null;
 end $$;
 
 select cron.schedule(
-  'purge-expired-soulsync-messages',
+  'purge-expired-soul-messages',
   '* * * * *',
   $$select public.purge_expired_messages();$$
 );

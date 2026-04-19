@@ -29,3 +29,10 @@ android/
 .expo/
 *.txt
 *.md
+
+# Environment and Scratch
+.env
+.env.*
+scratch/
+.gemini/
+.antigravity/

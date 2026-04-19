@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "Soul",
+    "slug": "Soul-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -10,7 +10,7 @@
     "ios": {
       "appleTeamId": "7842J35MTZ",
       "supportsTablet": true,
-      "bundleIdentifier": "com.soulsync4.mobile",
+      "bundleIdentifier": "com.soul.mobile",
       "infoPlist": {
         "NSCameraUsageDescription": "Soul needs camera access for video calls",
         "NSMicrophoneUsageDescription": "Soul needs microphone access for audio and video calls",
@@ -39,7 +39,7 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "package": "com.soulsync4.mobile",
+      "package": "com.soul.mobile",
       "permissions": [
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.CAMERA",

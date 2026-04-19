@@ -13,7 +13,11 @@ import {
   Platform,
   BackHandler,
   ActivityIndicator,
+  Vibration,
 } from 'react-native';
+import LottieView from 'lottie-react-native';
+import { hapticService } from '../services/HapticService';
+import * as Haptics from 'expo-haptics';
 import { Video, ResizeMode } from 'expo-av';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
@@ -101,6 +105,9 @@ export const StatusViewerModal = ({
   const [isPaused, setIsPaused] = useState(false);
   const [mediaSource, setMediaSource] = useState<{uri: string, isLocal: boolean} | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showLikeAnim, setShowLikeAnim] = useState(false);
+  const [isLiked, setIsLiked] = useState(false);
+  const lastTap = useRef<number>(0);
 
   const currentStatus = group.statuses[currentIndex];
 
@@ -112,8 +119,12 @@ export const StatusViewerModal = ({
           setMediaSource(source);
           setLoading(false);
           // Mark viewed
-          statusService.onStatusViewed(currentStatus.id, 'me'); // 'me' placeholder, StatusService handles actual viewer context
+          statusService.onStatusViewed(currentStatus.id, 'me'); 
         });
+      
+      // Check if liked (local check for now, can be expanded to full backend sync)
+      // For this demo, we'll just reset it per status unless we implement getSpecificLike
+      setIsLiked(false);
     }
   }, [currentStatus?.id, visible]);
 
@@ -137,6 +148,29 @@ export const StatusViewerModal = ({
 
   const handleLongPressStart = () => setIsPaused(true);
   const handleLongPressEnd = () => setIsPaused(false);
+
+  const handleLike = async () => {
+    if (!isLiked) {
+      setIsLiked(true);
+      setShowLikeAnim(true);
+      hapticService.impact(Haptics.ImpactFeedbackStyle.Heavy);
+      await statusService.likeStatus(currentStatus.id);
+    } else {
+      setIsLiked(false);
+      hapticService.impact(Haptics.ImpactFeedbackStyle.Light);
+      await statusService.unlikeStatus(currentStatus.id);
+    }
+  };
+
+  const handleDoubleTap = () => {
+    const now = Date.now();
+    const DOUBLE_PRESS_DELAY = 300;
+    if (lastTap.current && (now - lastTap.current) < DOUBLE_PRESS_DELAY) {
+      handleLike();
+    } else {
+      lastTap.current = now;
+    }
+  };
 
   if (!visible || !currentStatus) return null;
 
@@ -173,6 +207,19 @@ export const StatusViewerModal = ({
             )}
         </View>
 
+        {/* Lottie Animation Overlay */}
+        {showLikeAnim && (
+            <View style={[StyleSheet.absoluteFill, styles.lottieOverlay]} pointerEvents="none">
+                <LottieView
+                    source={{ uri: 'https://lottie.host/40374fc7-5e2d-4bf4-b1fc-28b9afd3b4c9/5kEVWjhIZT.lottie' }}
+                    autoPlay
+                    loop={false}
+                    onAnimationFinish={() => setShowLikeAnim(false)}
+                    style={styles.likeLottie}
+                />
+            </View>
+        )}
+
         {/* Top Overlay: Progress Bars & Info */}
         <View style={[styles.topOverlay, { paddingTop: insets.top + 10 }]}>
             <View style={styles.progressContainer}>
@@ -206,6 +253,17 @@ export const StatusViewerModal = ({
                     <MaterialIcons name="close" size={28} color="#fff" />
                 </Pressable>
             </View>
+
+            {/* Like and Mute actions */}
+            <View style={styles.headerActions}>
+                <Pressable onPress={handleLike} style={styles.iconButton}>
+                    <Ionicons 
+                        name={isLiked ? "heart" : "heart-outline"} 
+                        size={32} 
+                        color={isLiked ? "#ff4444" : "#fff"} 
+                    />
+                </Pressable>
+            </View>
         </View>
 
         {/* Bottom Overlay: Caption */}
@@ -227,7 +285,10 @@ export const StatusViewerModal = ({
             />
             <Pressable 
                 style={styles.touchSide} 
-                onPress={handleNext} 
+                onPress={() => {
+                    handleDoubleTap();
+                    handleNext();
+                }}
                 onLongPress={handleLongPressStart}
                 onPressOut={handleLongPressEnd}
             />
@@ -335,5 +396,26 @@ const styles = StyleSheet.create({
   },
   touchSide: {
     flex: 1,
+  },
+  lottieOverlay: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 100,
+  },
+  likeLottie: {
+    width: 300,
+    height: 300,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 10,
+    marginTop: 10,
+  },
+  iconButton: {
+    padding: 8,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: 24,
   }
 });

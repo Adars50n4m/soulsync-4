@@ -17,9 +17,10 @@ import {
 } from 'react-native';
 import Svg, { Circle, Path, Ellipse, G } from 'react-native-svg';
 import { Feather } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { authService } from '../services/AuthService';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useApp } from '../context/AppContext';
 import { GlassView } from '../components/ui/GlassView';
+import { authService } from '../services/AuthService';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -64,6 +65,10 @@ function getPasswordStrength(password: string): {
 
 export default function UsernameSetupScreen() {
   const router = useRouter();
+  const { oauthMode } = useLocalSearchParams<{ oauthMode?: string }>();
+  const isOauthMode = oauthMode === 'true';
+  const { activeTheme, logout } = useApp();
+  const themeAccent = activeTheme.primary;
 
   // Animated values (same as login)
   const boyBreathe = useRef(new Animated.Value(0)).current;
@@ -119,29 +124,42 @@ export default function UsernameSetupScreen() {
     setUsernameState('checking');
 
     debounceRef.current = setTimeout(async () => {
-      const result = await authService.checkUsernameAvailability(username);
-
-      if (result.error) {
+      try {
+        const result = await authService.checkUsernameAvailability(username);
+        if (result.error) {
+          setUsernameState('invalid');
+          setUsernameMessage(result.error);
+        } else if (result.available) {
+          setUsernameState('available');
+          setUsernameMessage('@' + username.toLowerCase() + ' is available!');
+        } else {
+          setUsernameState('taken');
+          setUsernameMessage('This username is already taken.');
+        }
+      } catch (e) {
         setUsernameState('invalid');
-        setUsernameMessage(result.error);
-      } else if (result.available) {
-        setUsernameState('available');
-        setUsernameMessage('@' + username.toLowerCase() + ' is available!');
-      } else {
-        setUsernameState('taken');
-        setUsernameMessage('This username is already taken.');
+        setUsernameMessage('Error checking availability.');
       }
     }, 600);
   }, [username]);
 
   const getStatusIcon = () => {
     switch (usernameState) {
-      case 'checking':  return <ActivityIndicator color={AMBER} size="small" />;
+      case 'checking':  return <ActivityIndicator color={themeAccent} size="small" />;
       case 'available': return <Text style={styles.iconGreen}>✓</Text>;
       case 'taken':     return <Text style={styles.iconRed}>✗</Text>;
       case 'invalid':   return <Text style={styles.iconRed}>!</Text>;
       default:          return null;
     }
+  };
+
+  const handleBack = async () => {
+    if (isOauthMode) {
+      await logout();
+      return;
+    }
+
+    router.back();
   };
 
   const handleNext = async () => {
@@ -151,18 +169,21 @@ export default function UsernameSetupScreen() {
       setError('Please choose a valid, available username.');
       return;
     }
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters.');
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError('Passwords do not match.');
-      return;
+    
+    if (!isOauthMode) {
+      if (password.length < 8) {
+        setError('Password must be at least 8 characters.');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError('Passwords do not match.');
+        return;
+      }
     }
 
     router.push({
       pathname: '/profile-setup',
-      params: { username, password },
+      params: { username, password: isOauthMode ? undefined : password },
     });
   };
 
@@ -215,9 +236,9 @@ export default function UsernameSetupScreen() {
           <Text style={s.subtitle}>Choose your unique identity</Text>
 
           {/* Back link */}
-          <TouchableOpacity onPress={() => router.back()} style={s.backLink}>
-            <Feather name="arrow-left" size={18} color={C.accent} />
-            <Text style={s.backText}> Back to login</Text>
+          <TouchableOpacity onPress={handleBack} style={s.backLink}>
+            <Feather name="arrow-left" size={18} color={themeAccent} />
+            <Text style={[s.backText, { color: themeAccent }]}> Back to login</Text>
           </TouchableOpacity>
 
         {/* Username */}
@@ -228,7 +249,7 @@ export default function UsernameSetupScreen() {
             usernameState === 'available' && styles.inputSuccess,
             (usernameState === 'taken' || usernameState === 'invalid') && styles.inputError,
           ]}>
-            <Text style={styles.atSign}>@</Text>
+            <Text style={[styles.atSign, { color: themeAccent }]}>@</Text>
             <TextInput
               style={styles.input}
               placeholder="e.g. alex_99"
@@ -259,86 +280,90 @@ export default function UsernameSetupScreen() {
           </View>
         </View>
 
-        {/* Password */}
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Password</Text>
-          <View style={styles.inputWrapper}>
-            <Text style={styles.fieldIcon}>🔒</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Min. 8 characters"
-              placeholderTextColor="#555566"
-              secureTextEntry={!showPassword}
-              value={password}
-              onChangeText={setPassword}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity
-              onPress={() => setShowPassword(v => !v)}
-              style={styles.eyeBtn}
-            >
-              <Text style={styles.eyeIcon}>{showPassword ? '🙈' : '👁️'}</Text>
-            </TouchableOpacity>
-          </View>
-
-          {password.length > 0 && (
-            <View style={styles.strengthRow}>
-              <View style={styles.strengthBars}>
-                {[0, 1, 2, 3].map(i => (
-                  <View
-                    key={i}
-                    style={[
-                      styles.strengthBar,
-                      i < strength.score
-                        ? { backgroundColor: strength.color }
-                        : { backgroundColor: '#252535' },
-                    ]}
-                  />
-                ))}
+        {!isOauthMode && (
+          <>
+            {/* Password */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Password</Text>
+              <View style={styles.inputWrapper}>
+                <Text style={styles.fieldIcon}>🔒</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Min. 8 characters"
+                  placeholderTextColor="#555566"
+                  secureTextEntry={!showPassword}
+                  value={password}
+                  onChangeText={setPassword}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <TouchableOpacity
+                  onPress={() => setShowPassword(v => !v)}
+                  style={styles.eyeBtn}
+                >
+                  <Text style={styles.eyeIcon}>{showPassword ? '🙈' : '👁️'}</Text>
+                </TouchableOpacity>
               </View>
-              <Text style={[styles.strengthLabel, { color: strength.color }]}>
-                {strength.label}
-              </Text>
-            </View>
-          )}
-        </View>
 
-        {/* Confirm Password */}
-        <View style={styles.fieldGroup}>
-          <Text style={styles.label}>Confirm Password</Text>
-          <View style={[
-            styles.inputWrapper,
-            confirmPassword.length > 0 && confirmPassword === password && styles.inputSuccess,
-            confirmPassword.length > 0 && confirmPassword !== password && styles.inputError,
-          ]}>
-            <Text style={styles.fieldIcon}>🔒</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Repeat your password"
-              placeholderTextColor="#555566"
-              secureTextEntry={!showConfirm}
-              value={confirmPassword}
-              onChangeText={setConfirmPassword}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity
-              onPress={() => setShowConfirm(v => !v)}
-              style={styles.eyeBtn}
-            >
-              <Text style={styles.eyeIcon}>{showConfirm ? '🙈' : '👁️'}</Text>
-            </TouchableOpacity>
-          </View>
-          {confirmPassword.length > 0 && confirmPassword !== password && (
-            <Text style={[styles.fieldHint, styles.hintRed]}>Passwords don't match</Text>
-          )}
-        </View>
+              {password.length > 0 && (
+                <View style={styles.strengthRow}>
+                  <View style={styles.strengthBars}>
+                    {[0, 1, 2, 3].map(i => (
+                      <View
+                        key={i}
+                        style={[
+                          styles.strengthBar,
+                          i < strength.score
+                            ? { backgroundColor: strength.color }
+                            : { backgroundColor: '#252535' },
+                        ]}
+                      />
+                    ))}
+                  </View>
+                  <Text style={[styles.strengthLabel, { color: strength.color }]}>
+                    {strength.label}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* Confirm Password */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Confirm Password</Text>
+              <View style={[
+                styles.inputWrapper,
+                confirmPassword.length > 0 && confirmPassword === password && styles.inputSuccess,
+                confirmPassword.length > 0 && confirmPassword !== password && styles.inputError,
+              ]}>
+                <Text style={styles.fieldIcon}>🔒</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Repeat your password"
+                  placeholderTextColor="#555566"
+                  secureTextEntry={!showConfirm}
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <TouchableOpacity
+                  onPress={() => setShowConfirm(v => !v)}
+                  style={styles.eyeBtn}
+                >
+                  <Text style={styles.eyeIcon}>{showConfirm ? '🙈' : '👁️'}</Text>
+                </TouchableOpacity>
+              </View>
+              {confirmPassword.length > 0 && confirmPassword !== password && (
+                <Text style={[styles.fieldHint, styles.hintRed]}>Passwords don't match</Text>
+              )}
+            </View>
+          </>
+        )}
 
         {!!error && <Text style={styles.errorText}>{error}</Text>}
 
         <TouchableOpacity
-          style={[styles.nextBtn, loading && styles.btnDisabled]}
+          style={[styles.nextBtn, { backgroundColor: themeAccent }, loading && styles.btnDisabled]}
           onPress={handleNext}
           disabled={loading}
           activeOpacity={0.85}
@@ -354,27 +379,17 @@ export default function UsernameSetupScreen() {
   );
 }
 
-const AMBER  = '#BC002A';
-const BG     = '#000000';
-const BORDER = '#252535';
-
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: BG },
-  scrollContent: { paddingHorizontal: 24, paddingTop: 60, paddingBottom: 40 },
-  header: { marginBottom: 36 },
-  step: { color: AMBER, fontSize: 12, fontWeight: '600', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 },
-  title: { fontSize: 26, fontWeight: '700', color: '#E8E8F0', marginBottom: 8 },
-  subtitle: { fontSize: 14, color: '#888899', lineHeight: 20 },
   fieldGroup: { marginBottom: 24 },
   label: { color: '#AAAABC', fontSize: 13, fontWeight: '600', letterSpacing: 0.5, marginBottom: 8, textTransform: 'uppercase' },
   inputWrapper: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: '#13131C',
-    borderRadius: 12, borderWidth: 1.5, borderColor: BORDER,
+    borderRadius: 12, borderWidth: 1.5, borderColor: '#252535',
     paddingHorizontal: 14, height: 52,
   },
   inputSuccess: { borderColor: '#4CAF50' },
   inputError: { borderColor: '#FF4444' },
-  atSign: { color: AMBER, fontSize: 18, fontWeight: '700', marginRight: 6 },
+  atSign: { fontSize: 18, fontWeight: '700', marginRight: 6 },
   fieldIcon: { fontSize: 16, marginRight: 10 },
   input: { flex: 1, color: '#E8E8F0', fontSize: 16 },
   statusIcon: { width: 24, alignItems: 'center' },
@@ -392,7 +407,7 @@ const styles = StyleSheet.create({
   strengthBar: { flex: 1, height: 4, borderRadius: 2 },
   strengthLabel: { fontSize: 12, fontWeight: '600', minWidth: 55, textAlign: 'right' },
   errorText: { color: '#FF6B6B', fontSize: 14, textAlign: 'center', marginBottom: 16 },
-  nextBtn: { backgroundColor: AMBER, borderRadius: 12, height: 52, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
+  nextBtn: { borderRadius: 12, height: 52, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   btnDisabled: { opacity: 0.6 },
   nextBtnText: { color: '#0A0A0F', fontSize: 16, fontWeight: '700' },
 });
@@ -401,13 +416,13 @@ const styles = StyleSheet.create({
 const s = StyleSheet.create({
   card: {
     width: '100%',
-    backgroundColor: C.card,
+    backgroundColor: 'rgba(26, 26, 28, 0.40)',
     borderRadius: 40,
     paddingHorizontal: 28,
     paddingTop: 44,
     paddingBottom: 32,
     borderWidth: 1,
-    borderColor: C.cardBorder,
+    borderColor: 'rgba(255, 255, 255, 0.10)',
     overflow: 'hidden',
     zIndex: 10,
     shadowColor: '#000',
@@ -419,7 +434,6 @@ const s = StyleSheet.create({
   title: {
     fontSize: 32,
     fontWeight: '900',
-    color: C.accent,
     textAlign: 'center',
     letterSpacing: -0.5,
   },
@@ -438,7 +452,6 @@ const s = StyleSheet.create({
     marginBottom: 20,
   },
   backText: {
-    color: C.accent,
     fontSize: 14,
     fontWeight: '600',
   },

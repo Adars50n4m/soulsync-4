@@ -2,7 +2,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 /**
- * SoulSync-4 Centralized Environment Configuration
+ * Soul-4 Centralized Environment Configuration
  * 
  * This file serves as the single source for all URLs, keys, and feature flags.
  * It intelligently selects values based on the environment (Dev, Prod, Mobile, Web).
@@ -18,7 +18,7 @@ export const SUPABASE_URL = getEnvVar('EXPO_PUBLIC_SUPABASE_URL', SUPABASE_BASE_
 export const SUPABASE_ANON_KEY = getEnvVar('EXPO_PUBLIC_SUPABASE_ANON_KEY', 'sb_publishable_9cVY_6oQHMZnV9CaxmMs9Q_7QlUxqlD');
 
 // 2. Gateway Proxy (Bypasses ISP blocks on Supabase)
-export const SUPABASE_PROXY_URL = getEnvVar('EXPO_PUBLIC_SUPABASE_PROXY_URL', 'https://soulsync-supabase-proxy.adarshark.workers.dev');
+export const SUPABASE_PROXY_URL = getEnvVar('EXPO_PUBLIC_SUPABASE_PROXY_URL', 'https://soul-supabase-proxy.adarshark.workers.dev');
 
 // 3. App Server (Node.js/Localtunnel)
 export const IS_DEV = __DEV__;
@@ -28,16 +28,21 @@ let resolvedServerUrl = getEnvVar('EXPO_PUBLIC_SERVER_URL', DEFAULT_TUNNEL);
 const extractExpoDevHost = (): string | null => {
   const candidates = [
     Constants.expoConfig?.hostUri,
+    (Constants as any).manifestData?.hostUri,
     (Constants.expoConfig as any)?.debuggerHost,
     (Constants as any).expoGoConfig?.debuggerHost,
     (Constants as any).manifest2?.extra?.expoClient?.hostUri,
+    (Constants as any).linkingUri, // Fallback for some Expo versions
   ];
 
   for (const candidate of candidates) {
     if (typeof candidate === 'string' && candidate.length > 0) {
-      const host = candidate.split(':')[0];
-      // Skip common internal Android NAT IPs or loopbacks that won't work on physical devices
-      if (host && host !== 'localhost' && host !== '127.0.0.1' && !host.startsWith('192.0.0.')) {
+      // Remove protocol if present (e.g. exp:// or http://)
+      let host = candidate.replace(/^exp:\/\/|http:\/\/|https:\/\//, '');
+      // Remove path and port (e.g. 192.168.1.5:8081/path -> 192.168.1.5)
+      host = host.split(':')[0].split('/')[0];
+      
+      if (host && host !== 'localhost' && host !== '127.0.0.1' && !host.startsWith('::')) {
         return host;
       }
     }
@@ -59,34 +64,47 @@ const isAndroidEmulator = (): boolean => {
 
 // In dev mode, intelligently resolve the server URL to the developer's machine.
 if (IS_DEV) {
+  const isRemote = resolvedServerUrl.includes('workers.dev') || resolvedServerUrl.includes('supabase.co');
   const debugHost = extractExpoDevHost();
-  
-  if (debugHost && debugHost !== 'localhost' && debugHost !== '127.0.0.1') {
-    const localUrl = `http://${debugHost}:3000`;
 
-    // Overwrite localhost/127.0.0.1 with the real host IP so physical devices can reach it.
-    if (resolvedServerUrl.includes('localhost') || resolvedServerUrl.includes('127.0.0.1')) {
-      console.log(`[Env] Resolving SERVER_URL from ${resolvedServerUrl} to ${localUrl} (Expo Host)`);
-      resolvedServerUrl = localUrl;
+  if (!isRemote) {
+    if (Platform.OS !== 'android' && resolvedServerUrl.includes('10.0.2.2')) {
+      resolvedServerUrl = debugHost
+        ? `http://${debugHost}:3000`
+        : 'http://localhost:3000';
+      console.log(`[Env] Rewriting Android emulator URL for ${Platform.OS}: ${resolvedServerUrl}`);
+    }
+    
+    if (debugHost && debugHost !== 'localhost' && debugHost !== '127.0.0.1') {
+      const localUrl = `http://${debugHost}:3000`;
+
+      // Overwrite localhost/127.0.0.1 with the real host IP so physical devices can reach it.
+      if (resolvedServerUrl.includes('localhost') || resolvedServerUrl.includes('127.0.0.1')) {
+        console.log(`[Env] Resolving SERVER_URL from ${resolvedServerUrl} to ${localUrl} (Expo Host)`);
+        resolvedServerUrl = localUrl;
+      }
+    } else {
+      // Fallback for when the debugger host is not available or is just "localhost".
+      let fallbackIp = getEnvVar('EXPO_PUBLIC_HOST_IP', '');
+      
+      if (fallbackIp && fallbackIp.length > 0) {
+          // If HOST_IP looks like an IP, wrap it in http:// and :3000. 
+          // If it looks like a domain (proxy), use it as is if it's not handled by isRemote check above.
+          resolvedServerUrl = fallbackIp.includes('.') && !/^[0-9.]+$/.test(fallbackIp)
+            ? `https://${fallbackIp}`
+            : `http://${fallbackIp}:3000`;
+          console.log(`[Env] Using EXPO_PUBLIC_HOST_IP manual fallback: ${resolvedServerUrl}`);
+      } else if (Platform.OS === 'android' && isAndroidEmulator()) {
+          resolvedServerUrl = 'http://10.0.2.2:3000';
+          console.log('[Env] Confirmed Android Emulator: Using 10.0.2.2 loopback');
+      } else if (resolvedServerUrl.includes('localhost') || resolvedServerUrl.includes('127.0.0.1')) {
+          // We are on a physical device OR the host resolution failed. 
+          console.warn('[Env] ⚠️ Physical device/DevClient detected but LAN IP unknown.');
+          console.warn('[Env] 💡 Please set EXPO_PUBLIC_HOST_IP in your .env to your computer\'s IP (e.g. 192.168.1.5)');
+      }
     }
   } else {
-    // Fallback for when the debugger host is not available or is just "localhost".
-    // Try EXPO_PUBLIC_HOST_IP first if explicitly set by the user in .env
-    let fallbackIp = getEnvVar('EXPO_PUBLIC_HOST_IP', '');
-    
-    // In some hotspot/bridge environments, 192.0.0.x is a valid routable bridge.
-    if (fallbackIp && fallbackIp.length > 0) {
-        resolvedServerUrl = `http://${fallbackIp}:3000`;
-        console.log(`[Env] Using EXPO_PUBLIC_HOST_IP manual fallback: ${resolvedServerUrl}`);
-    } else if (Platform.OS === 'android' && isAndroidEmulator()) {
-        resolvedServerUrl = 'http://10.0.2.2:3000';
-        console.log('[Env] Confirmed Android Emulator: Using 10.0.2.2 loopback');
-    } else if (resolvedServerUrl.includes('localhost') || resolvedServerUrl.includes('127.0.0.1')) {
-        // We are on a physical device OR the host resolution failed. 
-        // Localhost will NEVER work on a real phone for a dev server.
-        console.warn('[Env] ⚠️ Physical device/DevClient detected but LAN IP unknown.');
-        console.warn('[Env] 💡 Please set EXPO_PUBLIC_HOST_IP in your .env to your computer\'s IP (e.g. 192.168.1.5)');
-    }
+    console.log(`[Env] Using remote SERVER_URL in dev: ${resolvedServerUrl}`);
   }
 }
 export const SERVER_URL = resolvedServerUrl;
@@ -97,7 +115,7 @@ console.log(`[Env] Final Connectivity URL: ${SERVER_URL}`);
 export const MUSIC_API_URL = getEnvVar('EXPO_PUBLIC_MUSIC_API_URL', 'https://saavn.sumit.co/api');
 
 // 5. Cloudflare R2 / Upload Worker
-export const R2_WORKER_URL = getEnvVar('EXPO_PUBLIC_R2_WORKER_URL', 'https://soulsync-upload-worker.adarshark.workers.dev');
+export const R2_WORKER_URL = getEnvVar('EXPO_PUBLIC_R2_WORKER_URL', 'https://soul-upload-worker.adarshark.workers.dev');
 export const R2_PUBLIC_URL = getEnvVar('EXPO_PUBLIC_R2_PUBLIC_URL', 'https://pub-XXXXXXXXXXXX.r2.dev');
 
 // 6. WebRTC TURN Servers
@@ -131,7 +149,7 @@ export const CALL_REQUIRE_CUSTOM_TURN = getEnvVar(
 ) === 'true';
 
 // 7. Feature Flags
-export const USE_R2 = getEnvVar('EXPO_PUBLIC_USE_R2', 'true') === 'true';
+export const USE_R2 = false; // Forced to false to ensure server-proxy path is used for reliability
 export const VOIP_PUSH_ENABLED = getEnvVar('EXPO_PUBLIC_VOIP_PUSH_ENABLED', 'false') === 'true';
 
 // 7. Connectivity Constants

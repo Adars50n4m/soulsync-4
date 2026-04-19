@@ -1,11 +1,12 @@
 /**
- * SoulSync Transition Configuration Constants
+ * Soul Transition Configuration Constants
  *
  * Spring and timing presets for animations across the app.
  * Note: SharedTransition / sharedTransitionTag is not available
  * in react-native-reanimated 4.1.x (Expo SDK 54).
  */
 
+import { Platform } from 'react-native';
 import { Easing, SharedTransition, withSpring } from 'react-native-reanimated';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,6 +62,9 @@ export const SharedTransitionTags = {
   profileCard: () => 'profile-card-shell',
 } as const;
 
+export const getProfileAvatarTransitionTag = (userId: string) =>
+  SharedTransitionTags.profilePicture(userId);
+
 export const PROFILE_AVATAR_TRANSITION_TAG = 'avatar-universal-morph';
 
 /**
@@ -79,24 +83,25 @@ export const SUPPORT_SHARED_TRANSITIONS = false;
 
 /**
  * Targeted opt-in for the chat-avatar -> profile-hero transition.
- * This keeps the request-specific shared element path enabled without
- * re-enabling experimental shared transitions across the whole app.
+ * We keep this limited to iOS for now because the current Android build
+ * still relies on the older measured morph fallback.
  */
 export const SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION = false;
 
 export const PROFILE_AVATAR_SHARED_TRANSITION = SharedTransition.custom((values) => {
   'worklet';
+  const liquidSpring = { damping: 26, stiffness: 210, mass: 1.1 };
   return {
-    width: withSpring(values.targetWidth, { damping: 18, stiffness: 180, mass: 0.85 }),
-    height: withSpring(values.targetHeight, { damping: 18, stiffness: 180, mass: 0.85 }),
-    originX: withSpring(values.targetOriginX, { damping: 18, stiffness: 180, mass: 0.85 }),
-    originY: withSpring(values.targetOriginY, { damping: 18, stiffness: 180, mass: 0.85 }),
-    borderRadius: withSpring(values.targetBorderRadius, { damping: 18, stiffness: 180, mass: 0.85 }),
+    width: withSpring(values.targetWidth, liquidSpring),
+    height: withSpring(values.targetHeight, liquidSpring),
+    originX: withSpring(values.targetOriginX, liquidSpring),
+    originY: withSpring(values.targetOriginY, liquidSpring),
+    borderRadius: withSpring(values.targetBorderRadius, { ...liquidSpring, damping: 30 }), // Slightly smoother arrival for radius
   };
 }).progressAnimation((values, progress) => {
   'worklet';
   return {
-    opacity: progress < 0.04 ? 0 : 1,
+    opacity: 1, // Visible instantly for the expand feel
   };
 });
 

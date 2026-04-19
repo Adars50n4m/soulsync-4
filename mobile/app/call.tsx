@@ -8,8 +8,9 @@ import { Audio as ExpoAudio, InterruptionModeAndroid, InterruptionModeIOS } from
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useNavigation } from 'expo-router';
 import GlassView from '../components/ui/GlassView';
-import { MaterialIcons, Ionicons } from '@expo/vector-icons';
+import { MaterialIcons, Ionicons, Entypo } from '@expo/vector-icons';
 import ExpoPip from 'expo-pip';
+import SingleChatScreen from './chat/[id]';
 
 import { useApp } from '../context/AppContext';
 import Animated, {
@@ -87,7 +88,7 @@ export default function CallScreen() {
 
     const [callDuration, setCallDuration] = useState(0);
     const [localStream, setLocalStream] = useState<any>(null);
-    const [remoteStream, setRemoteStream] = useState<any>(null);
+    const [remoteStreams, setRemoteStreams] = useState<Map<string, any>>(new Map());
     const [remoteStreamUpdate, setRemoteStreamUpdate] = useState(0);
     const isMinimizing = useRef(false);
     const rtcPipRef = useRef(null);
@@ -108,18 +109,18 @@ export default function CallScreen() {
     const [iosIsInPipMode, setIosIsInPipMode] = useState(false);
     const [showDiagnostics, setShowDiagnostics] = useState(false);
     const [stats, setStats] = useState({ bytesReceived: 0 });
+    const [showLiveChat, setShowLiveChat] = useState(false);
 
     const hasRemoteTracks = useMemo(() => {
-        if (!remoteStream) return false;
-        try {
-            const audioTracks = remoteStream.getAudioTracks?.() || [];
-            const videoTracks = remoteStream.getVideoTracks?.() || [];
-            const genericTracks = remoteStream.getTracks?.() || [];
-            return audioTracks.length > 0 || videoTracks.length > 0 || genericTracks.length > 0;
-        } catch {
-            return false;
-        }
-    }, [remoteStream, remoteStreamUpdate]);
+        if (remoteStreams.size === 0) return false;
+        return Array.from(remoteStreams.values()).some((stream) => {
+            try {
+                return (stream.getAudioTracks?.() || []).length > 0 || 
+                       (stream.getVideoTracks?.() || []).length > 0 || 
+                       (stream.getTracks?.() || []).length > 0;
+            } catch { return false; }
+        });
+    }, [remoteStreams, remoteStreamUpdate]);
 
     const uiConnected = wasConnected || callState === 'connected' || stats.bytesReceived > 0;
 
@@ -136,18 +137,20 @@ export default function CallScreen() {
         const interval = setInterval(() => {
             if (!webRTCService) return;
             const svcState = webRTCService.getState();
-            const svcRemote = webRTCService.getRemoteStream();
+            const svcRemotes = webRTCService.getRemoteStreams?.() || new Map();
+            
             if (svcState === 'connected' && !wasConnected) {
                 setWasConnected(true);
                 setCallState('connected');
             }
-            if (svcRemote && !remoteStream) {
-                setRemoteStream(svcRemote);
+
+            if (svcRemotes.size !== remoteStreams.size) {
+                setRemoteStreams(new Map(svcRemotes));
                 setRemoteStreamUpdate(prev => prev + 1);
             }
         }, 2000);
         return () => clearInterval(interval);
-    }, [wasConnected, remoteStream]);
+    }, [wasConnected, remoteStreams]);
 
     const canRenderVideo = !!RTCView && !!RemoteVideoComponent;
     const edgeGlowPulse = useSharedValue(0);
@@ -312,6 +315,7 @@ export default function CallScreen() {
     }));
 
     const screenPanGesture = Gesture.Pan()
+        .enabled(!showLiveChat)
         .onUpdate((event) => { if (event.translationY > 0) screenTranslateY.value = event.translationY; })
         .onEnd((event) => {
             if (event.translationY > 150) runOnJS(handleMinimize)();
@@ -337,7 +341,11 @@ export default function CallScreen() {
     useEffect(() => {
         if (!isMounted.current) return;
         if (!activeCall && !isMinimizing.current) {
-            router.replace('/(tabs)');
+            if (navigation.canGoBack()) {
+                navigation.goBack();
+            } else {
+                router.replace('/(tabs)');
+            }
         }
     }, [activeCall, router]);
 
@@ -362,7 +370,7 @@ export default function CallScreen() {
 
     const handleEndCall = useCallback(() => {
         setLocalStream(null);
-        setRemoteStream(null);
+        setRemoteStreams(new Map());
         endAppCall();
     }, [endAppCall]);
 
@@ -437,7 +445,7 @@ export default function CallScreen() {
         setStats({ bytesReceived: 0 });
         setCallState(activeCall.isAccepted ? 'connecting' : 'ringing');
         setLocalStream(null);
-        setRemoteStream(null);
+        setRemoteStreams(new Map());
 
         // Capture values at init time so we don't depend on activeCall object
         const callType = activeCall.type;
@@ -459,7 +467,15 @@ export default function CallScreen() {
                 }
             },
             onLocalStream: (s: any) => setLocalStream(s),
-            onRemoteStream: (s: any) => { setRemoteStream(s); setRemoteStreamUpdate(v => v+1); },
+            onRemoteStream: (s: any, userId: string) => { 
+                setRemoteStreams(prev => {
+                    const next = new Map(prev);
+                    if (s) next.set(userId, s);
+                    else next.delete(userId);
+                    return next;
+                });
+                setRemoteStreamUpdate(v => v+1); 
+            },
             onStats: (st: any) => setStats(prev => ({ ...prev, ...st })),
         };
 
@@ -480,25 +496,16 @@ export default function CallScreen() {
                 const defaultSpeaker = callType === 'video';
                 await applySpeakerOutput(defaultSpeaker, false);
 
-                await ExpoAudio.setAudioModeAsync({
-                    allowsRecordingIOS: true,
-                    playsInSilentModeIOS: true,
-                    staysActiveInBackground: true,
-                    interruptionModeIOS: IOS_CALL_INTERRUPTION_MODE,
-                    shouldDuckAndroid: false,
-                    interruptionModeAndroid: ANDROID_CALL_INTERRUPTION_MODE,
-                    playThroughEarpieceAndroid: !defaultSpeaker,
-                }).catch(() => {});
+                // Group call support: check if activeCall has a groupId
+                const isGroup = !!activeCall.groupId;
 
-                // For incoming calls, answerCall() may have already initialized
-                // WebRTC (offer arrived before CallScreen mounted). Skip if active.
                 if (isIncoming && webRTCService?.isCallActive()) {
                     console.log('[CallScreen] WebRTC already active for incoming call, skipping init');
                 } else {
                     await webRTCService?.prepareCall(callType);
                     if (cancelled) return;
                     if (!isIncoming) {
-                        await webRTCService?.startCall();
+                        await webRTCService?.startCall(callType, isGroup ? undefined : activeCall.contactId, isGroup ? activeCall.groupId : undefined);
                     }
                 }
             } catch (e: any) {
@@ -532,30 +539,45 @@ export default function CallScreen() {
 
                     {/* 1. Background Media Layer */}
                     <View style={[StyleSheet.absoluteFill, { backgroundColor: '#111' }]}>
-                        {(isVideo && canRenderVideo && remoteStream && activeCall?.isAccepted && !activeCall?.remoteVideoOff) ? (
-                            <RemoteVideoComponent
-                                key={`v-${remoteStreamUpdate}`}
-                                ref={rtcPipRef}
-                                streamURL={typeof remoteStream.toURL === 'function' ? remoteStream.toURL() : remoteStream}
-                                style={StyleSheet.absoluteFill}
-                                objectFit="cover"
-                                zOrder={0}
-                            />
+                        {remoteStreams.size > 0 && activeCall?.isAccepted && isVideo ? (
+                            <View style={styles.gridContainer}>
+                                {Array.from(remoteStreams.entries()).map(([userId, stream], index) => {
+                                    const remoteContact = contacts.find(c => normalizeId(c.id) === normalizeId(userId));
+                                    const isVoiceOnly = (activeCall as any).participantsVideoOff?.includes(userId);
+                                    
+                                    return (
+                                        <View key={userId} style={[
+                                            styles.videoTile,
+                                            remoteStreams.size === 1 ? styles.videoTileFull :
+                                            remoteStreams.size === 2 ? styles.videoTileHalf :
+                                            styles.videoTileQuarter
+                                        ]}>
+                                            {(canRenderVideo && !isVoiceOnly) ? (
+                                                <RTCView
+                                                    key={`${userId}-${remoteStreamUpdate}`}
+                                                    streamURL={typeof stream.toURL === 'function' ? stream.toURL() : stream}
+                                                    style={StyleSheet.absoluteFill}
+                                                    objectFit="cover"
+                                                />
+                                            ) : (
+                                                <View style={styles.tilePlaceholder}>
+                                                    <SoulAvatar uri={remoteContact?.avatar} size={remoteStreams.size > 2 ? 60 : 100} />
+                                                    <Text style={styles.tileName}>{remoteContact?.name || 'Participant'}</Text>
+                                                </View>
+                                            )}
+                                            <View style={styles.participantNameTag}>
+                                                <Text style={styles.participantNameText}>{remoteContact?.name || 'Participant'}</Text>
+                                            </View>
+                                        </View>
+                                    );
+                                })}
+                            </View>
                         ) : (
                             !!contact.avatar && (
                                 <Image source={{ uri: contact.avatar }} style={[styles.backgroundImage, { width, height }]} blurRadius={isVideo ? 60 : 50} />
                             )
                         )}
 
-                        {remoteStream && activeCall?.isAccepted && (!isVideo || activeCall?.remoteVideoOff) && RTCView && (
-                            <View style={{ position: 'absolute', opacity: 0.01, width: 1, height: 1, top: 0, left: 0 }}>
-                                <RTCView 
-                                    streamURL={typeof remoteStream.toURL === 'function' ? remoteStream.toURL() : remoteStream} 
-                                    style={{ width: 1, height: 1 }} 
-                                    zOrder={-1} 
-                                />
-                            </View>
-                        )}
                         <View style={[styles.overlay, { zIndex: 1 }]} />
                     </View>
 
@@ -573,19 +595,23 @@ export default function CallScreen() {
                     {!isInPipMode ? (
                         <View style={styles.content}>
                             {/* Header */}
-                            <View style={[styles.header, { marginTop: Math.max(insets.top, 20) }]}>
-                                <Pressable onPress={handleMinimize} style={styles.iconButton}>
-                                    <MaterialIcons name="keyboard-arrow-down" size={32} color="white" />
-                                </Pressable>
-                                <View style={styles.securityBadge}>
-                                    <MaterialIcons name="lock" size={12} color="rgba(255,255,255,0.6)" />
-                                    <Text style={styles.securityText}>Soul End-to-End Encrypted</Text>
+                            {!showLiveChat && (
+                                <View style={[styles.header, { marginTop: Math.max(insets.top, 20) }]}>
+                                    <Pressable onPress={handleMinimize} style={styles.iconButton}>
+                                        <MaterialIcons name="keyboard-arrow-down" size={32} color="white" />
+                                    </Pressable>
+                                    <View style={styles.securityBadge}>
+                                        <MaterialIcons name="lock" size={12} color="rgba(255,255,255,0.6)" />
+                                        <View style={styles.securityTextContainer}>
+                                            <Text style={styles.securityText}>Soul End-to-End Encrypted</Text>
+                                        </View>
+                                    </View>
+                                    <View style={{ width: 44 }} />
                                 </View>
-                                <View style={{ width: 44 }} />
-                            </View>
+                            )}
 
-                            {/* Center Info */}
-                            {(!isVideo || !uiConnected || activeCall?.remoteVideoOff) && (
+                            {/* Center Info - visible if not video OR not connected OR chat is open but video not ready */}
+                            {( (!isVideo || !uiConnected || activeCall?.remoteVideoOff)) && (
                                 <View style={styles.mainInfo}>
                                     <View style={styles.avatarWrapper}>
                                         <Animated.View style={[styles.pulseRing, pulseStyle]} />
@@ -598,8 +624,8 @@ export default function CallScreen() {
                                 </View>
                             )}
 
-                            {/* Self Video */}
-                            {isVideo && (
+                            {/* Self Video - keep hidden in chat to save space */}
+                            {(!showLiveChat && isVideo && uiConnected) && (
                                 <GestureDetector gesture={panGesture}>
                                     <Animated.View style={[styles.selfVideoContainer, selfVideoStyle]}>
                                         {localStream && !activeCall?.isVideoOff && RTCView ? (
@@ -614,22 +640,27 @@ export default function CallScreen() {
                             )}
 
                             {/* Footer Controls */}
-                            <GlassView intensity={35} tint="dark" style={[styles.controlsBar, { marginBottom: Math.max(insets.bottom, 40) }]}>
-                                {callState !== 'connected' && activeCall?.isIncoming && !activeCall?.isAccepted ? (
-                                    <View style={styles.incomingActionsRow}>
-                                        <Pressable onPress={handleEndCall} style={[styles.controlBtn, {backgroundColor: '#ef4444'}]}><MaterialIcons name="call-end" size={28} color="white" /></Pressable>
-                                        <Pressable onPress={handleAcceptCall} style={[styles.controlBtn, {backgroundColor: '#22c55e'}]}><MaterialIcons name="call" size={28} color="white" /></Pressable>
-                                    </View>
-                                ) : (
-                                    <View style={styles.controlsRow}>
-                                        <Pressable style={[styles.controlBtn, activeCall?.isMuted && styles.controlBtnActive]} onPress={handleToggleMute}><Ionicons name={activeCall?.isMuted ? "mic-off" : "mic"} size={24} color={activeCall?.isMuted ? "#000" : "white"} /></Pressable>
-                                        <Pressable style={[styles.controlBtn, isSpeaker && styles.controlBtnActive]} onPress={handleToggleSpeaker}><Ionicons name={isSpeaker ? "volume-high" : "volume-low"} size={24} color={isSpeaker ? "#000" : "white"} /></Pressable>
-                                        {isVideo && <Pressable style={[styles.controlBtn, activeCall?.isVideoOff && styles.controlBtnActive]} onPress={handleToggleVideo}><MaterialIcons name={activeCall?.isVideoOff ? "videocam-off" : "videocam"} size={24} color={activeCall?.isVideoOff ? "#000" : "white"} /></Pressable>}
-                                        <Pressable style={styles.controlBtn} onPress={handleMinimize}><MaterialIcons name="picture-in-picture" size={24} color="white" /></Pressable>
-                                        <Pressable style={[styles.controlBtn, styles.endCallBtn]} onPress={handleEndCall}><MaterialIcons name="call-end" size={28} color="white" /></Pressable>
-                                    </View>
-                                )}
-                            </GlassView>
+                            {!showLiveChat && (
+                                <GlassView intensity={35} tint="dark" style={[styles.controlsBar, { marginBottom: Math.max(insets.bottom, 40) }]}>
+                                    {callState !== 'connected' && activeCall?.isIncoming && !activeCall?.isAccepted ? (
+                                        <View style={styles.incomingActionsRow}>
+                                            <Pressable onPress={handleEndCall} style={[styles.controlBtn, {backgroundColor: '#ef4444'}]}><MaterialIcons name="call-end" size={28} color="white" /></Pressable>
+                                            <Pressable onPress={handleAcceptCall} style={[styles.controlBtn, {backgroundColor: '#22c55e'}]}><MaterialIcons name="call" size={28} color="white" /></Pressable>
+                                        </View>
+                                    ) : (
+                                        <View style={styles.controlsRow}>
+                                            <Pressable style={[styles.controlBtn, activeCall?.isMuted && styles.controlBtnActive]} onPress={handleToggleMute}><Ionicons name={activeCall?.isMuted ? "mic-off" : "mic"} size={24} color={activeCall?.isMuted ? "#000" : "white"} /></Pressable>
+                                            <Pressable style={[styles.controlBtn, isSpeaker && styles.controlBtnActive]} onPress={handleToggleSpeaker}><Ionicons name={isSpeaker ? "volume-high" : "volume-low"} size={24} color={isSpeaker ? "#000" : "white"} /></Pressable>
+                                            {isVideo && <Pressable style={[styles.controlBtn, activeCall?.isVideoOff && styles.controlBtnActive]} onPress={handleToggleVideo}><MaterialIcons name={activeCall?.isVideoOff ? "videocam-off" : "videocam"} size={24} color={activeCall?.isVideoOff ? "#000" : "white"} /></Pressable>}
+                                            <Pressable style={[styles.controlBtn, showLiveChat && styles.controlBtnActive]} onPress={() => setShowLiveChat(true)}>
+                                                <Entypo name="chat" size={22} color={showLiveChat ? "#000" : "white"} />
+                                            </Pressable>
+                                            <Pressable style={styles.controlBtn} onPress={handleMinimize}><MaterialIcons name="picture-in-picture" size={24} color="white" /></Pressable>
+                                            <Pressable style={[styles.controlBtn, styles.endCallBtn]} onPress={handleEndCall}><MaterialIcons name="call-end" size={28} color="white" /></Pressable>
+                                        </View>
+                                    )}
+                                </GlassView>
+                            )}
 
                             {/* Diagnostics Toggle */}
                             <Pressable style={{position: 'absolute', top: 10, right: 10, opacity: 0.1}} onLongPress={() => setShowDiagnostics(true)} delayLongPress={5000}>
@@ -659,8 +690,23 @@ export default function CallScreen() {
                             </View>
                         )
                     )}
+
                 </Animated.View>
             </GestureDetector>
+
+            {/* 4. Live Chat Overlay - Real Chat Screen Version (Outside gesture detector to avoid conflicts) */}
+            {showLiveChat && (
+                <View style={[StyleSheet.absoluteFill, { zIndex: 9999 }]}>
+                    <SingleChatScreen 
+                        id={activeCall?.contactId} 
+                        isOverlay={true} 
+                        onBack={() => {
+                            console.log('[DEBUG] Closing Live Chat from Overlay');
+                            setShowLiveChat(false);
+                        }} 
+                    />
+                </View>
+            )}
         </GestureHandlerRootView>
     );
 }
@@ -672,10 +718,11 @@ const styles = StyleSheet.create({
     content: { flex: 1, justifyContent: 'space-between', zIndex: 10 },
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20 },
     securityBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.1)', padding: 6, borderRadius: 12 },
+    securityTextContainer: { overflow: 'hidden' },
     securityText: { color: 'rgba(255,255,255,0.6)', fontSize: 10 },
     mainInfo: { alignItems: 'center', marginTop: 40 },
     avatarWrapper: { width: 180, height: 180, justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
-    pulseRing: { position: 'absolute', width: 170, height: 170, borderRadius: 85, borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
+    pulseRing: { position: 'absolute', width: 170, height: 170, borderRadius: 85, borderWidth: 1, borderColor: 'rgba(255,100,136,0.25)' },
     contactName: { color: '#fff', fontSize: 28, fontWeight: 'bold' },
     callStatus: { color: 'rgba(255,255,255,0.6)', marginTop: 8 },
     controlsBar: { marginHorizontal: 20, borderRadius: 30, padding: 15 },
@@ -696,4 +743,13 @@ const styles = StyleSheet.create({
     diagnosticTitle: { color: '#fff', fontSize: 20, fontWeight: 'bold', marginBottom: 10 },
     diagnosticValue: { color: 'rgba(255,255,255,0.8)', fontSize: 14, marginBottom: 5 },
     closeDiagnostics: { marginTop: 20, backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 20 },
+    gridContainer: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', backgroundColor: '#000' },
+    videoTile: { overflow: 'hidden', borderWidth: 1, borderColor: '#222' },
+    videoTileFull: { width: '100%', height: '100%' },
+    videoTileHalf: { width: '100%', height: '50%' },
+    videoTileQuarter: { width: '50%', height: '33.3%' },
+    participantNameTag: { position: 'absolute', bottom: 10, left: 10, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4, backgroundColor: 'rgba(0,0,0,0.5)' },
+    participantNameText: { color: 'white', fontSize: 12 },
+    tilePlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#1A1A20' },
+    tileName: { color: 'white', marginTop: 10, fontSize: 14, opacity: 0.7 },
 });

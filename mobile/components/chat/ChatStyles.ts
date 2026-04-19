@@ -1,10 +1,11 @@
-import { StyleSheet, Dimensions, Platform } from 'react-native';
+import { StyleSheet, Dimensions } from 'react-native';
 
 export const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 
-export const HEADER_PILL_HEIGHT = 64;
-export const HEADER_PILL_RADIUS = 32;
+export const HEADER_PILL_HEIGHT = 72;
+export const HEADER_PILL_RADIUS = 36;
+export const GRID_TILE_SIZE = (Math.min(SCREEN_WIDTH * 0.65, 280) - 7) / 2;
 
 export const ChatStyles = StyleSheet.create({
     messageWrapper: {
@@ -20,13 +21,18 @@ export const ChatStyles = StyleSheet.create({
     },
     replyIconContainer: {
         position: 'absolute',
-        left: 0,
         top: 0,
         bottom: 0,
         width: 50,
         justifyContent: 'center',
         alignItems: 'center',
         zIndex: -1,
+    },
+    replyIconContainerMe: {
+        left: 0,
+    },
+    replyIconContainerThem: {
+        right: 0,
     },
     replyIcon: {
         // Shared value handles this
@@ -160,16 +166,16 @@ export const ChatStyles = StyleSheet.create({
         marginBottom: 0,
     },
     mediaGridTile: {
-        width: (Math.min(SCREEN_WIDTH * 0.65, 280) - 7) / 2, // fixed half-width, always
-        height: (Math.min(SCREEN_WIDTH * 0.65, 280) - 7) / 2, // 1:1 square
+        width: GRID_TILE_SIZE,
+        height: GRID_TILE_SIZE,
         marginHorizontal: 1.5,
         borderRadius: 10,
         overflow: 'hidden',
         backgroundColor: 'rgba(255,255,255,0.08)',
     },
     mediaGridImage: {
-        width: '100%',
-        height: '100%',
+        width: GRID_TILE_SIZE,
+        height: GRID_TILE_SIZE,
     },
     mediaTilePlayOverlay: {
         position: 'absolute',
@@ -187,6 +193,76 @@ export const ChatStyles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         zIndex: 8,
+    },
+    statusReplyCard: {
+        width: Math.min(SCREEN_WIDTH * 0.58, 232),
+        minHeight: 76,
+        borderRadius: 16,
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        overflow: 'hidden',
+        borderWidth: 1,
+        gap: 10,
+    },
+    statusReplyCardMe: {
+        backgroundColor: 'rgba(255,255,255,0.12)',
+        borderColor: 'rgba(255,255,255,0.16)',
+    },
+    statusReplyCardThem: {
+        backgroundColor: 'rgba(255,255,255,0.08)',
+        borderColor: 'rgba(255,255,255,0.12)',
+    },
+    statusReplyAccent: {
+        width: 4,
+        alignSelf: 'stretch',
+        borderRadius: 999,
+        backgroundColor: '#ff2d55',
+    },
+    statusReplyCopy: {
+        flex: 1,
+        minWidth: 0,
+        justifyContent: 'center',
+    },
+    statusReplyLabel: {
+        color: '#ff8aa5',
+        fontSize: 11,
+        fontWeight: '800',
+        letterSpacing: 0.6,
+        marginBottom: 4,
+        textTransform: 'uppercase',
+    },
+    statusReplyLabelMe: {
+        color: '#ffd1db',
+    },
+    statusReplySnippet: {
+        fontSize: 13,
+        lineHeight: 17,
+        fontWeight: '600',
+    },
+    statusReplySnippetMe: {
+        color: 'rgba(255,255,255,0.92)',
+    },
+    statusReplySnippetThem: {
+        color: 'rgba(255,255,255,0.84)',
+    },
+    statusReplyPreviewFrame: {
+        width: 54,
+        height: 54,
+        borderRadius: 12,
+        overflow: 'hidden',
+        backgroundColor: 'rgba(255,255,255,0.08)',
+    },
+    statusReplyPreview: {
+        width: 54,
+        height: 54,
+    },
+    statusReplyPreviewFallback: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(255,255,255,0.08)',
     },
     mediaDownloadScrim: {
         ...StyleSheet.absoluteFillObject,
@@ -327,5 +403,12 @@ export const ChatStyles = StyleSheet.create({
         color: '#fff',
         fontSize: 16,
         fontWeight: '500',
+    },
+    senderName: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: 'rgba(255,255,255,0.6)',
+        marginBottom: 2,
+        marginLeft: 4,
     },
 });
