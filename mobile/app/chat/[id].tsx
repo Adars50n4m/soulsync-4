@@ -89,6 +89,7 @@ import {
 import { Contact, Message } from '../../types';
 import { ResizeMode, Video, Audio } from 'expo-av';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
+import GlassAlert, { AlertButton } from '../../components/ui/GlassAlert';
 
 const IS_IOS = Platform.OS === 'ios';
 const ENABLE_SHARED_TRANSITIONS = SUPPORT_SHARED_TRANSITIONS;
@@ -272,6 +273,20 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
     const themeAccent = activeTheme?.primary || '#BC002A';
     const themeAccentSoft = activeTheme?.accent || '#FF6A88';
     const { getPresence } = usePresence();
+    const [alertConfig, setAlertConfig] = useState<{
+        visible: boolean;
+        title: string;
+        message?: string;
+        buttons?: AlertButton[];
+    }>({ visible: false, title: '' });
+
+    const showSoulAlert = useCallback((title: string, message?: string, buttons?: AlertButton[]) => {
+        setAlertConfig({ visible: true, title, message, buttons });
+    }, []);
+
+    const closeSoulAlert = useCallback(() => {
+        setAlertConfig(prev => ({ ...prev, visible: false }));
+    }, []);
     const [inputText, setInputText] = useState('');
     const [showCallModal, setShowCallModal] = useState(false);
     const [isReady, setIsReady] = useState(false);
@@ -989,7 +1004,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             // Instantly send message to local DB, passing the local uri for background upload
             sendChatMessage(messageKey, '', media, undefined, uri);
         } catch (error: any) {
-            Alert.alert('Send Failed', error.message || 'Please try again.');
+            showSoulAlert('Send Failed', error.message || 'Please try again.');
         }
     };
 
@@ -1271,7 +1286,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             if (action === 'delete') {
                 const mediaItems = getMessageMediaItems(selectedContextMessage.msg);
                 const isGroupedMedia = mediaItems.length > 1;
-                Alert.alert(
+                showSoulAlert(
                     isGroupedMedia ? 'Delete Media Group' : 'Delete Message',
                     isGroupedMedia
                         ? `Delete this media group (${mediaItems.length} items)?`
@@ -1281,7 +1296,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                         {
                             text: 'Delete',
                             style: 'destructive',
-                            onPress: () => deleteMessage(id, selectedContextMessage.msg.id),
+                            onPress: () => deleteMessage(id, selectedContextMessage.msg.id, isAdmin),
                         },
                     ]
                 );
@@ -1306,8 +1321,6 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                 setEditingMessage(null);
                 setReplyingTo(null);
                 setInputText(`↪ ${forwardText}`);
-            } else if (action === 'delete') {
-                deleteMessage(id as string, selectedContextMessage.msg.id, isAdmin);
             } else if (action === 'star') {
                 updateMessage(id as string, selectedContextMessage.msg.id, { isStarred: true } as any);
             } else if (action === 'unstar') {
@@ -1372,9 +1385,9 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
     }, []);
 
     const handleDeleteSelected = () => {
-        Alert.alert(
+        showSoulAlert(
             `Delete ${selectedMessageIds.length} Message${selectedMessageIds.length > 1 ? 's' : ''}`,
-            'Are you sure you want to delete?',
+            'Are you sure you want to delete these messages for everyone?',
             [
                 { text: 'Cancel', style: 'cancel' },
                 {
@@ -1410,7 +1423,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             const timestamp = msg.timestamp;
             const STATUS_EXPIRATION_MS = 24 * 60 * 60 * 1000;
             if (timestamp && (Date.now() - new Date(timestamp).getTime()) > STATUS_EXPIRATION_MS) {
-                Alert.alert('Status Expired', 'This status was posted more than 24 hours ago and is no longer available.');
+                showSoulAlert('Status Expired', 'This status was posted more than 24 hours ago and is no longer available.');
                 return;
             }
         }
@@ -1455,7 +1468,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
         try {
             const permission = await MediaLibrary.requestPermissionsAsync();
             if (permission.status !== 'granted') {
-                Alert.alert('Permission Required', 'Allow media library access to save files.');
+                showSoulAlert('Permission Required', 'Allow media library access to save files.');
                 return;
             }
 
@@ -1546,7 +1559,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             await chatService.retryMessage(msgId);
             updateMessage(id as string, msgId, { status: 'pending' } as any);
         } catch (e) {
-            Alert.alert('Retry Failed', 'Could not retry this message.');
+            showSoulAlert('Retry Failed', 'Could not retry this message.');
         }
     }, [id, updateMessage]);
 
@@ -1637,7 +1650,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
         setShowMediaPicker(false);
         const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
         if (!permissionResult.granted) {
-            Alert.alert('Permission Required', 'Camera access is needed to take photos.');
+            showSoulAlert('Permission Required', 'Camera access is needed to take photos.');
             return;
         }
         const result = await ImagePicker.launchCameraAsync({
@@ -1694,20 +1707,20 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             }
         } catch (error) {
             console.error('[ChatScreen] Document picking failed:', error);
-            Alert.alert('Error', 'Failed to pick document');
+            showSoulAlert('Error', 'Failed to pick document');
         }
     };
 
     const handleSelectLocation = () => {
         if (isExpanded) toggleOptions();
         setShowMediaPicker(false);
-        Alert.alert('Coming Soon', 'Location sharing will be available soon.');
+        showSoulAlert('Coming Soon', 'Location sharing will be available soon.');
     };
 
     const handleSelectContact = () => {
         if (isExpanded) toggleOptions();
         setShowMediaPicker(false);
-        Alert.alert('Coming Soon', 'Contact sharing will be available soon.');
+        showSoulAlert('Coming Soon', 'Contact sharing will be available soon.');
     };
 
 
@@ -1774,7 +1787,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             }
             setMediaPreview(null);
         } catch (error: any) {
-            Alert.alert('Send Failed', error.message || 'Please try again.');
+            showSoulAlert('Send Failed', error.message || 'Please try again.');
         }
     };
 
@@ -2224,7 +2237,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                 onSelectAudio={handleSelectDocument}
                 onSelectNote={() => {
                     setShowMediaPicker(false);
-                    Alert.alert("Soul Notes", "Leave a note from the Home screen!");
+                    showSoulAlert("Soul Notes", "Leave a note from the Home screen!");
                 }}
             />
 
@@ -2330,7 +2343,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                     }
                 }}
                 onForward={() => {
-                    Alert.alert('Coming Soon', 'Forwarding will be available soon.');
+                    showSoulAlert('Coming Soon', 'Forwarding will be available soon.');
                 }}
                 onReaction={(emoji) => {
                     if (mediaViewer && id) {
@@ -2347,7 +2360,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                     setMediaViewer(null);
                     setSelectedMediaLayout(null);
                 }}
-                onShare={() => Alert.alert('Share', 'External sharing will be available soon.')}
+                onShare={() => showSoulAlert('Share', 'External sharing will be available soon.')}
             />
 
             {/* Music Player Overlay - Moved to root for z-index and blur reliability */}
@@ -2357,7 +2370,13 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                 contactName={contact?.name || 'Someone'}
             />
 
-            {/* FlyingBubbleLayer removed — component not available */}
+            <GlassAlert
+                visible={alertConfig.visible}
+                title={alertConfig.title}
+                message={alertConfig.message}
+                buttons={alertConfig.buttons}
+                onClose={closeSoulAlert}
+            />
         </View>
     );
 }

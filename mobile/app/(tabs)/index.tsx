@@ -530,7 +530,7 @@ const FilterPill = React.memo(({
             paddingHorizontal: 16,
             paddingVertical: 8,
             borderRadius: 20,
-            backgroundColor: isActive ? 'rgba(59, 130, 246, 0.15)' : 'rgba(255,255,255,0.06)',
+            backgroundColor: isActive ? `${activeTheme.primary}26` : 'rgba(255,255,255,0.06)',
             borderWidth: isActive ? 1 : 0,
             borderColor: isActive ? activeTheme.primary : 'transparent',
             justifyContent: 'center',
