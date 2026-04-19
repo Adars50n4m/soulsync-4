@@ -55,7 +55,8 @@ interface MessageBubbleProps {
     isSelected?: boolean;
     onReaction?: (emoji: string) => void;
     quotedMessage?: Message | null;
-    onDoubleTap?: (id: string) => void;
+    onDoubleTap?: (id: string, mediaIndex?: number) => void;
+    remoteLikePulse?: { messageId: string; mediaIndex: number; nonce: number } | null;
     onMediaTap?: (data: any) => void;
     isClone?: boolean;
     selectionMode?: boolean;
@@ -182,10 +183,11 @@ const MessageBubble = React.memo(({
   onLongPress, 
   onReply, 
   isSelected, 
-  onReaction, 
-  quotedMessage, 
-  onDoubleTap, 
-  onMediaTap, 
+  onReaction,
+  quotedMessage,
+  onDoubleTap,
+  remoteLikePulse,
+  onMediaTap,
   isClone,
   selectionMode,
   isChecked,
@@ -579,6 +581,16 @@ const MessageBubble = React.memo(({
         }, MEDIA_LIKE_ANIMATION_HIDE_MS);
     }, [clearPendingMediaTap, likeAnimationOpacity, likeAnimationScale]);
 
+    const lastRemotePulseNonceRef = useRef<number | null>(null);
+    React.useEffect(() => {
+        if (!remoteLikePulse) return;
+        if (remoteLikePulse.messageId !== msg.id) return;
+        if (remoteLikePulse.nonce === lastRemotePulseNonceRef.current) return;
+        lastRemotePulseNonceRef.current = remoteLikePulse.nonce;
+        const idx = Number.isFinite(remoteLikePulse.mediaIndex) ? remoteLikePulse.mediaIndex : 0;
+        triggerLikeAnimation(idx);
+    }, [remoteLikePulse, msg.id, triggerLikeAnimation]);
+
     const handleMediaTapIntent = useCallback((index: number, openGallery = false) => {
         const media = mediaItems[index];
         if (!media) return;
@@ -602,7 +614,7 @@ const MessageBubble = React.memo(({
         if (isDoubleTap) {
             clearPendingMediaTap();
             triggerLikeAnimation(index);
-            onDoubleTap?.(msg.id);
+            onDoubleTap?.(msg.id, index);
             return;
         }
 

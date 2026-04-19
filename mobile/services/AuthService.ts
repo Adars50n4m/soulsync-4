@@ -42,9 +42,34 @@ import * as WebBrowser from 'expo-web-browser';
 import { makeRedirectUri } from 'expo-auth-session';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { GOOGLE_WEB_CLIENT_ID, GOOGLE_IOS_CLIENT_ID } from '../config/googleAuth';
 
-// Required for Google OAuth on Android/iOS
+// Required for Google OAuth on Android/iOS (legacy browser flow fallback)
 WebBrowser.maybeCompleteAuthSession();
+
+// Lazy-load the native Google Sign-In module so the app doesn't crash in
+// dev builds that haven't been rebuilt with the native binary yet. When the
+// module is missing, signInWithGoogle falls back to the browser-based OAuth.
+let GoogleSignin: any = null;
+let googleStatusCodes: any = null;
+try {
+  const gs = require('@react-native-google-signin/google-signin');
+  GoogleSignin = gs.GoogleSignin;
+  googleStatusCodes = gs.statusCodes;
+  if (
+    GoogleSignin &&
+    GOOGLE_WEB_CLIENT_ID &&
+    !GOOGLE_WEB_CLIENT_ID.includes('REPLACE_WITH')
+  ) {
+    GoogleSignin.configure({
+      webClientId: GOOGLE_WEB_CLIENT_ID,
+      iosClientId: GOOGLE_IOS_CLIENT_ID,
+      offlineAccess: false,
+    });
+  }
+} catch (err) {
+  console.log('[Auth] Native Google Sign-In unavailable, will use browser flow.');
+}
 
 export type AvatarType = 'default' | 'teddy' | 'memoji' | 'custom';
 
@@ -419,91 +444,117 @@ class AuthService {
   // Supports both standard Implicit Flow and modern PKCE (code exchange)
   // ─────────────────────────────────────────────────────────────────────────────
   async signInWithGoogle(): Promise<AuthResult> {
+    const hasNativeModule = !!GoogleSignin;
+    const hasRealClientId =
+      !!GOOGLE_WEB_CLIENT_ID && !GOOGLE_WEB_CLIENT_ID.includes('REPLACE_WITH');
+    const nativeReady = hasNativeModule && hasRealClientId;
+
+    console.log(
+      `[Auth] Google Sign-In flow → nativeModule: ${hasNativeModule}, realClientId: ${hasRealClientId}, using: ${nativeReady ? 'NATIVE' : 'BROWSER'}`
+    );
+
+    if (nativeReady) {
+      return this.signInWithGoogleNative();
+    }
+    return this.signInWithGoogleBrowser();
+  }
+
+  private async signInWithGoogleNative(): Promise<AuthResult> {
     try {
-      // Changed to a more generic callback path to avoid expo-router collisions
-      const redirectUri = makeRedirectUri({
-        scheme: 'mobile',
-        path: 'auth/callback',
-      });
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
 
-      console.log(`[Auth] Google OAuth: Starting with redirectUri: ${redirectUri}`);
+      await GoogleSignin.signOut().catch(() => {});
+      const userInfo: any = await GoogleSignin.signIn();
+      const idToken: string | undefined =
+        userInfo?.idToken ?? userInfo?.data?.idToken;
 
-      const { data, error } = await supabase.auth.signInWithOAuth({
+      if (!idToken) {
+        console.error('[Auth] Native Google Sign-In returned no idToken', userInfo);
+        return { success: false, error: 'Google sign-in did not return an ID token.' };
+      }
+
+      const { data, error } = await supabase.auth.signInWithIdToken({
         provider: 'google',
-        options: {
-          redirectTo: redirectUri,
-          skipBrowserRedirect: true,
-        },
+        token: idToken,
       });
 
       if (error) {
-        console.error('[Auth] Supabase OAuth initiation error:', error);
-        throw error;
+        console.error('[Auth] Supabase signInWithIdToken error:', error);
+        return { success: false, error: error.message };
       }
 
-      console.log(`[Auth] Supabase OAuth URL received: ${data.url}`);
-
-      // Open the browser for Google login
-      const result = await WebBrowser.openAuthSessionAsync(
-        data.url ?? '',
-        redirectUri
-      );
-
-      console.log(`[Auth] Google OAuth result type: ${result.type}`);
-      if (result.type === 'success') {
-          console.log(`[Auth] Google OAuth Success URL: ${result.url}`);
+      if (!data.user) {
+        return { success: false, error: 'Google sign-in failed.' };
       }
 
-      if (result.type !== 'success') {
-        const errTypeStr = result.type;
-        return { success: false, error: `Google sign-in was cancelled: ${errTypeStr}` };
-      }
+      const profile = await this.getProfile(data.user.id);
+      const isNewUser = !profile || !profile.username;
 
-      // ── EXTRACT TOKENS OR CODE ──
-      // The returning URL might look like:
-      // mobile://auth/callback#access_token=...&refresh_token=... (Implicit)
-      // OR mobile://auth/callback?code=... (PKCE)
-      const urlString = result.url;
-      
-      const extractToken = (name: string) => {
-        // Look in both query params (?) and fragments (#)
-        const regex = new RegExp(`[#?&]${name}=([^&]*)`);
-        const match = urlString.match(regex);
-        return match ? decodeURIComponent(match[1]) : null;
+      return {
+        success: true,
+        isNewUser,
+        user: profile ?? undefined,
       };
-
-      const code = extractToken('code');
-      const access = extractToken('access_token');
-      const refresh = extractToken('refresh_token');
-      const oauthError = extractToken('error');
-      const oauthErrorDesc = extractToken('error_description');
-
-      if (oauthError) {
-        console.error(`[Auth] Google OAuth returned an error: ${oauthError} - ${oauthErrorDesc}`);
-        return { success: false, error: `Google Auth Error: ${oauthErrorDesc || oauthError}` };
-      }
-
-      // Priority 1: PKCE Code flow (Modern Supabase default)
-      if (code) {
-        console.log('[Auth] Google OAuth returned a PKCE code. Exchanging for session...');
-        return await this.exchangeCodeForSession(code);
-      }
-
-      // Priority 2: Implicit Flow
-      if (access && refresh) {
-        console.log('[Auth] Google OAuth returned an access token. Establishing session directly...');
-        return await this.establishSession(access, refresh);
-      }
-
-      console.error('[Auth] Failed to extract tokens or code from redirect URL. The URL was:', urlString);
-      return { success: false, error: `Auth missing from URL: ${urlString.substring(0, 50)}...` };
-
     } catch (err: any) {
+      const codes = googleStatusCodes;
+      if (codes && err?.code === codes.SIGN_IN_CANCELLED) {
+        return { success: false, error: 'Sign-in cancelled.' };
+      }
+      if (codes && err?.code === codes.IN_PROGRESS) {
+        return { success: false, error: 'Sign-in already in progress.' };
+      }
+      if (codes && err?.code === codes.PLAY_SERVICES_NOT_AVAILABLE) {
+        return { success: false, error: 'Google Play Services not available.' };
+      }
       console.error('[Auth] signInWithGoogle error:', err);
       return {
         success: false,
         error: err?.message ?? 'Google sign-in failed. Please try again.',
       };
+    }
+  }
+
+  private async signInWithGoogleBrowser(): Promise<AuthResult> {
+    try {
+      let redirectUri: string;
+      try {
+        redirectUri = makeRedirectUri({ scheme: 'mobile', path: 'auth/callback' });
+      } catch {
+        redirectUri = 'mobile://auth/callback';
+      }
+
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: redirectUri, skipBrowserRedirect: true },
+      });
+      if (error) return { success: false, error: error.message };
+
+      const result = await WebBrowser.openAuthSessionAsync(data.url ?? '', redirectUri);
+      if (result.type !== 'success') {
+        return { success: false, error: `Google sign-in was cancelled: ${result.type}` };
+      }
+
+      const urlString = result.url;
+      const extract = (name: string) => {
+        const m = urlString.match(new RegExp(`[#?&]${name}=([^&]*)`));
+        return m ? decodeURIComponent(m[1]) : null;
+      };
+
+      const code = extract('code');
+      const access = extract('access_token');
+      const refresh = extract('refresh_token');
+      const oauthError = extract('error');
+      const oauthErrorDesc = extract('error_description');
+
+      if (oauthError) {
+        return { success: false, error: `Google Auth Error: ${oauthErrorDesc || oauthError}` };
+      }
+      if (code) return this.exchangeCodeForSession(code);
+      if (access && refresh) return this.establishSession(access, refresh);
+      return { success: false, error: 'Google sign-in failed: missing credentials.' };
+    } catch (err: any) {
+      console.error('[Auth] signInWithGoogleBrowser error:', err);
+      return { success: false, error: err?.message ?? 'Google sign-in failed.' };
     }
   }
 

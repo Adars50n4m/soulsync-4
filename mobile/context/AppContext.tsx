@@ -47,6 +47,8 @@ interface AppContextType {
     addReaction: any;
     deleteMessage: any;
     toggleHeart: any;
+    sendMediaLikePulse: any;
+    remoteLikePulse: { messageId: string; mediaIndex: number; nonce: number } | null;
     clearChatMessages: any;
     sendTyping: any;
     initializeChatSession: any;
@@ -253,6 +255,8 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         addReaction: chat.addReaction,
         deleteMessage: chat.deleteMessage,
         toggleHeart: chat.toggleHeart,
+        sendMediaLikePulse: chat.sendMediaLikePulse,
+        remoteLikePulse: chat.remoteLikePulse,
         clearChatMessages: chat.clearChatMessages,
         sendTyping: chat.sendTyping,
         initializeChatSession: chat.initializeChatSession,
@@ -404,6 +408,8 @@ export const useAppContext = (): AppContextType => {
             addReaction: async () => {},
             deleteMessage: async () => {},
             toggleHeart: async () => {},
+            sendMediaLikePulse: () => {},
+            remoteLikePulse: null,
             clearChatMessages: async () => {},
             sendTyping: () => {},
             initializeChatSession: () => {},

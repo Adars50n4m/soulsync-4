@@ -47,6 +47,8 @@ interface ChatContextType {
   addReaction: (chatId: string, messageId: string, emoji: string | null) => Promise<void>;
   deleteMessage: (chatId: string, messageId: string, isAdmin?: boolean) => Promise<void>;
   toggleHeart: (chatId: string, messageId: string) => Promise<void>;
+  sendMediaLikePulse: (toUserId: string, messageId: string, mediaIndex: number) => void;
+  remoteLikePulse: { messageId: string; mediaIndex: number; nonce: number } | null;
   sendTyping: (isTyping: boolean) => void;
   clearChatMessages: (partnerId: string) => Promise<void>;
   fetchOtherUserProfile: (userId: string) => Promise<void>;
@@ -165,6 +167,12 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const presenceChannelRef = useRef<any>(null);
   const activeChatIdRef = useRef<string | null>(null);
   const lastServerSyncRef = useRef<number>(0);
+
+  const [remoteLikePulse, setRemoteLikePulse] = useState<{
+    messageId: string;
+    mediaIndex: number;
+    nonce: number;
+  } | null>(null);
 
   const contactsRef = useRef<Contact[]>([]);
   const messagesRef = useRef<Record<string, Message[]>>({});
@@ -700,6 +708,17 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setTypingUsers((prev) => prev.filter((id) => id !== payload.userId));
     });
 
+    channel.on('broadcast', { event: 'media-like' }, ({ payload }) => {
+      if (!payload) return;
+      if (payload.toUserId !== currentUser.id) return;
+      if (payload.fromUserId === currentUser.id) return;
+      setRemoteLikePulse({
+        messageId: String(payload.messageId),
+        mediaIndex: Number.isFinite(payload.mediaIndex) ? payload.mediaIndex : 0,
+        nonce: Date.now() + Math.random(),
+      });
+    });
+
     channel.subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
         await channel.track({ user_id: currentUser.id, online_at: new Date().toISOString() });
@@ -913,6 +932,25 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await addReaction(chatId, messageId, nextEmoji);
   }, [addReaction]);
 
+  const sendMediaLikePulse = useCallback((toUserId: string, messageId: string, mediaIndex: number) => {
+    if (!currentUser || !presenceChannelRef.current) return;
+    try {
+      presenceChannelRef.current.send({
+        type: 'broadcast',
+        event: 'media-like',
+        payload: {
+          fromUserId: currentUser.id,
+          toUserId,
+          messageId,
+          mediaIndex,
+          at: Date.now(),
+        },
+      });
+    } catch (err) {
+      console.warn('[ChatContext] sendMediaLikePulse failed:', err);
+    }
+  }, [currentUser]);
+
   const sendTyping = useCallback((isTyping: boolean) => {
     if (!currentUser || !otherUser) return;
     presenceChannelRef.current?.send({
@@ -1023,6 +1061,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     addReaction,
     deleteMessage,
     toggleHeart,
+    sendMediaLikePulse,
+    remoteLikePulse,
     sendTyping,
     clearChatMessages,
     fetchOtherUserProfile,
@@ -1046,6 +1086,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     addReaction,
     deleteMessage,
     toggleHeart,
+    sendMediaLikePulse,
+    remoteLikePulse,
     sendTyping,
     clearChatMessages,
     fetchOtherUserProfile,

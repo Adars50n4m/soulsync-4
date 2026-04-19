@@ -121,6 +121,12 @@
           "photosPermission": "Soul needs access to your photos to share them as statuses.",
           "savePhotosPermission": "Soul needs access to save captured media."
         }
+      ],
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.REPLACE_WITH_REVERSED_IOS_CLIENT_ID"
+        }
       ]
     ],
     "experiments": {

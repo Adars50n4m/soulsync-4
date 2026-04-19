@@ -4,7 +4,7 @@
  * Auth:   Supabase email/password + Google Sign-In
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -117,6 +117,13 @@ export default function LoginScreen() {
   const girlBreathe = useRef(new Animated.Value(0)).current;
   const floatY = useRef(new Animated.Value(0)).current;
 
+  // ── Hello wave state (random idle animation) ─────────────────────
+  const [waveState, setWaveState] = useState<{
+    bear: 'boy' | 'girl' | 'both' | null;
+    arm: number;
+    bounce: number;
+  }>({ bear: null, arm: 0, bounce: 0 });
+
   // Redirect if already logged in
   useEffect(() => {
     if (currentUser) {
@@ -145,6 +152,95 @@ export default function LoginScreen() {
       ])
     ).start();
   }, []);
+
+  // ── Random "hello" wave when form is blank and idle ──────────────
+  const waveTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const waveActiveRef = useRef(false);
+
+  const clearWaveTimers = useCallback(() => {
+    waveTimersRef.current.forEach(t => clearTimeout(t));
+    waveTimersRef.current = [];
+  }, []);
+
+  const playWave = useCallback((bear: 'boy' | 'girl' | 'both') => {
+    if (waveActiveRef.current) return;
+    waveActiveRef.current = true;
+    // PEAK=155 → boy lAngle = 170°, girl rAngle = -170° — exact mirror of the
+    // covering pose (-170°/170°). At this angle the raised hand lands right
+    // beside the outer eye (temple/ear area), reading as "hello".
+    // DIP=135 gives a 20° wave oscillation at the top.
+    const PEAK = 155;
+    const DIP = 135;
+    const frames = [
+      { t: 0,    arm: 0,    bounce: 0  },
+      { t: 80,   arm: 55,   bounce: -2 },
+      { t: 170,  arm: 120,  bounce: -4 },
+      { t: 260,  arm: PEAK, bounce: -5 },  // raised up
+      { t: 370,  arm: DIP,  bounce: -4 },  // wave dip 1
+      { t: 470,  arm: PEAK, bounce: -5 },  // wave up 1
+      { t: 570,  arm: DIP,  bounce: -4 },  // wave dip 2
+      { t: 670,  arm: PEAK, bounce: -5 },  // wave up 2
+      { t: 770,  arm: DIP,  bounce: -4 },  // wave dip 3
+      { t: 870,  arm: PEAK, bounce: -5 },  // wave up 3
+      { t: 960,  arm: 90,   bounce: -3 },
+      { t: 1080, arm: 35,   bounce: -1 },
+      { t: 1200, arm: 0,    bounce: 0  },
+    ];
+    frames.forEach(f => {
+      const id = setTimeout(() => {
+        setWaveState({ bear, arm: f.arm, bounce: f.bounce });
+      }, f.t);
+      waveTimersRef.current.push(id);
+    });
+    const endId = setTimeout(() => {
+      setWaveState({ bear: null, arm: 0, bounce: 0 });
+      waveActiveRef.current = false;
+    }, 1300);
+    waveTimersRef.current.push(endId);
+  }, []);
+
+  useEffect(() => {
+    const isBlank =
+      !email && !password && !username && !confirmPassword &&
+      !emailSignup && !otp;
+    // Wave as long as form is blank and not in password-focus mode (where the
+    // bears are covering/peeking — incompatible with waving).
+    const canWave =
+      isBlank && !isPassFocused && !isConfirmFocused &&
+      status === 'idle' && !isForgotPassword;
+
+    if (!canWave) {
+      clearWaveTimers();
+      waveActiveRef.current = false;
+      setWaveState({ bear: null, arm: 0, bounce: 0 });
+      return;
+    }
+
+    let cancelled = false;
+    let isFirst = true;
+    const schedule = () => {
+      const delay = isFirst
+        ? 1200 + Math.random() * 1200  // 1.2s – 2.4s first time
+        : 2800 + Math.random() * 3200; // 2.8s – 6s after
+      isFirst = false;
+      const id = setTimeout(() => {
+        if (cancelled) return;
+        // 25% chance both bears wave together, otherwise random solo wave.
+        const r = Math.random();
+        const bear: 'boy' | 'girl' | 'both' =
+          r < 0.25 ? 'both' : r < 0.625 ? 'boy' : 'girl';
+        playWave(bear);
+        schedule();
+      }, delay);
+      waveTimersRef.current.push(id);
+    };
+    schedule();
+
+    return () => {
+      cancelled = true;
+      clearWaveTimers();
+    };
+  }, [email, password, username, confirmPassword, emailSignup, otp, isPassFocused, isConfirmFocused, status, isForgotPassword, clearWaveTimers, playWave]);
 
   // Status animations
   useEffect(() => {
@@ -348,10 +444,29 @@ export default function LoginScreen() {
         <Animated.View style={[s.bearsWrap, { transform: [{ translateY: Animated.add(jumpY, floatY) }, { translateX: shakeX }] }]}>
           <Svg width="400" height="240" viewBox="0 0 400 300">
             {bears.map(({ id, cx, cy, color, snout, cheek, peekArm }) => {
-              const lAngle = (covering || (peeking && peekArm !== 'left'))  ? -170 : 15;
-              const rAngle = (covering || (peeking && peekArm !== 'right')) ?  170 : -15;
+              const thisBearWaves =
+                (waveState.bear === id || waveState.bear === 'both') && waveState.arm > 0;
+              // Boy (screen left) waves his LEFT arm UP-OUTWARD (toward screen left).
+              // Girl (screen right) waves her RIGHT arm UP-OUTWARD (toward screen right).
+              // Peak angle = 170°/-170°, mirroring the covering pose but on the outer side.
+              const waveLeft  = thisBearWaves && id === 'boy'  ? waveState.arm : 0;
+              const waveRight = thisBearWaves && id === 'girl' ? waveState.arm : 0;
+
+              const lAngle = (covering || (peeking && peekArm !== 'left'))  ? -170 : 15  + waveLeft;
+              const rAngle = (covering || (peeking && peekArm !== 'right')) ?  170 : -15 - waveRight;
+              const bearY  = thisBearWaves ? waveState.bounce : 0;
+
+              // Long arm when covering/peeking OR waving — otherwise short resting arm.
+              const useLongLeft  = covering || (peeking && peekArm !== 'left')  || (thisBearWaves && id === 'boy');
+              const useLongRight = covering || (peeking && peekArm !== 'right') || (thisBearWaves && id === 'girl');
+              const leftArmPath  = useLongLeft
+                ? `M 14 0 C 22 30,20 65,10 80 A 15 15 0 0 1 -24 70 C -22 35,-20 20,-16 0`
+                : `M 12 0 C 18 15,16 35,8 45 A 12 12 0 0 1 -18 38 C -16 20,-14 10,-10 0`;
+              const rightArmPath = useLongRight
+                ? `M -14 0 C -22 30,-20 65,-10 80 A 15 15 0 0 0 24 70 C 22 35,20 20,16 0`
+                : `M -12 0 C -18 15,-16 35,-8 45 A 12 12 0 0 0 18 38 C 16 20,14 10,10 0`;
               return (
-                <G key={id}>
+                <G key={id} y={bearY}>
                   <Ellipse cx={cx-24} cy={cy+132} rx="12" ry="8" fill={color} stroke={STROKE} strokeWidth="5" />
                   <Ellipse cx={cx+24} cy={cy+132} rx="12" ry="8" fill={color} stroke={STROKE} strokeWidth="5" />
                   <Path d={`M ${cx-34} ${cy+25} C ${cx-65} ${cy+60},${cx-60} ${cy+135},${cx} ${cy+135} C ${cx+60} ${cy+135},${cx+65} ${cy+60},${cx+34} ${cy+25} Z`} fill={color} stroke={STROKE} strokeWidth="5" />
@@ -368,10 +483,10 @@ export default function LoginScreen() {
                     {renderMouth(cx, cy)}
                   </G>
                   <G transform={`rotate(${lAngle}, ${cx-40}, ${cy+60}) translate(${cx-40}, ${cy+60})`}>
-                    <Path d={covering ? `M 14 0 C 22 30,20 65,10 80 A 15 15 0 0 1 -24 70 C -22 35,-20 20,-16 0` : `M 12 0 C 18 15,16 35,8 45 A 12 12 0 0 1 -18 38 C -16 20,-14 10,-10 0`} fill={color} stroke={STROKE} strokeWidth="5" />
+                    <Path d={leftArmPath} fill={color} stroke={STROKE} strokeWidth="5" />
                   </G>
                   <G transform={`rotate(${rAngle}, ${cx+40}, ${cy+60}) translate(${cx+40}, ${cy+60})`}>
-                    <Path d={covering ? `M -14 0 C -22 30,-20 65,-10 80 A 15 15 0 0 0 24 70 C 22 35,20 20,16 0` : `M -12 0 C -18 15,-16 35,-8 45 A 12 12 0 0 0 18 38 C 16 20,14 10,10 0`} fill={color} stroke={STROKE} strokeWidth="5" />
+                    <Path d={rightArmPath} fill={color} stroke={STROKE} strokeWidth="5" />
                   </G>
                 </G>
               );
@@ -443,6 +558,27 @@ export default function LoginScreen() {
             {status === 'loading' ? <ActivityIndicator color="#fff" /> : <Text style={s.btnText}>{isLogin ? (isForgotPassword ? 'Reset' : 'Login') : 'Next'}</Text>}
           </TouchableOpacity>
 
+          {((isLogin && !isForgotPassword) || (!isLogin && signupStep === 'email')) && (
+            <>
+              <View style={s.dividerRow}>
+                <View style={s.dividerLine} />
+                <Text style={s.dividerText}>OR</Text>
+                <View style={s.dividerLine} />
+              </View>
+
+              <TouchableOpacity style={s.googleBtn} onPress={handleGoogleSignIn} disabled={status === 'loading'} activeOpacity={0.8}>
+                <Svg width={20} height={20} viewBox="0 0 48 48">
+                  <Path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                  <Path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                  <Path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                  <Path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+                  <Path fill="none" d="M0 0h48v48H0z" />
+                </Svg>
+                <Text style={s.googleBtnText}>Continue with Google</Text>
+              </TouchableOpacity>
+            </>
+          )}
+
           <View style={s.footer}>
             <TouchableOpacity onPress={toggleMode}><Text style={[s.footerAccent, { color: themeAccent }]}>{isLogin ? 'Create Soul Id' : 'Login'}</Text></TouchableOpacity>
             {!isLogin && signupStep === 'email' && <TouchableOpacity onPress={toggleForgotPassword}><Text style={s.footerMuted}>Forgot?</Text></TouchableOpacity>}
@@ -469,4 +605,36 @@ const s = StyleSheet.create({
   footer: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 22 },
   footerMuted: { color: '#9CA3AF', fontSize: 13 },
   footerAccent: { fontSize: 13, fontWeight: '700' },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 18,
+    gap: 12,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  dividerText: {
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+  },
+  googleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    height: 56,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+  },
+  googleBtnText: {
+    color: '#1F1F1F',
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
 });

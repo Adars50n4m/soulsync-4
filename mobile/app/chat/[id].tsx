@@ -269,7 +269,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
 
     const router = useRouter();
     const isFocused = useIsFocused();
-    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, toggleHeart, deleteMessage, musicState, getPlaybackPosition, seekTo, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, initializeChatSession, cleanupChatSession, fetchOtherUserProfile, setMusicPartner, startGroupCall } = useApp() as any;
+    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, toggleHeart, deleteMessage, musicState, getPlaybackPosition, seekTo, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, initializeChatSession, cleanupChatSession, fetchOtherUserProfile, setMusicPartner, startGroupCall, sendMediaLikePulse, remoteLikePulse } = useApp() as any;
     const themeAccent = activeTheme?.primary || '#BC002A';
     const themeAccentSoft = activeTheme?.accent || '#FF6A88';
     const { getPresence } = usePresence();
@@ -1405,14 +1405,17 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
         );
     };
 
-    const handleDoubleTap = useCallback((msgId: string) => {
+    const handleDoubleTap = useCallback((msgId: string, mediaIndex?: number) => {
         if (!id) return;
+        if (typeof mediaIndex === 'number' && typeof sendMediaLikePulse === 'function') {
+            sendMediaLikePulse(id, msgId, mediaIndex);
+        }
         if (typeof toggleHeart === 'function') {
             toggleHeart(id, msgId);
         } else {
             addReaction(id, msgId, '❤️');
         }
-    }, [addReaction, id, toggleHeart]);
+    }, [addReaction, id, toggleHeart, sendMediaLikePulse]);
 
     const handleMediaTap = (payload: any) => {
         if (!payload?.mediaItems?.length) return;
@@ -1579,6 +1582,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                     onReply={(m: any) => setReplyingTo(m)}
                     onReaction={handleReaction}
                     onDoubleTap={handleDoubleTap}
+                    remoteLikePulse={remoteLikePulse?.messageId === item.id ? remoteLikePulse : null}
                     onMediaTap={handleMediaTap}
                     quotedMessage={item.replyTo ? chatMessages.find((m: any) => m.id === item.replyTo) : null}
                     selectionMode={selectionMode}
@@ -2438,8 +2442,6 @@ const styles = StyleSheet.create({
         height: 14,
         borderRadius: 7,
         backgroundColor: '#22c55e',
-        borderWidth: 2,
-        borderColor: '#151515',
     },
     headerInfo: {
         flex: 1,
