@@ -226,6 +226,14 @@ export default function MyStatusScreen() {
                   uriHint={item.mediaLocalPath || item.mediaUrl}
                   mediaType={item.mediaType}
                   style={styles.statusThumb}
+                  fallback={(
+                    <SoulAvatar
+                      uri={currentUser?.avatar}
+                      size={48}
+                      avatarType={currentUser?.avatarType as any}
+                      teddyVariant={currentUser?.teddyVariant as any}
+                    />
+                  )}
                 />
               </View>
             </View>

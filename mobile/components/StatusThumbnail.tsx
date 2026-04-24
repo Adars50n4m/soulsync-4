@@ -3,6 +3,7 @@ import { View, StyleSheet, ActivityIndicator, ImageStyle, StyleProp, ViewStyle }
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
 import { getInfoAsync } from 'expo-file-system';
+import { proxySupabaseUrl } from '../config/api';
 import { statusService } from '../services/StatusService';
 
 interface StatusThumbnailProps {
@@ -14,6 +15,7 @@ interface StatusThumbnailProps {
   containerStyle?: any;
   blurRadius?: number;
   resizeMode?: 'cover' | 'contain' | 'stretch' | 'center';
+  fallback?: React.ReactNode;
 }
 
 /**
@@ -28,11 +30,13 @@ export const StatusThumbnail: React.FC<StatusThumbnailProps> = ({
   style,
   containerStyle,
   blurRadius = 0,
-  resizeMode = 'cover'
+  resizeMode = 'cover',
+  fallback,
 }) => {
   const [uri, setUri] = useState<string | null>(null);
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sourceAttempt, setSourceAttempt] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -60,6 +64,7 @@ export const StatusThumbnail: React.FC<StatusThumbnailProps> = ({
         if (isMounted && source) {
           console.log(`[StatusThumbnail] Resolved URI for ${statusId}: ${source.uri}`);
           setUri(source.uri);
+          setSourceAttempt(0);
         }
       } catch (error) {
         console.warn(`[StatusThumbnail] Failed to resolve media for ${statusId}:`, error);
@@ -104,7 +109,33 @@ export const StatusThumbnail: React.FC<StatusThumbnailProps> = ({
     return () => { isMounted = false; };
   }, [mediaType, statusId, uri]);
 
-  const displayUri = mediaType === 'video' ? thumbnailUri : uri;
+  const fallbackCandidates = [
+    uri,
+    mediaKey ? proxySupabaseUrl(mediaKey) : null,
+    mediaKey || null,
+    uriHint || null,
+  ].filter((value, index, arr): value is string => !!value && arr.indexOf(value) === index);
+
+  const displayUri = mediaType === 'video' ? thumbnailUri : (fallbackCandidates[sourceAttempt] || uri);
+
+  const handleImageError = () => {
+    if (mediaType === 'video') {
+      setThumbnailUri(null);
+      return;
+    }
+
+    if (sourceAttempt < fallbackCandidates.length - 1) {
+      const nextAttempt = sourceAttempt + 1;
+      console.warn(
+        `[StatusThumbnail] Image load failed for ${statusId}, retrying with fallback ${nextAttempt + 1}/${fallbackCandidates.length}`
+      );
+      setSourceAttempt(nextAttempt);
+      return;
+    }
+
+    console.warn(`[StatusThumbnail] All image sources failed for ${statusId}`);
+    setUri(null);
+  };
 
   return (
     <View style={[styles.container, style as any, containerStyle]}>
@@ -114,15 +145,22 @@ export const StatusThumbnail: React.FC<StatusThumbnailProps> = ({
           style={styles.image}
           contentFit={resizeMode as any}
           transition={200}
+          onError={handleImageError}
         />
       ) : !loading && (
-        <View style={styles.fallback}>
-          <MaterialIcons 
-            name="image-not-supported" 
-            size={24} 
-            color="rgba(255,255,255,0.2)" 
-          />
-        </View>
+        fallback ? (
+          <View style={styles.fallback}>
+            {fallback}
+          </View>
+        ) : (
+          <View style={styles.fallback}>
+            <MaterialIcons 
+              name="image-not-supported" 
+              size={24} 
+              color="rgba(255,255,255,0.2)" 
+            />
+          </View>
+        )
       )}
       
       {loading && (
