@@ -1,6 +1,6 @@
 import { useRouter, useRootNavigationState } from 'expo-router';
 import { AppContext } from '../context/AppContext';
-import { View, ActivityIndicator } from 'react-native';
+import { View } from 'react-native';
 import { useContext, useEffect } from 'react';
 
 export default function Index() {
@@ -26,9 +26,8 @@ export default function Index() {
     }
   }, [context?.isReady, context?.currentUser, router, rootNavigationState?.key]);
 
-  return (
-    <View style={{ flex: 1, backgroundColor: context?.activeTheme?.background || '#000', justifyContent: 'center', alignItems: 'center' }}>
-      <ActivityIndicator size="large" color={context?.activeTheme?.primary || '#BC002A'} />
-    </View>
-  );
+  // Render a plain black surface only. The root splash overlay in _layout.tsx
+  // sits above with its own loader; rendering anything visible here causes a
+  // brief UI flash when the overlay momentarily lifts during route transitions.
+  return <View style={{ flex: 1, backgroundColor: '#000' }} />;
 }

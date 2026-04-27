@@ -50,6 +50,23 @@ class ProxyHealthTracker {
     }
 }
 
+import { isOnlineCached } from '../services/NetworkMonitor';
+
+// Map to track last error log time per endpoint to prevent spamming the console.
+// Keyed by `METHOD path` (no query) so timestamp-paginated polls don't bypass the cooldown.
+const lastErrorLogTime = new Map<string, number>();
+const ERROR_LOG_COOLDOWN = 30000; // 30 seconds
+
+const errorLogKey = (method: string, urlString: string): string => {
+    // Strip query + hash so /rest/v1/call_signals?... collapses to one key
+    const queryIdx = urlString.indexOf('?');
+    const hashIdx = urlString.indexOf('#');
+    let end = urlString.length;
+    if (queryIdx >= 0) end = Math.min(end, queryIdx);
+    if (hashIdx >= 0) end = Math.min(end, hashIdx);
+    return `${method} ${urlString.slice(0, end)}`;
+};
+
 export const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
     auth: {
         storage: SupabaseSecureStorage,
@@ -61,51 +78,89 @@ export const supabase = createClient(Env.SUPABASE_URL, Env.SUPABASE_ANON_KEY, {
         fetch: async (url: RequestInfo | URL, options?: any) => {
             const urlString = typeof url === 'string' ? url : url.toString();
             
-            // Logic to rewrite direct Supabase URL to match the Proxy Worker subdomain
+            // 1. Check if we are known to be offline - skip and throw immediately
+            // This prevents "Network request failed" spam when the OS knows there's no internet.
+            if (!isOnlineCached()) {
+                throw new Error('Network request failed'); // Match expected fetch error message
+            }
+
             const proxied = urlString.replace(Env.SUPABASE_URL, Env.SUPABASE_PROXY_URL);
-            
             const method = (options?.method || 'GET').toUpperCase();
             const isMutation = method === 'POST' || method === 'PATCH' || method === 'DELETE';
 
-            if (ProxyHealthTracker.shouldTryProxy(isMutation)) {
-                try {
+            // Helper to log errors without spamming
+            const logKey = errorLogKey(method, urlString);
+            const logError = (msg: string, details?: any, isCritical = false) => {
+                const now = Date.now();
+                const lastLog = lastErrorLogTime.get(logKey) || 0;
+                if (isCritical || (now - lastLog > ERROR_LOG_COOLDOWN)) {
+                    lastErrorLogTime.set(logKey, now);
+                    if (isCritical) console.error(msg, details);
+                    else console.warn(msg, details);
+                }
+            };
+
+            // Robust fetch with timeout and retry
+            const fetchWithTimeout = async (targetUrl: string, targetOptions: any, timeoutMs = 15000, retryCount = 1): Promise<Response> => {
+                let lastError: any;
+                for (let i = 0; i <= retryCount; i++) {
                     const controller = new AbortController();
-                    const timeoutMs = isMutation ? 30000 : 12000;
                     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+                    
+                    try {
+                        const response = await fetch(targetUrl, {
+                            ...targetOptions,
+                            signal: controller.signal
+                        });
+                        clearTimeout(timeoutId);
+                        ProxyHealthTracker.markProxyUp();
+                        return response;
+                    } catch (err: any) {
+                        clearTimeout(timeoutId);
+                        lastError = err;
+                        const isAbort = err.name === 'AbortError';
+                        const isNetwork = err.message?.includes('Network request failed');
+                        
+                        // If we are definitely offline now, stop retrying
+                        if (!isOnlineCached()) throw err;
 
-                    const response = await fetch(proxied, { ...options, signal: controller.signal });
-                    clearTimeout(timeoutId);
-                    ProxyHealthTracker.markProxyUp();
-                    return response;
-                } catch (proxyError: any) {
-                    const isTimeout = proxyError.name === 'AbortError' || proxyError.message?.includes('aborted');
-                    const isOffline = proxyError.message?.includes('Network request failed') || proxyError.message?.includes('failed to fetch');
-
-                    // Only circuit-break for mutations — reads always retry proxy on next call
-                    if (isMutation && (isOffline || isTimeout)) {
-                        console.warn(`[Supabase] Proxy ${isTimeout ? 'timeout' : 'offline'} on mutation — circuit open for 30s`);
-                        ProxyHealthTracker.markProxyDown();
-                    } else {
-                        console.debug(`[Supabase] Proxy failed on read: ${proxyError.message}. Falling back to direct.`);
+                        if (i < retryCount && (isAbort || isNetwork)) {
+                            const delay = 500 * (i + 1);
+                            logError(`[Supabase Fetch] ↻ Retry ${i+1}/${retryCount} for ${method} ${targetUrl} after ${isAbort ? 'timeout' : 'network error'}...`);
+                            await new Promise(r => setTimeout(r, delay));
+                            continue;
+                        }
+                        throw err;
                     }
                 }
-            }
+                throw lastError;
+            };
 
-            // Direct fallback (may be ISP-blocked on Indian networks — proxy is the preferred path)
+            // 2. Try Proxied URL
             try {
-                const fallbackOptions = { ...options };
-                delete fallbackOptions.signal;
-                return await fetch(urlString, fallbackOptions);
-            } catch (directError: any) {
-                // If direct also fails (ISP block), re-try proxy as last resort for reads
-                if (!isMutation) {
-                    try {
-                        const retryOptions = { ...options };
-                        delete retryOptions.signal;
-                        return await fetch(proxied, retryOptions);
-                    } catch {}
+                return await fetchWithTimeout(proxied, options, 15000, 1);
+            } catch (error: any) {
+                const isNetworkError = error.message?.includes('Network request failed') || error.name === 'AbortError';
+
+                if (isNetworkError) {
+                    logError(`[Supabase Fetch] ❌ ${method} ${proxied} failed: Network/Timeout`);
+                    
+                    // 3. Fallback to Direct URL
+                    if (urlString !== proxied && isOnlineCached()) {
+                        try {
+                            logError(`[Supabase Fetch] ↻ Falling back to direct: ${urlString}`);
+                            return await fetchWithTimeout(urlString, options, 8000, 0);
+                        } catch (directErr: any) {
+                            logError(`[Supabase Fetch] ❌ Direct fallback failed for ${method} ${urlString}`);
+                            throw directErr;
+                        }
+                    }
+                } else {
+                    // Non-network errors (4xx, 5xx) should be logged once
+                    logError(`[Supabase Fetch] ❌ ${method} ${proxied} failed:`, error.message);
                 }
-                throw directError;
+
+                throw error;
             }
         },
     },

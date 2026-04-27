@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
     View, Text, Image, TextInput, Pressable, StyleSheet, useWindowDimensions,
-    StatusBar, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard
+    StatusBar, Alert, KeyboardAvoidingView, Platform, Keyboard
 } from 'react-native';
 import { useRouter, useNavigation } from 'expo-router';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
@@ -14,8 +14,9 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Video, ResizeMode } from 'expo-av';
 import { useApp } from '../context/AppContext';
-import { statusService } from '../services/StatusService';
+import { SoulLoader } from '../components/ui/SoulLoader';
 import { CropImageModal } from '../components/CropImageModal';
+import { statusService } from '../services/StatusService';
 
 export default function AddStatusScreen() {
     const { width, height } = useWindowDimensions();
@@ -64,10 +65,10 @@ export default function AddStatusScreen() {
         setLoading(true);
         try {
             await statusService.uploadStory(media.uri, media.type, caption.trim());
-            router.replace('/(tabs)/status');
+            router.replace('/(tabs)');
         } catch (e) {
             Alert.alert('Upload Error', 'Failed to share status. It will be retried in background.');
-            router.replace('/(tabs)/status');
+            router.replace('/(tabs)');
         } finally {
             setLoading(false);
         }
@@ -76,7 +77,7 @@ export default function AddStatusScreen() {
     if (!media) {
         return (
             <View style={styles.blackCenter}>
-                <ActivityIndicator color="#8C0016" size="large" />
+                <SoulLoader size={200} />
             </View>
         );
     }
@@ -158,7 +159,7 @@ export default function AddStatusScreen() {
                         style={[styles.sendButton, { backgroundColor: '#8C0016' }]}
                     >
                         {loading ? (
-                            <ActivityIndicator color="#fff" />
+                            <SoulLoader size={40} />
                         ) : (
                             <MaterialIcons name="send" size={24} color="white" />
                         )}

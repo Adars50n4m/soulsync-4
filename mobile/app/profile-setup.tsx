@@ -11,10 +11,10 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  ActivityIndicator,
   StatusBar,
   Modal,
 } from 'react-native';
+import { SoulLoader } from '../components/ui/SoulLoader';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Feather, MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -252,10 +252,10 @@ export default function ProfileSetupScreen() {
           disabled={loading}
           activeOpacity={0.85}
         >
-          {loading
-            ? <ActivityIndicator color="#0A0A0F" size="small" />
-            : <Text style={styles.finishBtnText}>Finish setup</Text>
-          }
+                    {loading
+                        ? <SoulLoader size={40} />
+                        : <Text style={styles.finishBtnText}>Finish setup</Text>
+                    }
         </TouchableOpacity>
 
         <Text style={styles.footerNote}>

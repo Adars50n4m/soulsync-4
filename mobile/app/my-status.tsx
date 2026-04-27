@@ -8,7 +8,6 @@ import {
   Alert,
   Modal,
   StatusBar,
-  ActivityIndicator,
   RefreshControl,
   TextInput,
 } from 'react-native';
@@ -24,6 +23,7 @@ import { SoulAvatar } from '../components/SoulAvatar';
 import { StatusThumbnail } from '../components/StatusThumbnail';
 import { useApp } from '../context/AppContext';
 import { MediaPickerSheet } from '../components/MediaPickerSheet';
+import { SoulLoader } from '../components/ui/SoulLoader';
 
 interface StatusWithViewers extends CachedStatus {
   viewers: any[];
@@ -275,7 +275,9 @@ export default function MyStatusScreen() {
       </View>
 
       {loading && !refreshing ? (
-        <ActivityIndicator color="#8C0016" style={{ marginTop: 50 }} />
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <SoulLoader size={200} />
+        </View>
       ) : (
         <View style={styles.content}>
           <View style={styles.card}>
@@ -361,7 +363,7 @@ export default function MyStatusScreen() {
                 disabled={isActionBusy}
               >
                 {isActionBusy ? (
-                  <ActivityIndicator color="#fff" size="small" />
+                  <SoulLoader size={30} />
                 ) : (
                   <Text style={styles.saveBtnText}>Save</Text>
                 )}

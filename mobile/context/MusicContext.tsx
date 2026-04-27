@@ -4,7 +4,7 @@ import { NativeModules, Platform, AppState, Alert } from 'react-native';
 // We import types only to avoid side-effects if the native module is missing
 import type { Song, MusicState } from '../types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { musicSyncService } from '../services/MusicSyncService';
+import { musicSyncService, type MusicSyncScope } from '../services/MusicSyncService';
 import { useAuth } from './AuthContext';
 
 // Safe require for TrackPlayer to prevent crash if native module is missing
@@ -92,9 +92,11 @@ interface MusicContextType {
     playPrevious: () => Promise<void>;
     sleepTimerMinutes: number | null;
     setSleepTimer: (minutes: number | null) => void;
-    setSleepTimer: (minutes: number | null) => void;
     setMusicPartner: (partnerId: string) => void;
+    joinGroupMusicRoom: (groupId: string) => void;
+    leaveGroupMusicRoom: (groupId?: string) => Promise<void>;
     requestMusicSync: () => void;
+    musicSyncScope: MusicSyncScope;
 }
 
 export const MusicContext = createContext<MusicContextType | undefined>(undefined);
@@ -114,6 +116,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const [shuffle, setShuffle] = useState(false);
     const [queue, setQueue] = useState<Song[]>([]);
     const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(null);
+    const [musicSyncScope, setMusicSyncScope] = useState<MusicSyncScope>({ type: 'none' });
     const sleepTimerRef = useRef<NodeJS.Timeout | null>(null);
     const queueIndexRef = useRef(-1);
     
@@ -124,6 +127,17 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     useEffect(() => {
         setMusicState(prev => ({ ...prev, isPlaying }));
     }, [isPlaying]);
+
+    const suspendGroupRoomPlayback = useCallback(async () => {
+        if (!TrackPlayer) return;
+        if (musicSyncService.getCurrentScope().type !== 'group') return;
+
+        try {
+            await TrackPlayer.pause();
+        } catch (_) {}
+
+        setMusicState(prev => ({ ...prev, isPlaying: false }));
+    }, []);
 
     // Initialize TrackPlayer
     useEffect(() => {
@@ -248,7 +262,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             
             // Handle Sync Request: If partner asked for our state, send it immediately
             if (eventType === 'sync_request') {
-                const currentPos = await TrackPlayer.getPosition();
+                const currentPos = TrackPlayer ? await TrackPlayer.getPosition() : 0;
                 musicSyncService.broadcastUpdate({
                     currentSong: musicStateRef.current.currentSong,
                     isPlaying: musicStateRef.current.isPlaying,
@@ -598,7 +612,23 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const setMusicPartner = useCallback((partnerId: string) => {
         musicSyncService.setPartner(partnerId);
+        setMusicSyncScope(musicSyncService.getCurrentScope());
     }, []);
+
+    const joinGroupMusicRoom = useCallback((groupId: string) => {
+        musicSyncService.joinGroupRoom(groupId);
+        setMusicSyncScope(musicSyncService.getCurrentScope());
+    }, []);
+
+    const leaveGroupMusicRoom = useCallback(async (groupId?: string) => {
+        const scope = musicSyncService.getCurrentScope();
+        if (scope.type !== 'group') return;
+        if (groupId && scope.targetId !== groupId) return;
+
+        await suspendGroupRoomPlayback();
+        musicSyncService.leaveGroupRoom(groupId);
+        setMusicSyncScope(musicSyncService.getCurrentScope());
+    }, [suspendGroupRoomPlayback]);
 
     const requestMusicSync = useCallback(() => {
         musicSyncService.requestSync();
@@ -608,7 +638,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         musicState, playSong, togglePlayMusic, toggleFavoriteSong, seekTo, getPlaybackPosition,
         repeatMode, toggleRepeat, shuffle, toggleShuffle,
         queue, addToQueue, removeFromQueue, clearQueue, playNext, playPrevious,
-        sleepTimerMinutes, setSleepTimer, setMusicPartner, requestMusicSync,
+        sleepTimerMinutes, setSleepTimer, setMusicPartner, joinGroupMusicRoom, leaveGroupMusicRoom, requestMusicSync, musicSyncScope,
     };
     return <MusicContext.Provider value={value}>{children}</MusicContext.Provider>;
 };

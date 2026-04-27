@@ -4,6 +4,7 @@ import * as Crypto from 'expo-crypto';
 import { normalizeId, LEGACY_TO_UUID } from '../utils/idNormalization';
 import { AppState } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
+import { isOnlineCached } from './NetworkMonitor';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CALL SERVICE — WhatsApp-Grade Reliability
@@ -80,6 +81,7 @@ class CallService {
     private currentRoomId: string | null = null;
     private currentPartnerId: string | null = null;
     private currentGroupId: string | null = null;
+    private currentCallType: 'audio' | 'video' = 'audio';
     private currentParticipants: Set<string> = new Set();
     private roomSubscribed: boolean = false;
     private isJoiningRoom: boolean = false;
@@ -89,6 +91,9 @@ class CallService {
     private readonly CALL_TIMEOUT_MS = 45000; // 45 seconds timeout
     private reconnectTimer: NodeJS.Timeout | null = null;
     private personalChannelSubscribed: boolean = false;
+    private _subscribingPersonalChannel: boolean = false;
+    private _lastPersonalSubscribeAt: number = 0;
+    private readonly PERSONAL_SUBSCRIBE_MIN_GAP_MS = 5000;
     private processedSignalIds: Set<string> = new Set();
     private signalPollInterval: NodeJS.Timeout | null = null;
     private _fastPollInterval: NodeJS.Timeout | null = null;
@@ -96,6 +101,7 @@ class CallService {
     private _appStateSubscription: any = null;
     private _connectionLimitHit: boolean = false;
     private _consecutivePollFailures: number = 0;
+    private _nextAllowedPollAt: number = 0;
     
     // NEW: Reliability features
     private _networkState: 'connected' | 'disconnected' | 'unknown' = 'unknown';
@@ -184,6 +190,7 @@ class CallService {
         }
         this.lastSignalPollAt = new Date(Date.now() - 5000).toISOString(); // Start 5s in past to catch missed signals
         this._consecutivePollFailures = 0;
+        this._nextAllowedPollAt = 0;
 
         // Only subscribe to realtime if we haven't hit the connection limit
         if (!this._connectionLimitHit) {
@@ -202,6 +209,7 @@ class CallService {
             if (state === 'active') {
                 console.log('[CallService] 📱 App foregrounded — refreshing signals');
                 this._consecutivePollFailures = 0; // Reset poll failures on foreground
+                this._nextAllowedPollAt = 0;
                 this.pollForSignals();
                 this._reconnectIfNeeded();
                 // Reset connection limit flag on foreground (connections may have drained)
@@ -244,7 +252,7 @@ class CallService {
         return !!receiver && receiver === normalizeId(userId);
     }
 
-    private async fetchSignalsForUserSince(userId: string, since: string): Promise<any[]> {
+    private async fetchSignalsForUserSince(userId: string, since: string): Promise<any[] | null> {
         const sinceTimestamp = Date.parse(since);
         const effectiveSince = Number.isFinite(sinceTimestamp)
             ? new Date(Math.max(0, sinceTimestamp - SIGNAL_POLL_OVERLAP_MS)).toISOString()
@@ -260,16 +268,22 @@ class CallService {
                 .order('created_at', { ascending: true });
 
             if (error) {
-                console.warn('[CallService] 📶 Signal poll failed:', error.message);
-                return [];
+                // Return null (not []) so the poll loop applies the exponential
+                // backoff. Returning [] used to look like "zero signals OK" and
+                // the caller would keep hammering the network at full speed,
+                // flooding the logs with "Signal poll failed".
+                const msg = (error as any)?.message || '';
+                const isNetworkError = /Network request failed|fetch|TypeError/i.test(msg);
+                if (!isNetworkError) {
+                    console.warn('[CallService] 📶 Signal poll error:', msg);
+                }
+                return null;
             }
 
             return data || [];
         } catch (err: any) {
             const isNetworkError = err?.message?.includes('Network request failed') || err?.message?.includes('fetch');
-            if (isNetworkError) {
-                console.warn('[CallService] 📶 Signaling poll: Network unreachable (retrying...)');
-            } else {
+            if (!isNetworkError) {
                 console.warn('[CallService] ⚠️ Signaling poll: Unexpected fetch exception:', err?.message || err);
             }
             return null; // Return null to distinguish error from zero signals
@@ -302,6 +316,15 @@ class CallService {
     private _pollCount = 0;
     private async pollForSignals() {
         if (!this.userId) return;
+
+        // Skip polling when NetInfo says we're offline — fetch would throw synchronously anyway.
+        if (!isOnlineCached()) return;
+
+        // Backoff window after recent failures. Captive-portal / DNS-failure cases leave
+        // NetInfo reporting "connected" while every request fails; without this, we'd
+        // hammer the proxy and direct endpoints every 3s and flood the logs.
+        if (Date.now() < this._nextAllowedPollAt) return;
+
         this._pollCount++;
 
         try {
@@ -309,13 +332,17 @@ class CallService {
 
             if (data === null) {
                 this._consecutivePollFailures++;
+                // Exponential backoff capped at 60s: 2s, 4s, 8s, 16s, 32s, 60s, 60s, ...
+                const backoffMs = Math.min(1000 * Math.pow(2, Math.min(this._consecutivePollFailures, 6)), 60000);
+                this._nextAllowedPollAt = Date.now() + backoffMs;
                 if (this._consecutivePollFailures <= 3) {
-                    console.warn(`[CallService] 📶 Poll returned null (network error #${this._consecutivePollFailures})`);
+                    console.warn(`[CallService] 📶 Poll returned null (network error #${this._consecutivePollFailures}) — backing off ${backoffMs}ms`);
                 }
                 return;
             }
 
             this._consecutivePollFailures = 0;
+            this._nextAllowedPollAt = 0;
 
             if (data.length > 0) {
                 // Pre-filter: check which signals are genuinely new (not yet in dedup set)
@@ -347,8 +374,10 @@ class CallService {
             }
         } catch (err: any) {
             this._consecutivePollFailures++;
+            const backoffMs = Math.min(1000 * Math.pow(2, Math.min(this._consecutivePollFailures, 6)), 60000);
+            this._nextAllowedPollAt = Date.now() + backoffMs;
             if (this._consecutivePollFailures <= 2 || this._consecutivePollFailures % 5 === 0) {
-                console.warn(`[CallService] Poll unexpected failure (#${this._consecutivePollFailures}):`, err?.message || err);
+                console.warn(`[CallService] Poll unexpected failure (#${this._consecutivePollFailures}) — backing off ${backoffMs}ms:`, err?.message || err);
             }
         }
     }
@@ -383,10 +412,11 @@ class CallService {
         if (this.signalPollInterval) clearInterval(this.signalPollInterval);
         if (this._fastPollInterval) clearInterval(this._fastPollInterval);
         
-        // RESET: Start polling slightly in the past (15s) to catch signals 
+        // RESET: Start polling slightly in the past (15s) to catch signals
         // sent during app initialization/transit.
         this.lastSignalPollAt = new Date(Date.now() - 3000).toISOString();
         this._consecutivePollFailures = 0;
+        this._nextAllowedPollAt = 0;
         
         if (this.userId) {
             console.log(`[CallService] 🔄 Starting signal polling for ${this.userId}`);
@@ -409,7 +439,22 @@ class CallService {
 
     private _subscribePersonalChannel(userId: string): void {
         if (this._connectionLimitHit) return;
-        
+
+        // Skip if offline — health check / network-return / app-state handlers
+        // can all reach this path; without the gate they pile attempts on top
+        // of each other while the device has no connectivity.
+        if (!isOnlineCached()) return;
+
+        // Dedupe concurrent attempts and throttle rapid retries. Channel
+        // CHANNEL_ERROR triggers a resubscribe via _reconnectIfNeeded and the
+        // health check fires every 30s — without this guard a flapping channel
+        // produces a tight resubscribe loop.
+        if (this._subscribingPersonalChannel) return;
+        const now = Date.now();
+        if (now - this._lastPersonalSubscribeAt < this.PERSONAL_SUBSCRIBE_MIN_GAP_MS) return;
+        this._lastPersonalSubscribeAt = now;
+        this._subscribingPersonalChannel = true;
+
         const normalizedId = normalizeId(userId);
         const channelName = `call_user_${normalizedId}`;
         console.log(`[CallService] 📡 Subscribing to personal channel: ${channelName}`);
@@ -434,9 +479,11 @@ class CallService {
             .on('broadcast', { event: 'signal' }, ({ payload }) => handleSignal(payload, 'signal'))
             .subscribe((status) => {
                 if (status === 'SUBSCRIBED') {
+                    this._subscribingPersonalChannel = false;
                     this.personalChannelSubscribed = true;
                     this.notifyStatus(true);
                 } else if (status === 'CHANNEL_ERROR' || status === 'CLOSED') {
+                    this._subscribingPersonalChannel = false;
                     this.personalChannelSubscribed = false;
                     this.notifyStatus(false);
                 }
@@ -752,6 +799,21 @@ class CallService {
 
         console.log(`[CallService] Initiating Supabase call to ${groupId ? 'Group ' + groupId : partnerId} in room ${roomId}`);
 
+        const participantIds = groupId
+            ? (
+                await supabase
+                    .from('group_members')
+                    .select('user_id')
+                    .eq('group_id', groupId)
+              ).data?.map((member: any) => normalizeId(member.user_id)).filter(Boolean) || []
+            : [normalizeId(this.userId!)].filter(Boolean);
+
+        const uniqueParticipants = Array.from(new Set([
+            ...participantIds,
+            normalizeId(this.userId!),
+            ...(partnerId ? [normalizeId(partnerId)] : []),
+        ].filter(Boolean)));
+
         const signal: CallSignal = {
             type: 'call-request',
             callId: roomId,
@@ -760,6 +822,7 @@ class CallService {
             groupId: groupId,
             callType,
             roomId,
+            participants: uniqueParticipants,
             callerName: this.currentUser?.name || '',
             callerAvatar: this.currentUser?.avatar || '',
             timestamp: new Date().toISOString()
@@ -781,16 +844,10 @@ class CallService {
         void (async () => {
             try {
                 if (groupId) {
-                    // Fetch group members to send individual requests (for push)
-                    const { data: members } = await supabase
-                        .from('group_members')
-                        .select('user_id')
-                        .eq('group_id', groupId);
-                    
-                    if (members) {
-                        for (const m of members) {
-                            if (m.user_id !== this.userId) {
-                                this.sendSignal({ ...signal, calleeId: m.user_id }).catch(console.error);
+                    if (uniqueParticipants.length > 0) {
+                        for (const userId of uniqueParticipants) {
+                            if (normalizeId(userId) !== normalizeId(this.userId)) {
+                                this.sendSignal({ ...signal, calleeId: userId }).catch(console.error);
                             }
                         }
                     }
@@ -1261,10 +1318,14 @@ class CallService {
 
     private async _recoverAfterNetworkReturn(): Promise<void> {
         console.log('[CallService] 🔄 Recovering after network return');
-        
+
+        // Drop any pending backoff so we poll immediately.
+        this._consecutivePollFailures = 0;
+        this._nextAllowedPollAt = 0;
+
         // Reconnect channels
         this._reconnectIfNeeded();
-        
+
         // Poll for missed signals
         await this.pollForSignals();
         
@@ -1300,7 +1361,14 @@ class CallService {
 
     private _checkChannelHealth(): void {
         if (!this.userId) return;
-        
+
+        // Skip reconnects while we know the device is offline. Without this,
+        // every health-check tick (every CHANNEL_HEALTH_CHECK_MS) tries to
+        // resubscribe, immediately fails, marks the channel unhealthy again,
+        // and re-runs — flooding logs and burning CPU during outages. The
+        // network-recovery handler kicks reconnect when connectivity returns.
+        if (!isOnlineCached()) return;
+
         // Check personal channel state
         if (_personalChannel) {
             const state = _personalChannel.state;
@@ -1310,7 +1378,7 @@ class CallService {
                 this._reconnectIfNeeded();
             }
         }
-        
+
         // Check room channel if active call
         if (this.currentRoomId && _roomChannel) {
             const state = _roomChannel.state;

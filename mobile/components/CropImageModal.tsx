@@ -5,7 +5,6 @@ import {
   Pressable,
   Text,
   Modal,
-  ActivityIndicator,
   ScrollView,
   PanResponder,
   GestureResponderEvent,
@@ -15,6 +14,7 @@ import {
   Dimensions,
   Platform
 } from 'react-native';
+import { SoulLoader } from './ui/SoulLoader';
 import { Image } from 'expo-image';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -336,7 +336,7 @@ export const CropImageModal: React.FC<Props> = ({ visible, imageUri, onClose, on
             </View>
           ) : (
             <View style={styles.loading}>
-              <ActivityIndicator size="large" color="#fff" />
+              <SoulLoader size={80} />
               <Text style={{ color: '#888', marginTop: 12 }}>Preparing image...</Text>
             </View>
           )}
@@ -360,7 +360,7 @@ export const CropImageModal: React.FC<Props> = ({ visible, imageUri, onClose, on
             </Pressable>
             <Pressable onPress={handleDone} style={styles.actionBtn} disabled={isProcessing}>
               {isProcessing ? (
-                <ActivityIndicator color="#fff" size="small" />
+                <SoulLoader size={30} />
               ) : (
                 <Text style={[styles.actionText, { fontWeight: '700' }]}>Done</Text>
               )}

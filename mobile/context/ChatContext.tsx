@@ -211,7 +211,12 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // FIX: Migrate legacy IDs (shri, hari) to UUIDs so history is preserved
       await offlineService.migrateLegacyIds(LEGACY_TO_UUID);
-      
+
+      // Backfill any historical drift between `groups` and `contacts` so that
+      // every group row carries is_group=1 and an avatar — even on installs
+      // that pre-date the sticky-flag SQL fix. Runs every startup; idempotent.
+      await offlineService.reconcileGroupsToContacts?.();
+
       // Perform one-time migration of old media files if needed (in background)
       soulFolderService.migrateFromOldCache().catch(() => {});
       soulFolderService.migrateOldStorageServiceFiles().catch(() => {});
@@ -308,13 +313,114 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
                            currentUser.username === 'shri' ||
                            currentUser.id?.startsWith('f00f00f0');
 
-    // Phase 1: Instant local load
-    await hydrateFromLocalDb(currentUser.id);
+    // Phase 1: Instant local load (force = true so newly added local rows
+    // such as a just-created group surface immediately).
+    await hydrateFromLocalDb(currentUser.id, force);
+
+    // Group sync runs on EVERY refresh (not behind the 5-min profile throttle).
+    // Without this, a quick reload throttles us out before group avatars
+    // ever reach SQLite — so the chat list keeps showing the placeholder
+    // for any group whose photo lives only in remote chat_groups.
+    //
+    // Local-first like WhatsApp: the avatar bytes get downloaded once into
+    // Soul/Media/Soul Profile Photos/ and the file path is stored in
+    // contacts.local_avatar_uri. Subsequent renders read straight from disk
+    // — no proxy, no network — and we only re-download when chat_groups
+    // updated_at changes (syncAvatar handles that comparison).
+    // Fire-and-forget so we don't block the profile path.
+    (async () => {
+      try {
+        const { data: memberships, error: membershipErr } = await supabase
+          .from('chat_group_members')
+          .select('group_id')
+          .eq('user_id', myUuid);
+        // Only prune when we have a clean response from the server (not a
+        // network error / RLS denial), otherwise an offline launch could
+        // wipe valid local groups.
+        if (!membershipErr) {
+          const remoteGroupIds = new Set((memberships || []).map((m: any) => m.group_id).filter(Boolean));
+          try {
+            const localContacts = await offlineService.getContacts();
+            const staleGroupIds = localContacts
+              .filter((c: any) => c.isGroup && !remoteGroupIds.has(c.id))
+              .map((c: any) => c.id);
+            for (const sid of staleGroupIds) {
+              try { await offlineService.deleteGroup?.(sid); } catch {}
+            }
+            if (staleGroupIds.length > 0) {
+              setContacts(prev => prev.filter(c => !staleGroupIds.includes(c.id)));
+              const refSet = new Set(staleGroupIds);
+              contactsRef.current = contactsRef.current.filter(c => !refSet.has(c.id));
+            }
+          } catch (pruneErr) {
+            console.warn('[ChatContext] Stale group prune failed:', pruneErr);
+          }
+        }
+        const groupIds = (memberships || []).map((m: any) => m.group_id).filter(Boolean);
+        if (groupIds.length === 0) return;
+        const { data: groupRows } = await supabase
+          .from('chat_groups')
+          .select('id, name, description, avatar_url, updated_at')
+          .in('id', groupIds);
+        if (!groupRows || groupRows.length === 0) return;
+        for (const g of groupRows) {
+          try {
+            await offlineService.saveGroup({
+              id: g.id,
+              name: g.name || 'Group',
+              description: g.description ?? undefined,
+              avatarUrl: g.avatar_url ?? undefined,
+              updatedAt: g.updated_at ?? new Date().toISOString(),
+            } as any);
+          } catch (gErr) {
+            console.warn('[ChatContext] saveGroup during sync failed for', g.id, gErr);
+          }
+        }
+        setContacts(prev => {
+          const merged = [...prev];
+          for (const g of groupRows) {
+            const idx = merged.findIndex(c => c.id === g.id);
+            const next: any = {
+              id: g.id,
+              name: g.name || 'Group',
+              avatar: g.avatar_url || (idx !== -1 ? merged[idx].avatar : '') || '',
+              avatarType: 'default',
+              status: 'offline',
+              lastMessage: idx !== -1 ? merged[idx].lastMessage : '',
+              unreadCount: idx !== -1 ? merged[idx].unreadCount : 0,
+              about: g.description ?? (idx !== -1 ? merged[idx].about : ''),
+              isGroup: true,
+              localAvatarUri: idx !== -1 ? merged[idx].localAvatarUri : undefined,
+            };
+            if (idx !== -1) merged[idx] = { ...merged[idx], ...next };
+            else merged.push(next);
+          }
+          contactsRef.current = merged;
+          return merged;
+        });
+
+        // Download each group avatar to the Soul folder (skips work when
+        // already cached at the same updated_at). Once on disk, the chat
+        // list reads from the file path directly — no network on subsequent
+        // app opens, just like WhatsApp.
+        for (const g of groupRows) {
+          if (!g.avatar_url) continue;
+          syncAvatar(g.id, g.avatar_url, g.updated_at).then(localUri => {
+            if (!localUri) return;
+            setContacts(prev => prev.map(c =>
+              c.id === g.id ? { ...c, localAvatarUri: localUri } : c
+            ));
+          }).catch(() => {});
+        }
+      } catch (e) {
+        console.warn('[ChatContext] Group sync error:', e);
+      }
+    })();
 
     // Phase 2: Background network sync with 5-minute throttling
     const now = Date.now();
     const FIVE_MINUTES = 5 * 60 * 1000;
-    
+
     // Read from AsyncStorage if ref is 0 (first run since app start)
     if (lastServerSyncRef.current === 0) {
       const saved = await AsyncStorage.getItem('ss_last_contact_sync');

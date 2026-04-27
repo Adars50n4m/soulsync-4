@@ -179,7 +179,7 @@ export const storageService = {
             signal: controller.signal,
         }).catch(err => {
             const domain = targetUrl.split('/')[2] || 'unknown';
-            console.error(`[StorageService] Fetch to ${targetUrl} failed:`, err);
+            console.warn(`[StorageService] Fetch to ${targetUrl} failed:`, err);
             throw new Error(`Conn error: ${err.message} [on ${domain}]`);
         });
         clearTimeout(timeoutId);
@@ -201,6 +201,10 @@ export const storageService = {
                 console.log(`[StorageService] Upload confirmed with key: ${key}`);
                 return key;
             }
+        }
+
+        if ((payload as any)?.ok === true && (payload as any)?.service) {
+            throw new Error('Upload proxy is configured, but media upload is not implemented on this server.');
         }
 
         throw new Error(payload.error || `Upload proxy failed with status ${response.status}`);
@@ -272,8 +276,7 @@ export const storageService = {
                     }
 
                     const shouldFallbackToServer =
-                        !SERVER_IS_PROXY &&
-                        (isNetworkLikeError(r2Error) || isPayloadTooLargeError(r2Error));
+                        isNetworkLikeError(r2Error) || isPayloadTooLargeError(r2Error);
 
                     if (!shouldFallbackToServer) {
                         throw r2Error;

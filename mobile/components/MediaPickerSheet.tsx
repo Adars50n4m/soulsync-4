@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
-import { View, Pressable, StyleSheet, Animated, PanResponder, useWindowDimensions, FlatList, Text, ActivityIndicator, Platform, ScrollView } from 'react-native';
+import { View, Pressable, StyleSheet, Animated, PanResponder, useWindowDimensions, FlatList, Text, Platform, ScrollView } from 'react-native';
+import { SoulLoader } from './ui/SoulLoader';
 import { Image } from 'expo-image';
 import GlassView from './ui/GlassView';
 import { hapticService } from '../services/HapticService';
@@ -381,7 +382,7 @@ export const MediaPickerSheet: React.FC<MediaPickerSheetProps> = ({
                 onEndReachedThreshold={0.5}
                 ListFooterComponent={() => isLowerLoading ? (
                     <View style={{ padding: 20 }}>
-                        <ActivityIndicator color={themeAccent} />
+                        <SoulLoader size={40} />
                     </View>
                 ) : null}
             />

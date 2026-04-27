@@ -163,7 +163,8 @@ const styles = StyleSheet.create({
     themeGrid: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 16,
+        // gap: 16,
+        marginHorizontal: -8, // compensates for child margins
     },
     themeCard: {
         width: '47%',
@@ -171,7 +172,7 @@ const styles = StyleSheet.create({
         borderRadius: 16,
         padding: 12,
         borderWidth: 2,
-        borderColor: 'transparent',
+        margin: 8,
     },
     themePreview: {
         height: 120,
@@ -182,11 +183,12 @@ const styles = StyleSheet.create({
     miniHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        // gap: 6,
+        marginBottom: 8,
         marginBottom: 8,
     },
     miniDot: {
-        width: 8,
+        marginRight: 6,
         height: 8,
         borderRadius: 4,
     },
@@ -203,21 +205,21 @@ const styles = StyleSheet.create({
     miniChatItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        // gap: 6,
     },
     miniAvatar: {
-        width: 16,
+        marginRight: 6,
         height: 16,
         borderRadius: 8,
         backgroundColor: 'rgba(255,255,255,0.1)',
     },
     miniLines: {
         flex: 1,
-        gap: 3,
+        // gap: 3,
     },
     miniLineLong: {
         height: 4,
-        backgroundColor: 'rgba(255,255,255,0.15)',
+        marginBottom: 3,
         borderRadius: 2,
         width: '80%',
     },
@@ -230,11 +232,11 @@ const styles = StyleSheet.create({
     miniNav: {
         flexDirection: 'row',
         justifyContent: 'center',
-        gap: 8,
+        // gap: 8,
         marginTop: 8,
     },
     miniNavDot: {
-        width: 6,
+        marginHorizontal: 4,
         height: 6,
         borderRadius: 3,
         backgroundColor: 'rgba(255,255,255,0.2)',
@@ -256,7 +258,7 @@ const styles = StyleSheet.create({
         gap: 6,
     },
     swatch: {
-        width: 20,
+        marginRight: 6,
         height: 20,
         borderRadius: 10,
     },

@@ -12,6 +12,7 @@ import {
   Platform,
   ScrollView,
 } from 'react-native';
+import BottomSheet, { BottomSheetFlatList } from '@gorhom/bottom-sheet';
 import { Svg, Circle } from 'react-native-svg';
 // FlashList available but FlatList used for stability
 // import { FlashList } from '@shopify/flash-list';
@@ -23,7 +24,6 @@ import GlassView from '../../components/ui/GlassView';
 import ConnectionBanner from '../../components/ConnectionBanner';
 import { SoulPullToRefresh } from '../../components/ui/SoulPullToRefresh';
 import ChatListItemSkeleton from '../../components/ui/ChatListItemSkeleton';
-import StatusRailSkeleton from '../../components/ui/StatusRailSkeleton';
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, {
   useSharedValue,
@@ -31,7 +31,6 @@ import Animated, {
   withSpring,
   withTiming,
   Easing,
-  SharedTransition,
   interpolate,
   Extrapolation,
   useDerivedValue,
@@ -51,6 +50,7 @@ import { chatTransitionState } from '../../services/chatTransitionState';
 import SwipeableRow from '../../components/ui/SwipeableRow';
 
 import { useApp } from '../../context/AppContext';
+import { supabase } from '../../config/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePresence } from '../../context/PresenceContext';
 import { useScrollMotion } from '../../components/navigation/ScrollMotionProvider';
@@ -65,9 +65,7 @@ import { Contact } from '../../types';
 import { NoteBubble } from '../../components/NoteBubble';
 import { NoteCreatorModal } from '../../components/NoteCreatorModal';
 import ChatListContextMenu from '../../components/chat/ChatListContextMenu';
-import { SUPPORT_SHARED_TRANSITIONS } from '../../constants/sharedTransitions';
 const DEFAULT_AVATAR = '';
-const ENABLE_SHARED_TRANSITIONS = SUPPORT_SHARED_TRANSITIONS;
 const HOME_MORPH_DURATION = 500;
 
 const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promise<string> => {
@@ -101,20 +99,6 @@ const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promi
 
 // ─── Stable style objects (extracted to avoid inline object creation in render) ──
 const typingStyle = { color: '#22c55e', fontWeight: '700' as const };
-const pillSharedTransition = SharedTransition.custom((values) => {
-  'worklet';
-  const liquidMorph = {
-    duration: 500,
-    easing: Easing.bezier(0.5, 0, 0.1, 1),
-  };
-  return {
-    originX: withTiming(values.targetOriginX, liquidMorph),
-    originY: withTiming(values.targetOriginY, liquidMorph),
-    width: withTiming(values.targetWidth, liquidMorph),
-    height: withTiming(values.targetHeight, liquidMorph),
-    borderRadius: withTiming(values.targetBorderRadius, liquidMorph),
-  };
-}).duration(500);
 const formatTime = (ts: string) => {
   if (!ts) return '';
   try {
@@ -148,14 +132,16 @@ interface ChatListItemProps {
   isPinned: boolean;
   isMuted: boolean;
   isClone?: boolean;
+  isSelected?: boolean;
 }
 
-const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, isTyping, getPresence, connectivity, homeMorphProgress, selectedPillId, unreadCount, isPinned, isMuted, isClone }: ChatListItemProps) => {
+const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, isTyping, getPresence, connectivity, homeMorphProgress, selectedPillId, unreadCount, isPinned, isMuted, isClone, isSelected }: ChatListItemProps) => {
   const scaleAnim = useSharedValue(1);
   const opacityAnim = useSharedValue(1);
   const itemRef = useRef<View>(null);
 
   const animatedStyle = useAnimatedStyle(() => {
+    'worklet';
     // Only apply shifts and scales to UNSELECTED items to clear them out.
     // The SELECTED item should stay perfectly still relative to its container for the Shared Transition.
     const isItemSelected = selectedPillId.value === item.id;
@@ -210,42 +196,33 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
       onPressOut={handlePressOut}
       style={styles.chatItem}
     >
-      {/* Outer morph target - ONLY handles the shared element transition */}
-      <Animated.View 
-        {...(ENABLE_SHARED_TRANSITIONS && !isClone
-          ? {
-              sharedTransitionTag: `pill-${item.id}`,
-              sharedTransitionStyle: pillSharedTransition,
-            }
-          : {})}
-        style={[styles.chatPillContainer]}
+      {/* Outer container — manual morph in chat screen handles the pill expansion */}
+      <View
+        style={[styles.chatPillContainer, isSelected && { borderWidth: 2, borderColor: '#ff4444', borderRadius: 36 }]}
       >
+        {isSelected && (
+          <View style={{ position: 'absolute', top: 8, right: 12, zIndex: 5, backgroundColor: '#ff4444', borderRadius: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center' }}>
+            <MaterialIcons name="check" size={16} color="#fff" />
+          </View>
+        )}
         {/* Inner container handles the press scale animation */}
         <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
           {/* Glass background — blur on iOS, solid on Android (flattened for perf) */}
           {Platform.OS === 'android' ? (
-            <View style={[StyleSheet.absoluteFill, { borderRadius: 36, backgroundColor: '#0A0A0A' }]} />
+            <View style={[StyleSheet.absoluteFill, { borderRadius: 32, backgroundColor: '#0A0A0A' }]} />
           ) : (
-            <View style={[StyleSheet.absoluteFill, { borderRadius: 36, overflow: 'hidden' }]}>
+            <View style={[StyleSheet.absoluteFill, { borderRadius: 32, overflow: 'hidden' }]}>
               <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
             </View>
           )}
         {/* Subtle dark tint overlay */}
         <View
-            style={[StyleSheet.absoluteFill, { borderRadius: 36, backgroundColor: 'rgba(0, 0, 0, 0.15)' }]}
+            style={[StyleSheet.absoluteFill, { borderRadius: 32, backgroundColor: 'rgba(0, 0, 0, 0.15)' }]}
         />
             
         {/* Content rendered safely as an overlay, decoupled from Reanimated's snapshot engine */}
         <View style={[styles.pillContent, { position: 'absolute', width: '100%', height: '100%', paddingHorizontal: 16 }]} pointerEvents="box-none">
-          <Animated.View 
-            {...(ENABLE_SHARED_TRANSITIONS && !isClone
-              ? {
-                  sharedTransitionTag: `pill-avatar-${item.id}`,
-                  sharedTransitionStyle: pillSharedTransition,
-                }
-              : {})}
-            style={styles.avatarContainer}
-          >
+          <View style={styles.avatarContainer}>
             <SoulAvatar
               uri={proxySupabaseUrl(item.avatar) || DEFAULT_AVATAR}
               localUri={item.localAvatarUri}
@@ -262,21 +239,12 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
                 }
               ]}
             />
-          </Animated.View>
+          </View>
 
           <View style={styles.chatContent}>
-            <Animated.View
-              {...(ENABLE_SHARED_TRANSITIONS && !isClone
-                ? {
-                    sharedTransitionTag: `pill-name-${item.id}`,
-                    sharedTransitionStyle: pillSharedTransition,
-                  }
-                : {})}
-            >
-              <Text style={styles.contactName}>
-                {item.name}
-              </Text>
-            </Animated.View>
+            <Text style={styles.contactName}>
+              {item.name}
+            </Text>
             <Text numberOfLines={1} style={isTyping ? [styles.lastMessage, typingStyle] : styles.lastMessage}>
               {isTyping ? 'Typing...' : (lastMsg.text || 'Start a conversation')}
             </Text>
@@ -296,15 +264,22 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
           </View>
         </View>
         </Animated.View>
-      </Animated.View>
+      </View>
     </Pressable>
   );
 }, (prevProps, nextProps) => {
-  // Custom comparison: only re-render when meaningful data changes
+  // Custom comparison: only re-render when meaningful data changes.
+  // Every prop that drives a visible difference MUST be listed here —
+  // omissions silently freeze the row. Past omissions:
+  //   - localAvatarUri/avatarType: blocked group avatar updates
+  //   - isSelected: blocked the multi-select checkmark on the 2nd+ tap
   return (
     prevProps.item.id === nextProps.item.id &&
     prevProps.item.name === nextProps.item.name &&
     prevProps.item.avatar === nextProps.item.avatar &&
+    prevProps.item.localAvatarUri === nextProps.item.localAvatarUri &&
+    prevProps.item.avatarType === nextProps.item.avatarType &&
+    prevProps.item.teddyVariant === nextProps.item.teddyVariant &&
     prevProps.item.status === nextProps.item.status &&
     prevProps.item.stories?.length === nextProps.item.stories?.length &&
     prevProps.item.stories?.some(s => !s.seen) === nextProps.item.stories?.some(s => !s.seen) &&
@@ -314,6 +289,7 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
     prevProps.unreadCount === nextProps.unreadCount &&
     prevProps.isPinned === nextProps.isPinned &&
     prevProps.isMuted === nextProps.isMuted &&
+    prevProps.isSelected === nextProps.isSelected &&
     prevProps.onSelect === nextProps.onSelect &&
     prevProps.getPresence(prevProps.item.id).isOnline === nextProps.getPresence(nextProps.item.id).isOnline
   );
@@ -333,25 +309,34 @@ const AnimatedMoreMenu = ({ router, isSearching }: { router: any, isSearching: b
     if (isSearching) setExpanded(false);
   }, [isSearching]);
 
-  const containerStyle = useAnimatedStyle(() => ({
-    width: interpolate(progress.value, [0, 1], [40, 200]),
-    height: interpolate(progress.value, [0, 1], [40, 270]),
-    borderRadius: interpolate(progress.value, [0, 1], [20, 16]),
-    backgroundColor: expanded ? 'rgba(0,0,0,0.6)' : 'transparent',
-  }));
+  const containerStyle = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      width: interpolate(progress.value, [0, 1], [40, 200]),
+      height: interpolate(progress.value, [0, 1], [40, 270]),
+      borderRadius: interpolate(progress.value, [0, 1], [20, 16]),
+      backgroundColor: expanded ? 'rgba(0,0,0,0.6)' : 'transparent',
+    };
+  });
 
-  const iconStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(progress.value, [0, 0.4], [1, 0]),
-    transform: [
-      { scale: interpolate(progress.value, [0, 0.5], [1, 0.2]) },
-      { rotate: `${interpolate(progress.value, [0, 1], [0, 90])}deg` }
-    ] as any,
-  }));
+  const iconStyle = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      opacity: interpolate(progress.value, [0, 0.4], [1, 0]),
+      transform: [
+        { scale: interpolate(progress.value, [0, 0.5], [1, 0.2]) },
+        { rotate: `${interpolate(progress.value, [0, 1], [0, 90])}deg` }
+      ] as any,
+    };
+  });
 
-  const menuStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(progress.value, [0.6, 1], [0, 1]),
-    transform: [{ translateY: interpolate(progress.value, [0, 1], [-10, 0]) }],
-  }));
+  const menuStyle = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      opacity: interpolate(progress.value, [0.6, 1], [0, 1]),
+      transform: [{ translateY: interpolate(progress.value, [0, 1], [-10, 0]) }],
+    };
+  });
 
   // Backdrop uses a simple fullscreen overlay instead of measuring Dimensions every render
   return (
@@ -493,10 +478,13 @@ const FilterPill = React.memo(({
   const scale = useSharedValue(1);
   const opacity = useSharedValue(1);
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-    opacity: opacity.value,
-  }));
+  const animatedStyle = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      transform: [{ scale: scale.value }],
+      opacity: opacity.value,
+    };
+  });
 
   const handlePressIn = () => {
     scale.value = withSpring(0.92, { damping: 12, stiffness: 300 });
@@ -568,6 +556,7 @@ export default function HomeScreen() {
     typingUsers,
     connectivity,
     isReady,
+    offlineService,
   } = useApp();
   const { getPresence } = usePresence();
   const navigation = useNavigation();
@@ -588,6 +577,44 @@ export default function HomeScreen() {
   const [mutedChatIds, setMutedChatIds] = useState<string[]>([]);
   const [showWelcomeAnim, setShowWelcomeAnim] = useState(false);
   const welcomeAnimRef = useRef<LottieView>(null);
+  const [selectedChatIds, setSelectedChatIds] = useState<string[]>([]);
+  const selectionMode = selectedChatIds.length > 0;
+  const toggleSelection = useCallback((id: string) => {
+    setSelectedChatIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  }, []);
+  const exitSelectionMode = useCallback(() => setSelectedChatIds([]), []);
+
+  const bulkDeleteSelected = useCallback(() => {
+    if (selectedChatIds.length === 0) return;
+    Alert.alert(
+      `Delete ${selectedChatIds.length} chat${selectedChatIds.length > 1 ? 's' : ''}?`,
+      'This removes the conversations from your device. Groups you created will also be deleted for everyone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const ids = [...selectedChatIds];
+            for (const id of ids) {
+              const c = contacts.find(x => x.id === id);
+              if (c?.isGroup) {
+                try {
+                  await supabase.from('chat_group_members').delete().eq('group_id', id).eq('user_id', currentUser?.id);
+                } catch {}
+                try { await supabase.from('chat_groups').delete().eq('id', id); } catch {}
+              } else {
+                try { await clearChatMessages?.(id); } catch {}
+              }
+              try { await offlineService?.deleteContact?.(id); } catch {}
+            }
+            try { await refreshLocalCache(true); } catch {}
+            setSelectedChatIds([]);
+          }
+        }
+      ]
+    );
+  }, [selectedChatIds, contacts, currentUser?.id, clearChatMessages, offlineService, refreshLocalCache]);
 
   // Load persisted pin/mute on mount
   useEffect(() => {
@@ -632,10 +659,11 @@ export default function HomeScreen() {
   const statusRefs = useRef<Record<string, any>>({});
   // Telegram-style: status rail collapses as user scrolls down
   const RAIL_FULL_HEIGHT = 200;  // Full status rail height (cards + padding)
-  const RAIL_COLLAPSED_HEIGHT = 75; // Collapsed: just circle avatars
-  const COLLAPSE_SCROLL = 120;   // Scroll distance to fully collapse
+  const RAIL_COLLAPSED_HEIGHT = 70; // Collapsed: just circle avatars
+  const COLLAPSE_SCROLL = 90;    // Scroll distance to fully collapse
 
   const statusRailAnimStyle = useAnimatedStyle(() => {
+    'worklet';
     const scrollY = scrollPosition.value;
     const collapseProgress = interpolate(scrollY, [0, COLLAPSE_SCROLL], [0, 1], Extrapolation.CLAMP);
     const railHeight = interpolate(collapseProgress, [0, 1], [RAIL_FULL_HEIGHT, RAIL_COLLAPSED_HEIGHT], Extrapolation.CLAMP);
@@ -654,6 +682,7 @@ export default function HomeScreen() {
   });
 
 const homeContentAnimatedStyle = useAnimatedStyle(() => {
+  'worklet';
   // Android: skip morph entirely — no translateY/scale per frame on the whole list
   if (Platform.OS === 'android') {
     return { transform: [], opacity: 1 };
@@ -670,13 +699,16 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
 
 
 
-  const homeBackdropAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: homeMorphProgress.value * 0.11,
-    transform: [
-      { scale: 1 + homeMorphProgress.value * 0.012 },
-      { translateY: homeMorphProgress.value * -10 },
-    ] as any,
-  }));
+  const homeBackdropAnimatedStyle = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      opacity: homeMorphProgress.value * 0.11,
+      transform: [
+        { scale: 1 + homeMorphProgress.value * 0.012 },
+        { translateY: homeMorphProgress.value * -10 },
+      ] as any,
+    };
+  });
 
   // Hide tab bar when fullscreen overlays are open — useLayoutEffect ensures
   // the tab bar is hidden before the first paint, avoiding a flash on Android
@@ -972,6 +1004,10 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
   };
 
   const handleUserSelect = useCallback((contact: Contact, y: number) => {
+    if (selectionMode) {
+      toggleSelection(contact.id);
+      return;
+    }
     chatTransitionState.setPhase('entering');
     selectedPillId.value = contact.id;
     homeMorphProgress.value = withTiming(1, {
@@ -985,26 +1021,74 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
         sourceY: y.toString(),
       }
     });
-  }, [homeMorphProgress, router]);
+  }, [homeMorphProgress, router, selectionMode, toggleSelection]);
 
-  // Telegram-style card morph: rectangle → circle avatar on scroll
-  const StatusCardWrapper = useCallback(({ children, index }: { children: React.ReactNode; index: number }) => {
+  // Telegram-style card morph: rectangular card → circular avatar on scroll.
+  // Card shrinks from 115×175 to 56×56 with circular borderRadius, the
+  // original chrome fades out, and an avatar overlay fades in centered.
+  const StatusCardWrapper = useCallback(({
+    children,
+    index,
+    avatarOverlay,
+  }: {
+    children: React.ReactNode;
+    index: number;
+    avatarOverlay?: React.ReactNode;
+  }) => {
     const cardStyle = useAnimatedStyle(() => {
+      'worklet';
       const p = railCollapseProgress.value;
-      const scale = interpolate(p, [0, 1], [1, 0.42], Extrapolation.CLAMP);
-      const borderRadius = interpolate(p, [0, 1], [28, 50], Extrapolation.CLAMP);
-      const translateX = interpolate(p, [0, 1], [0, -index * 42], Extrapolation.CLAMP);
-      const translateY = interpolate(p, [0, 1], [0, 10], Extrapolation.CLAMP);
-
+      const w = interpolate(p, [0, 1], [115, 56], Extrapolation.CLAMP);
+      const h = interpolate(p, [0, 1], [175, 56], Extrapolation.CLAMP);
+      // borderRadius 28 stays a perfect circle once width = 56 (28 = 56/2).
+      const borderRadius = 28;
+      // Width animation already reflows the FlatList tightly; nudge each
+      // subsequent card a few px left so circles overlap slightly.
+      const translateX = interpolate(p, [0, 1], [0, -index * 18], Extrapolation.CLAMP);
       return {
-        transform: [{ scale }, { translateX }, { translateY }] as any,
+        width: w,
+        height: h,
         borderRadius,
+        transform: [{ translateX }] as any,
+      };
+    });
+
+    const chromeStyle = useAnimatedStyle(() => {
+      'worklet';
+      const p = railCollapseProgress.value;
+      return {
+        opacity: interpolate(p, [0, 0.55], [1, 0], Extrapolation.CLAMP),
+      };
+    });
+
+    const overlayStyle = useAnimatedStyle(() => {
+      'worklet';
+      const p = railCollapseProgress.value;
+      return {
+        opacity: interpolate(p, [0.45, 1], [0, 1], Extrapolation.CLAMP),
+        transform: [
+          { scale: interpolate(p, [0.45, 1], [0.6, 1], Extrapolation.CLAMP) },
+        ] as any,
       };
     });
 
     return (
       <Animated.View style={[styles.statusCard, cardStyle as any]}>
-        {children}
+        <Animated.View style={[StyleSheet.absoluteFill, chromeStyle]}>
+          {children}
+        </Animated.View>
+        {avatarOverlay ? (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              StyleSheet.absoluteFillObject,
+              { alignItems: 'center', justifyContent: 'center' },
+              overlayStyle,
+            ]}
+          >
+            {avatarOverlay}
+          </Animated.View>
+        ) : null}
       </Animated.View>
     );
   }, [railCollapseProgress]);
@@ -1029,8 +1113,16 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
             ? 'Queued...'
             : 'My Status';
       
+      const myStatusOverlay = (
+        <SoulAvatar
+          uri={proxySupabaseUrl(currentUser?.avatar)}
+          size={48}
+          avatarType={currentUser?.avatarType as any}
+        />
+      );
+
       return (
-        <StatusCardWrapper index={index}>
+        <StatusCardWrapper index={index} avatarOverlay={myStatusOverlay}>
         <Pressable
           ref={ref => statusRefs.current['my-status'] = ref}
           style={{ flex: 1 }}
@@ -1144,8 +1236,25 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
     const hasStatus = !!latestStatus;
     const hasUnviewed = group?.hasUnviewed || false;
 
+    const contactOverlay = (
+      <LinearGradient
+        colors={hasUnviewed ? ['#8C0016', '#B5001E'] : ['rgba(255,255,255,0.2)', 'rgba(255,255,255,0.2)']}
+        style={{ width: 52, height: 52, borderRadius: 26, padding: 2, alignItems: 'center', justifyContent: 'center' }}
+      >
+        <View style={{ backgroundColor: '#000', borderRadius: 25, padding: 2 }}>
+          <SoulAvatar
+            uri={proxySupabaseUrl(contact.avatar)}
+            localUri={contact.localAvatarUri}
+            size={44}
+            avatarType={contact.avatarType as any}
+            teddyVariant={contact.teddyVariant as any}
+          />
+        </View>
+      </LinearGradient>
+    );
+
     return (
-      <StatusCardWrapper index={index}>
+      <StatusCardWrapper index={index} avatarOverlay={contactOverlay}>
       <Pressable
         key={contact.id}
         ref={ref => statusRefs.current[contact.id] = ref}
@@ -1172,11 +1281,11 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
                 style={[styles.storyRing, { padding: 2 }]}
               >
                 <View style={styles.storyRingInner}>
-                  <SoulAvatar 
-                    uri={proxySupabaseUrl(contact.avatar)} 
+                  <SoulAvatar
+                    uri={proxySupabaseUrl(contact.avatar)}
                     localUri={contact.localAvatarUri}
-                    size={42} 
-                    avatarType={contact.avatarType as any} 
+                    size={32}
+                    avatarType={contact.avatarType as any}
                     teddyVariant={contact.teddyVariant as any}
                     style={styles.avatarGlow}
                   />
@@ -1242,6 +1351,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
             unreadCount={item.unreadCount}
             isMuted={mutedChatIds.includes(item.id)}
             isPinned={pinnedChatIds.includes(item.id)}
+            isSelected={selectedChatIds.includes(item.id)}
             onLongPress={(chat, layout) => {
                 setSelectedChatForMenu(chat);
                 setMenuLayout(layout);
@@ -1256,7 +1366,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
         />
       </SwipeableRow>
     );
-  }, [lastMessagesMap, typingUsers, getPresence, connectivity, handleUserSelect, homeMorphProgress, archiveContact, clearChatMessages, unfriendContact, pinnedChatIds, mutedChatIds]);
+  }, [lastMessagesMap, typingUsers, getPresence, connectivity, handleUserSelect, homeMorphProgress, archiveContact, clearChatMessages, unfriendContact, pinnedChatIds, mutedChatIds, selectedChatIds]);
 
   const keyExtractor = useCallback((item: Contact) => item.id, []);
 
@@ -1280,10 +1390,22 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
   const renderHeader = useCallback(() => (
     <View style={styles.homeHeaderWrapper}>
       <View style={styles.topHeader}>
-        <View style={styles.headerActions}>
-          <Text style={styles.headerTitle}>Soul</Text>
-          <AnimatedMoreMenu router={router} isSearching={false} />
-        </View>
+        {selectionMode ? (
+          <View style={styles.headerActions}>
+            <Pressable onPress={exitSelectionMode} hitSlop={10} style={{ marginRight: 12 }}>
+              <MaterialIcons name="close" size={24} color="#fff" />
+            </Pressable>
+            <Text style={[styles.headerTitle, { fontSize: 20 }]}>{selectedChatIds.length} selected</Text>
+            <Pressable onPress={bulkDeleteSelected} hitSlop={10}>
+              <MaterialIcons name="delete-outline" size={24} color="#ff4444" />
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.headerActions}>
+            <Text style={styles.headerTitle}>Soul</Text>
+            <AnimatedMoreMenu router={router} isSearching={false} />
+          </View>
+        )}
       </View>
       <Animated.View style={[styles.statusRail, statusRailAnimStyle]}>
         <FlatList
@@ -1332,7 +1454,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
         </Pressable>
       </ScrollView>
     </View>
-  ), [contactsWithStories, renderStatusItem, statusRailAnimStyle, router, chatFilter]);
+  ), [contactsWithStories, renderStatusItem, statusRailAnimStyle, router, chatFilter, selectionMode, selectedChatIds.length, exitSelectionMode, bulkDeleteSelected]);
 
   return (
     <View style={styles.container}>
@@ -1345,9 +1467,14 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
           <Animated.View
             style={[styles.homeContent, homeContentAnimatedStyle]}
           >
+            {/* Header is rendered OUTSIDE the FlatList so the Soul title,
+                status rail, and filter pills stay pinned to the top while
+                the user scrolls. The rail still morphs to circles in place
+                because its animated style reads the FlatList's scroll
+                offset via shared values. */}
+            {renderHeader()}
             {!isReady ? (
                <View style={{ flex: 1 }}>
-                 <StatusRailSkeleton />
                  <View style={{ marginTop: 20 }}>
                    {[1, 2, 3, 4, 5, 6].map(i => <ChatListItemSkeleton key={i} />)}
                  </View>
@@ -1357,7 +1484,6 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
                 data={filteredVisibleContacts}
                 keyExtractor={keyExtractor}
                 renderItem={renderItem}
-                ListHeaderComponent={renderHeader()}
                 contentContainerStyle={styles.listContent}
                 bounces={false}
                 scrollEnabled={!isRefreshing}
@@ -1436,10 +1562,83 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
         onClose={() => setContextMenuVisible(false)}
         onAction={(action) => {
             if (!selectedChatForMenu) return;
+            const item = selectedChatForMenu;
             switch(action) {
-                case 'pin': togglePinChat(selectedChatForMenu.id); break;
-                case 'mute': toggleMuteChat(selectedChatForMenu.id); break;
-                case 'archive': archiveContact(selectedChatForMenu.id); break;
+                case 'pin': togglePinChat(item.id); break;
+                case 'mute': toggleMuteChat(item.id); break;
+                case 'archive': archiveContact(item.id); break;
+                case 'select': setSelectedChatIds([item.id]); break;
+                case 'delete': {
+                    if (item.isGroup) {
+                        // WhatsApp-style: Exit (always) + Delete (creator only).
+                        // We use deleteGroup (not deleteContact) so contacts + groups +
+                        // group_members all come out together — otherwise an orphan
+                        // groups row resurrects the tile on the next reconcile pass.
+                        const removeLocally = async () => {
+                            try { await offlineService?.deleteGroup?.(item.id); } catch {}
+                            try { await refreshLocalCache(true); } catch {}
+                        };
+                        Alert.alert(
+                            item.name || 'Group',
+                            'What do you want to do?',
+                            [
+                                { text: 'Cancel', style: 'cancel' },
+                                {
+                                    text: 'Exit Group',
+                                    style: 'destructive',
+                                    onPress: async () => {
+                                        try {
+                                            await supabase
+                                                .from('chat_group_members')
+                                                .delete()
+                                                .eq('group_id', item.id)
+                                                .eq('user_id', currentUser?.id);
+                                        } catch {}
+                                        await removeLocally();
+                                    }
+                                },
+                                {
+                                    text: 'Delete Group',
+                                    style: 'destructive',
+                                    onPress: async () => {
+                                        try {
+                                            const { error } = await supabase
+                                                .from('chat_groups')
+                                                .delete()
+                                                .eq('id', item.id);
+                                            if (error) {
+                                                Alert.alert('Cannot delete', error.message || 'Only the group creator can delete the group.');
+                                                return;
+                                            }
+                                        } catch (err: any) {
+                                            Alert.alert('Error', err?.message || 'Failed to delete group');
+                                            return;
+                                        }
+                                        await removeLocally();
+                                    }
+                                },
+                            ]
+                        );
+                    } else {
+                        Alert.alert(
+                            'Delete chat',
+                            `Delete chat with ${item.name}? This removes the conversation from your device.`,
+                            [
+                                { text: 'Cancel', style: 'cancel' },
+                                {
+                                    text: 'Delete',
+                                    style: 'destructive',
+                                    onPress: async () => {
+                                        try { await clearChatMessages?.(item.id); } catch {}
+                                        try { await offlineService?.deleteContact?.(item.id); } catch {}
+                                        try { await refreshLocalCache(true); } catch {}
+                                    }
+                                }
+                            ]
+                        );
+                    }
+                    break;
+                }
             }
         }}
         renderItem={() => {
@@ -1635,8 +1834,11 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 4,
   },
-  listContent: { paddingBottom: 100, paddingHorizontal: 4 },
-  chatItem: { marginBottom: 8, marginHorizontal: 16, borderRadius: 36, height: 72 },
+  // paddingBottom is intentionally large so the list is always scrollable
+  // past COLLAPSE_SCROLL (~90px) — drives the status-rail morph even when
+  // the user has only a handful of chats.
+  listContent: { paddingBottom: 600, paddingHorizontal: 4 },
+  chatItem: { marginBottom: 4, marginHorizontal: 10, borderRadius: 32, height: 64 },
   notePositioner: {
       position: 'absolute',
       top: -34,
@@ -1648,7 +1850,7 @@ const styles = StyleSheet.create({
   // Removed overflow: 'hidden' to let shared elements escape during flight
   chatPillContainer: { 
     flex: 1, 
-    borderRadius: 36, 
+    borderRadius: 32, 
     borderWidth: 1, 
     borderColor: Platform.OS === 'android' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(255, 255, 255, 0.22)', 
     overflow: 'hidden' 

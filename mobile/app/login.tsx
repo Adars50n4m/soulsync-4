@@ -16,11 +16,11 @@ import {
   KeyboardAvoidingView,
   Platform,
   StatusBar,
-  ActivityIndicator,
   Dimensions,
   LayoutAnimation,
   UIManager,
 } from 'react-native';
+import { SoulLoader } from '../components/ui/SoulLoader';
 import Svg, { Circle, Path, Ellipse, G } from 'react-native-svg';
 import { Feather, MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -564,7 +564,7 @@ export default function LoginScreen() {
           )}
 
           <TouchableOpacity style={[s.btn, { backgroundColor: themeAccent }]} onPress={isResetSuccess ? toggleForgotPassword : handleSubmit} disabled={status === 'loading'}>
-            {status === 'loading' ? <ActivityIndicator color="#fff" /> : <Text style={s.btnText}>{isLogin ? (isForgotPassword ? 'Reset' : 'Login') : 'Next'}</Text>}
+            {status === 'loading' ? <SoulLoader size={36} /> : <Text style={s.btnText}>{isLogin ? (isForgotPassword ? 'Reset' : 'Login') : 'Next'}</Text>}
           </TouchableOpacity>
 
           {((isLogin && !isForgotPassword) || (!isLogin && signupStep === 'email')) && (

@@ -14,30 +14,175 @@ import {
   Modal,
   TextInput,
   Animated,
+  BackHandler,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import Reanimated, {
+  useSharedValue as useRNSharedValue,
+  useAnimatedStyle as useRNAnimatedStyle,
+  withSpring as withRNSpring,
+  withTiming as withRNTiming,
+  interpolate as rnInterpolate,
+  Extrapolation as RNExtrapolation,
+  Easing as RNEasing,
+  useAnimatedScrollHandler,
+} from 'react-native-reanimated';
+import { documentDirectory, copyAsync, getInfoAsync, makeDirectoryAsync } from 'expo-file-system';
+import { SoulLoader } from '../../components/ui/SoulLoader';
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import GlassView from '../../components/ui/GlassView';
 import { SoulAvatar } from '../../components/SoulAvatar';
 import { useApp } from '../../context/AppContext';
-import { proxySupabaseUrl } from '../../config/api';
+import { proxySupabaseUrl, SERVER_URL, safeFetchJson } from '../../config/api';
 import { supabase } from '../../config/supabase';
 import { Contact } from '../../types';
 import { hapticService } from '../../services/HapticService';
 import * as Haptics from 'expo-haptics';
 import ProgressiveBlur from '../../components/chat/ProgressiveBlur';
 import { storageService } from '../../services/StorageService';
+import { profileAvatarTransitionState } from '../../services/profileAvatarTransitionState';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { BlurView } from 'expo-blur';
 import { SheetScreen } from 'react-native-sheet-transitions';
 
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const AVATAR_UPLOAD_TIMEOUT_MS = 45000;
+const GROUP_AVATAR_MORPH_DURATION = 500;
+const GROUP_AVATAR_MORPH_EASING = RNEasing.bezier(0.5, 0, 0.1, 1);
 
 export default function GroupInfoScreen() {
-    const { id } = useLocalSearchParams<{ id: string }>();
+    const params = useLocalSearchParams<{
+        id: string;
+        avatarX?: string;
+        avatarY?: string;
+        avatarW?: string;
+        avatarH?: string;
+    }>();
+    const id = params.id;
+    const transitionTargetId = useMemo(() => String(Array.isArray(id) ? id[0] : id || ''), [id]);
     const router = useRouter();
+    const navigation = useNavigation();
     const { contacts, currentUser, activeTheme, offlineService, refreshLocalCache } = useApp();
+
+    // Mirror the single-chat → profile morph: chat-header passes the measured
+    // avatar rect via avatarX/Y/W/H params; we expand that circle into the
+    // hero. Spring-driven, native-thread (Reanimated). Once at progress=1 the
+    // overlay fades out and the underlying hero takes over.
+    const avatarOrigin = useMemo(() => ({
+        x: Number(params.avatarX),
+        y: Number(params.avatarY),
+        width: Number(params.avatarW),
+        height: Number(params.avatarH),
+    }), [params.avatarX, params.avatarY, params.avatarW, params.avatarH]);
+    const hasAvatarMorph =
+        Number.isFinite(avatarOrigin.x) &&
+        Number.isFinite(avatarOrigin.y) &&
+        Number.isFinite(avatarOrigin.width) &&
+        Number.isFinite(avatarOrigin.height) &&
+        avatarOrigin.width > 0 &&
+        avatarOrigin.height > 0;
+
+    const heroMorphProgress = useRNSharedValue(hasAvatarMorph ? 0 : 1);
+    const chromeOpacity = useRNSharedValue(hasAvatarMorph ? 0 : 1);
+
+    useEffect(() => {
+        if (!transitionTargetId) {
+            return;
+        }
+
+        profileAvatarTransitionState.show(transitionTargetId);
+
+        return () => {
+            profileAvatarTransitionState.clear(transitionTargetId);
+        };
+    }, [transitionTargetId]);
+
+    useEffect(() => {
+        if (!hasAvatarMorph) {
+            heroMorphProgress.value = 1;
+            chromeOpacity.value = 1;
+            return;
+        }
+        heroMorphProgress.value = withRNSpring(1, {
+            damping: 26,
+            stiffness: 180,
+            mass: 1.1,
+        });
+        chromeOpacity.value = withRNTiming(1, {
+            duration: 250,
+            easing: RNEasing.out(RNEasing.cubic),
+        });
+    }, [hasAvatarMorph, heroMorphProgress, chromeOpacity]);
+
+    const scrollY = useRNSharedValue(0);
+    const onScroll = useAnimatedScrollHandler((event) => {
+        scrollY.value = event.contentOffset.y;
+    });
+
+    const heroChromeStyle = useRNAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: chromeOpacity.value,
+        };
+    });
+
+    const heroAnimatedStyle = useRNAnimatedStyle(() => {
+        'worklet';
+        const heroProgress = rnInterpolate(heroMorphProgress.value, [0, 1], [0, 1], RNExtrapolation.CLAMP);
+        const scrollParallax = rnInterpolate(
+            scrollY.value,
+            [-SCREEN_HEIGHT, 0, SCREEN_HEIGHT * 0.45],
+            [SCREEN_HEIGHT / 2, 0, -SCREEN_HEIGHT * 0.45 * 0.8],
+            RNExtrapolation.CLAMP
+        );
+        const scrollScale = rnInterpolate(
+            scrollY.value,
+            [-SCREEN_HEIGHT, 0],
+            [3, 1],
+            RNExtrapolation.CLAMP
+        );
+
+        if (!hasAvatarMorph) {
+            return {
+                transform: [
+                    { translateY: scrollParallax },
+                    { scale: scrollScale }
+                ] as any,
+                left: 0,
+                top: 0,
+                width: SCREEN_WIDTH,
+                height: SCREEN_HEIGHT * 0.45,
+                borderRadius: 0,
+            };
+        }
+
+        return {
+            left: rnInterpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.x, 0], RNExtrapolation.CLAMP),
+            top: rnInterpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.y, 0], RNExtrapolation.CLAMP),
+            width: rnInterpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.width, SCREEN_WIDTH], RNExtrapolation.CLAMP),
+            height: rnInterpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.height, SCREEN_HEIGHT * 0.45], RNExtrapolation.CLAMP),
+            borderRadius: rnInterpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.width / 2, 0], RNExtrapolation.CLAMP),
+            transform: [
+                { translateY: scrollParallax * heroProgress },
+                { scale: 1 + ((scrollScale - 1) * heroProgress) }
+            ] as any,
+        };
+    });
+
+
+    const pageBackgroundStyle = useRNAnimatedStyle(() => {
+        'worklet';
+        return {
+            // Delay the background "fog-in" until the avatar has expanded significantly
+            opacity: rnInterpolate(heroMorphProgress.value, [0, 0.4, 1], [0, 1, 1], RNExtrapolation.CLAMP),
+        };
+    });
+
+    const isClosingRef = React.useRef(false);
+    const allowNativePopRef = React.useRef(false);
 
     const [group, setGroup] = useState<any>(null);
     const [members, setMembers] = useState<any[]>([]);
@@ -50,43 +195,204 @@ export default function GroupInfoScreen() {
     const [editName, setEditName] = useState('');
     const [editDescription, setEditDescription] = useState('');
     const [isUpdating, setIsUpdating] = useState(false);
+    const [pendingAvatarUri, setPendingAvatarUri] = useState<string | null>(null);
 
-    const scrollY = React.useRef(new Animated.Value(0)).current;
+    const prepareAvatarForUpload = useCallback(async (uri: string) => {
+        const result = await ImageManipulator.manipulateAsync(
+            uri,
+            [{ resize: { width: 720 } }],
+            {
+                compress: 0.55,
+                format: ImageManipulator.SaveFormat.JPEG,
+            }
+        );
+        return result.uri;
+    }, []);
+
+    const persistLocalGroupAvatar = useCallback(async (uri: string) => {
+        const baseDir = `${documentDirectory || ''}Soul/Media/Soul Profile Photos/`;
+        const dirInfo = await getInfoAsync(baseDir);
+        if (!dirInfo.exists) {
+            await makeDirectoryAsync(baseDir, { intermediates: true });
+        }
+
+        const ext = uri.split('.').pop()?.split('?')[0] || 'jpg';
+        const targetUri = `${baseDir}group-${id}-${Date.now()}.${ext}`;
+        await copyAsync({ from: uri, to: targetUri });
+        return targetUri;
+    }, [id]);
+
+    const resolveGroupTable = useCallback(async () => {
+        // The active table is verified as 'chat_groups'
+        return 'chat_groups';
+    }, []);
+
+    const updateGroupViaServer = useCallback(async (patch: {
+        name?: string;
+        description?: string;
+        avatar_url?: string | null;
+    }) => {
+        return safeFetchJson<any>(`${SERVER_URL.replace(/\/$/, '')}/api/groups/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(patch),
+        });
+    }, [id]);
 
     const fetchGroupDetails = useCallback(async () => {
         if (!id) return;
         setLoading(true);
         try {
-            // 1. Fetch group metadata
+            const localContact = contacts.find(c => c.id === id);
+            if (localContact) {
+                setGroup(prev => ({
+                    ...(prev || {}),
+                    id,
+                    name: localContact.name,
+                    description: localContact.about ?? prev?.description ?? '',
+                    avatar_url: localContact.avatar ?? prev?.avatar_url ?? null,
+                    local_avatar_uri: localContact.localAvatarUri ?? prev?.local_avatar_uri ?? null,
+                }));
+                setEditName(localContact.name || '');
+                setEditDescription(localContact.about ?? '');
+            }
+
+            const [localGroup, localContactRow, localMemberRows] = await Promise.all([
+                offlineService?.getGroup?.(id).catch(() => null),
+                offlineService?.getContact?.(id).catch(() => null),
+                offlineService?.getGroupMembers?.(id).catch(() => []),
+            ]);
+
+            const localGroupSnapshot = localGroup || localContact;
+            if (localGroupSnapshot) {
+                setGroup(prev => ({
+                    ...(prev || {}),
+                    id,
+                    name: localGroupSnapshot.name,
+                    description: localGroupSnapshot.description ?? localGroupSnapshot.about ?? '',
+                    avatar_url: localGroupSnapshot.avatarUrl ?? localGroupSnapshot.avatar ?? prev?.avatar_url ?? null,
+                    local_avatar_uri: localContactRow?.localAvatarUri || localContact?.localAvatarUri || prev?.local_avatar_uri || null,
+                    creator_id: localGroupSnapshot.creatorId ?? prev?.creator_id ?? null,
+                }));
+                setEditName(localGroupSnapshot.name || '');
+                setEditDescription(localGroupSnapshot.description ?? localGroupSnapshot.about ?? '');
+            }
+
+            if (Array.isArray(localMemberRows) && localMemberRows.length > 0) {
+                const locallyHydratedMembers = localMemberRows.map((member: any) => {
+                    const isSelf = member.userId === currentUser?.id;
+                    const contact = contacts.find(c => c.id === member.userId);
+                    return {
+                        id: member.userId,
+                        role: member.role,
+                        name: isSelf ? (currentUser?.name || 'You') : (contact?.name || member.userId),
+                        username: isSelf ? currentUser?.username : undefined,
+                        avatar_url: isSelf ? (currentUser?.avatar || '') : (contact?.avatar || ''),
+                        local_avatar_uri: isSelf ? currentUser?.localAvatarUri : contact?.localAvatarUri,
+                        avatar_type: isSelf ? currentUser?.avatarType : contact?.avatarType,
+                        teddy_variant: isSelf ? currentUser?.teddyVariant : contact?.teddyVariant,
+                    };
+                });
+                setMembers(locallyHydratedMembers);
+                setIsAdmin(locallyHydratedMembers.some((m: any) => m.id === currentUser?.id && m.role === 'admin'));
+            }
+
+            const groupTable = await resolveGroupTable();
+            // 1. Fetch group metadata (maybeSingle so 0 rows isn't a hard error)
             const { data: groupData, error: groupError } = await supabase
-                .from('groups')
+                .from(groupTable)
                 .select('*')
                 .eq('id', id)
-                .single();
+                .maybeSingle();
 
             if (groupError) throw groupError;
-            setGroup(groupData);
-            setEditName(groupData.name);
-            setEditDescription(groupData.description || '');
+
+            let resolvedGroup: any = groupData;
+            if (!resolvedGroup) {
+                // Row not visible (RLS) or not found remotely — fall back to local mirror.
+                if (localGroup) {
+                    resolvedGroup = {
+                        id: localGroup.id,
+                        name: localGroup.name,
+                        description: localGroup.description ?? '',
+                        avatar_url: localGroup.avatarUrl ?? null,
+                        creator_id: localGroup.creatorId ?? null,
+                    };
+                } else if (localContact) {
+                    resolvedGroup = {
+                        id: localContact.id,
+                        name: localContact.name,
+                        description: localContact.about ?? '',
+                        avatar_url: localContact.avatar ?? null,
+                    };
+                }
+            }
+
+            if (!resolvedGroup) {
+                throw new Error('Group not found');
+            }
+
+            const localContactAvatar = localContactRow?.localAvatarUri || localContact?.localAvatarUri;
+            if (localContactAvatar) {
+                resolvedGroup = {
+                    ...resolvedGroup,
+                    local_avatar_uri: localContactAvatar,
+                };
+            }
+
+            // Sync remote → local. The chat list / chat header read from
+            // SQLite, so without this they stay on the placeholder for any
+            // group whose avatar was uploaded from a different device or
+            // before the local-tables wiring existed. Fire-and-forget; group
+            // info already has the data it needs in `resolvedGroup`.
+            if (groupData?.avatar_url || groupData?.name) {
+                offlineService?.saveGroup?.({
+                    id: id as string,
+                    name: groupData.name || resolvedGroup.name || 'Group',
+                    description: groupData.description ?? null,
+                    avatarUrl: groupData.avatar_url ?? null,
+                    creatorId: groupData.creator_id ?? null,
+                    createdAt: groupData.created_at ?? null,
+                    updatedAt: groupData.updated_at ?? new Date().toISOString(),
+                } as any).catch(() => {});
+                if (groupData.avatar_url) {
+                    offlineService?.upsertContactAvatar?.({
+                        id: id as string,
+                        name: groupData.name || resolvedGroup.name || 'Group',
+                        avatar: groupData.avatar_url,
+                        localAvatarUri: localContactAvatar ?? null,
+                        isGroup: true,
+                    }).catch(() => {});
+                }
+            }
+
+            setGroup(resolvedGroup);
+            setEditName(resolvedGroup.name || '');
+            setEditDescription(resolvedGroup.description || '');
 
             // 2. Fetch members with profiles
             const { data: memberData, error: memberError } = await supabase
-                .from('group_members')
+                .from('chat_group_members')
                 .select(`
                     user_id,
                     role,
                     joined_at,
-                    profiles:user_id (id, name, avatar_url, username, avatar_type, teddy_variant)
+                    profiles!chat_group_members_user_id_profiles_fkey (id, name, avatar_url, username, avatar_type, teddy_variant)
                 `)
                 .eq('group_id', id);
 
             if (memberError) throw memberError;
 
-            const formattedMembers = memberData.map((m: any) => ({
-                id: m.user_id,
-                role: m.role,
-                ...m.profiles
-            }));
+            const formattedMembers = memberData.map((m: any) => {
+                const isSelf = m.user_id === currentUser?.id;
+                const contact = contacts.find(c => c.id === m.user_id);
+                return {
+                    id: m.user_id,
+                    role: m.role,
+                    ...m.profiles,
+                    local_avatar_uri: isSelf ? currentUser?.localAvatarUri : contact?.localAvatarUri,
+                };
+            });
 
             setMembers(formattedMembers);
 
@@ -94,24 +400,97 @@ export default function GroupInfoScreen() {
             const myMember = formattedMembers.find(m => m.id === currentUser?.id);
             setIsAdmin(myMember?.role === 'admin');
 
-        } catch (error) {
-            console.error('[GroupInfo] Error fetching details:', error);
-            // Fallback to local data if available
+        } catch (error: any) {
+            const code = error?.code;
+            const isMissing = code === 'PGRST116' || /Group not found/i.test(error?.message || '');
+            if (isMissing) {
+                // Group truly gone — clean up local mirror and exit.
+                try { await offlineService?.deleteGroup?.(id as string); } catch {}
+                try { await refreshLocalCache?.(true); } catch {}
+                router.replace('/(tabs)');
+                return;
+            }
+            // Soft-fail to local mirror. console.warn instead of console.error so
+            // a network blip doesn't trigger the dev redbox — the screen still
+            // renders the group from local data and the user sees no breakage.
+            console.warn('[GroupInfo] Falling back to local data after fetch failure:', error?.message || error);
             const localGroup = contacts.find(c => c.id === id);
             if (localGroup) {
                 setGroup({
                     name: localGroup.name,
-                    avatar_url: localGroup.avatar
+                    avatar_url: localGroup.avatar,
+                    local_avatar_uri: localGroup.localAvatarUri,
                 });
             }
         } finally {
             setLoading(false);
         }
-    }, [id, currentUser?.id, contacts]);
+    }, [id, currentUser?.id, currentUser?.name, currentUser?.avatar, currentUser?.avatarType, currentUser?.teddyVariant, currentUser?.username, currentUser?.localAvatarUri, contacts, offlineService, resolveGroupTable, refreshLocalCache, router]);
 
     useEffect(() => {
         fetchGroupDetails();
     }, [fetchGroupDetails]);
+    
+    const finishDismiss = useCallback((action?: any) => {
+        allowNativePopRef.current = true;
+        if (action) {
+            navigation.dispatch(action);
+            return;
+        }
+        if (navigation.canGoBack()) {
+            navigation.goBack();
+        } else {
+            router.back();
+        }
+    }, [navigation, router]);
+
+    const runDismissAnimation = useCallback((action?: any) => {
+        if (isClosingRef.current) return;
+        isClosingRef.current = true;
+
+        if (transitionTargetId) {
+            profileAvatarTransitionState.dismiss(transitionTargetId);
+        }
+
+        if (!hasAvatarMorph) {
+            chromeOpacity.value = withRNTiming(0, { duration: 200 });
+            setTimeout(() => finishDismiss(action), 200);
+            return;
+        }
+
+        hapticService.selection();
+
+        chromeOpacity.value = withRNTiming(0, { duration: 250 });
+        heroMorphProgress.value = withRNTiming(0, {
+            duration: GROUP_AVATAR_MORPH_DURATION,
+            easing: GROUP_AVATAR_MORPH_EASING,
+        });
+        setTimeout(() => finishDismiss(action), GROUP_AVATAR_MORPH_DURATION);
+    }, [chromeOpacity, finishDismiss, hasAvatarMorph, heroMorphProgress, transitionTargetId]);
+
+    useEffect(() => {
+        const unsubscribe = navigation.addListener('beforeRemove' as any, (event: any) => {
+            if (!hasAvatarMorph || isClosingRef.current || allowNativePopRef.current) {
+                return;
+            }
+            event.preventDefault();
+            runDismissAnimation(event.data.action);
+        });
+
+        const backSubscription = BackHandler.addEventListener('hardwareBackPress', () => {
+            if (!hasAvatarMorph || isClosingRef.current) {
+                return false;
+            }
+            runDismissAnimation();
+            return true;
+        });
+
+        return () => {
+            allowNativePopRef.current = false;
+            unsubscribe();
+            backSubscription.remove();
+        };
+    }, [hasAvatarMorph, navigation, runDismissAnimation]);
 
     const handleRemoveMember = (memberId: string, name: string) => {
         Alert.alert(
@@ -125,7 +504,7 @@ export default function GroupInfoScreen() {
                     onPress: async () => {
                         try {
                             const { error } = await supabase
-                                .from('group_members')
+                                .from('chat_group_members')
                                 .delete()
                                 .eq('group_id', id)
                                 .eq('user_id', memberId);
@@ -147,7 +526,7 @@ export default function GroupInfoScreen() {
         const newRole = currentRole === 'admin' ? 'member' : 'admin';
         try {
             const { error } = await supabase
-                .from('group_members')
+                .from('chat_group_members')
                 .update({ role: newRole })
                 .eq('group_id', id)
                 .eq('user_id', memberId);
@@ -173,7 +552,7 @@ export default function GroupInfoScreen() {
                     onPress: async () => {
                         try {
                             const { error } = await supabase
-                                .from('group_members')
+                                .from('chat_group_members')
                                 .delete()
                                 .eq('group_id', id)
                                 .eq('user_id', currentUser?.id);
@@ -199,13 +578,25 @@ export default function GroupInfoScreen() {
         if (!editName.trim()) return;
         setIsUpdating(true);
         try {
-            const { error } = await supabase
-                .from('groups')
+            const groupTable = await resolveGroupTable();
+            let { error } = await supabase
+                .from(groupTable)
                 .update({
                     name: editName.trim(),
                     description: editDescription.trim(),
                 })
                 .eq('id', id);
+
+            if (error?.code === '42501') {
+                const serverResult = await updateGroupViaServer({
+                    name: editName.trim(),
+                    description: editDescription.trim(),
+                });
+                if (!serverResult.success) {
+                    throw new Error(serverResult.error || error.message || 'Failed to update group');
+                }
+                error = null;
+            }
 
             if (error) throw error;
 
@@ -230,43 +621,162 @@ export default function GroupInfoScreen() {
     };
 
     const handleUpdateGroupAvatar = async () => {
-        if (!isAdmin) return;
-        
-        const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.7,
-        });
+        console.log('[GroupInfo] 📸 Change Photo pressed', { isAdmin, isUpdating });
+        if (!isAdmin) {
+            console.warn('[GroupInfo] Press ignored — current user is not admin');
+            return;
+        }
+        if (isUpdating) {
+            console.warn('[GroupInfo] Press ignored — update already in progress');
+            return;
+        }
+
+        hapticService.impact(Haptics.ImpactFeedbackStyle.Light);
+
+        let result: ImagePicker.ImagePickerResult;
+        try {
+            const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (!permission.granted) {
+                Alert.alert('Permission needed', 'Please allow photo library access to change the group photo.');
+                return;
+            }
+
+            result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.7,
+            });
+        } catch (pickerErr: any) {
+            console.error('[GroupInfo] ImagePicker failed:', pickerErr?.message || pickerErr);
+            Alert.alert('Could not open photo library', pickerErr?.message || 'Please try again.');
+            return;
+        }
 
         if (result.canceled) return;
+        if (!result.assets?.[0]?.uri) {
+            console.warn('[GroupInfo] Picker returned no asset URI');
+            return;
+        }
 
         setIsUpdating(true);
+        setPendingAvatarUri(result.assets[0].uri);
+        let preparedUri = result.assets[0].uri;
         try {
-            const storageKey = await storageService.uploadImage(result.assets[0].uri, 'profiles', 'groups');
+            preparedUri = await prepareAvatarForUpload(result.assets[0].uri);
+            const storageKey = await Promise.race([
+                storageService.uploadImage(preparedUri, 'avatars', 'groups'),
+                new Promise<null>((_, reject) =>
+                    setTimeout(() => reject(new Error('Photo upload timed out. Please try again.')), AVATAR_UPLOAD_TIMEOUT_MS)
+                ),
+            ]);
             if (!storageKey) throw new Error('Failed to upload image');
 
-            const { error } = await supabase
-                .from('groups')
+            const groupTable = await resolveGroupTable();
+            let { error } = await supabase
+                .from(groupTable)
                 .update({ avatar_url: storageKey })
                 .eq('id', id);
 
+            if (error?.code === '42501') {
+                const serverResult = await updateGroupViaServer({ avatar_url: storageKey });
+                if (!serverResult.success) {
+                    throw new Error(serverResult.error || error.message || 'Failed to update group photo');
+                }
+                error = null;
+            }
+
             if (error) throw error;
 
-            setGroup({ ...group, avatar_url: storageKey });
-            
-            // Update local DB
-            await offlineService.saveContact({
-                id: id,
-                name: group.name,
-                avatar: storageKey,
-                isGroup: true
-            });
-            
+            // Persist the avatar bytes into our durable Soul Profile Photos
+            // directory. `prepareAvatarForUpload` returns a path inside the
+            // ImageManipulator cache, which the OS can wipe at any time. By
+            // copying to documentDirectory we guarantee the local DP keeps
+            // rendering even after cache eviction or app restart.
+            let durableLocalUri = preparedUri;
+            try {
+                durableLocalUri = await persistLocalGroupAvatar(preparedUri);
+            } catch (persistErr) {
+                console.warn('[GroupInfo] Could not copy avatar to durable storage, falling back to manipulator path:', persistErr);
+            }
+
+            setGroup((prev: any) => ({ ...(prev || {}), avatar_url: storageKey, local_avatar_uri: durableLocalUri }));
+            setPendingAvatarUri(null);
+
+            // Update local DB. We isolate this in its own try/catch — the cloud
+            // upload + Supabase row update have already succeeded by this point,
+            // so a transient SQLite BUSY ("database is locked") shouldn't surface
+            // as a hard failure to the user.
+            //
+            // We update BOTH local tables:
+            //   - `contacts` row → drives the chat list & chat header avatar.
+            //   - `groups` row   → drives the chat-screen group fallback path
+            //     (offlineService.getGroup) and the group-info hero image.
+            // Skipping the groups update was leaving the chat header stuck on
+            // the placeholder when it fell through to that fallback.
+            //
+            // For the contacts row we use the lightweight `upsertContactAvatar`
+            // path — it issues a single INSERT...ON CONFLICT statement (no
+            // BEGIN/COMMIT block, no prepared statement) so it survives long-
+            // running concurrent writes from ChatContext's bulk profile import.
+            try {
+                await offlineService.upsertContactAvatar({
+                    id: id as string,
+                    name: group?.name || 'Group',
+                    avatar: storageKey,
+                    localAvatarUri: durableLocalUri,
+                    isGroup: true,
+                });
+            } catch (dbErr: any) {
+                console.warn('[GroupInfo] Local cache save failed after successful cloud upload:', dbErr?.message || dbErr);
+            }
+            try {
+                await offlineService.saveGroup({
+                    id: id as string,
+                    name: group?.name || 'Group',
+                    description: group?.description ?? null,
+                    avatarUrl: storageKey,
+                    creatorId: group?.creator_id ?? group?.creatorId ?? null,
+                    createdAt: group?.created_at ?? group?.createdAt ?? null,
+                    updatedAt: new Date().toISOString(),
+                } as any);
+            } catch (groupDbErr: any) {
+                console.warn('[GroupInfo] Local groups table update failed:', groupDbErr?.message || groupDbErr);
+            }
+
             hapticService.notification(Haptics.NotificationFeedbackType.Success);
-            refreshLocalCache();
+            // Force re-hydration so the chat list / chat header pick up the new
+            // avatar immediately. Without `true` the hydration short-circuits on
+            // `isHydratedRef` and the contact stays stale until next app launch.
+            refreshLocalCache(true);
         } catch (err: any) {
-            Alert.alert('Error', err.message);
+            const fallbackPreviewUri = preparedUri || result.assets[0].uri;
+            setGroup((prev: any) => ({ ...(prev || {}), local_avatar_uri: fallbackPreviewUri }));
+            setPendingAvatarUri(null);
+            try {
+                let localAvatarUri = fallbackPreviewUri;
+                try {
+                    localAvatarUri = await persistLocalGroupAvatar(fallbackPreviewUri);
+                } catch {}
+                setGroup((prev: any) => ({ ...(prev || {}), local_avatar_uri: localAvatarUri }));
+                try {
+                    await offlineService.saveContact({
+                        id: id,
+                        name: group?.name || 'Group',
+                        avatar: group?.avatar_url ?? null,
+                        localAvatarUri,
+                        avatarUpdatedAt: new Date().toISOString(),
+                        isGroup: true
+                    });
+                } catch (dbErr: any) {
+                    console.warn('[GroupInfo] Local cache save failed in fallback path:', dbErr?.message || dbErr);
+                }
+                hapticService.notification(Haptics.NotificationFeedbackType.Success);
+                refreshLocalCache(true);
+                Alert.alert('Saved locally', 'Group photo was applied on this device. Cloud sync is unavailable right now.');
+            } catch {
+                Alert.alert('Error', err.message);
+            }
         } finally {
             setIsUpdating(false);
         }
@@ -283,7 +793,7 @@ export default function GroupInfoScreen() {
             }));
 
             const { error } = await supabase
-                .from('group_members')
+                .from('chat_group_members')
                 .insert(memberRows);
 
             if (error) throw error;
@@ -303,51 +813,65 @@ export default function GroupInfoScreen() {
         );
     };
 
+    const showMemberActions = useCallback((item: any) => {
+        if (!isAdmin || item.id === currentUser?.id) return;
+        hapticService.impact(Haptics.ImpactFeedbackStyle.Medium);
+        Alert.alert(
+            item.name || item.username || 'Member',
+            'Manage group member',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: item.role === 'admin' ? 'Dismiss as Admin' : 'Make Group Admin',
+                    onPress: () => handleToggleAdmin(item.id, item.role)
+                },
+                {
+                    text: 'Remove from Group',
+                    style: 'destructive',
+                    onPress: () => handleRemoveMember(item.id, item.name || item.username)
+                },
+            ]
+        );
+    }, [isAdmin, currentUser?.id]);
+
     const renderMemberItem = ({ item }: { item: any }) => (
-        <Pressable 
+        <Pressable
             style={styles.memberItem}
-            onLongPress={() => {
-                if (!isAdmin || item.id === currentUser?.id) return;
-                hapticService.impact(Haptics.ImpactFeedbackStyle.Medium);
-                Alert.alert(
-                    item.name || item.username,
-                    'Manage group member',
-                    [
-                        { text: 'Cancel', style: 'cancel' },
-                        { 
-                            text: item.role === 'admin' ? 'Dismiss as Admin' : 'Make Group Admin', 
-                            onPress: () => handleToggleAdmin(item.id, item.role) 
-                        },
-                        { 
-                            text: 'Remove from Group', 
-                            style: 'destructive', 
-                            onPress: () => handleRemoveMember(item.id, item.name || item.username) 
-                        },
-                    ]
-                );
-            }}
+            onLongPress={() => showMemberActions(item)}
         >
             <SoulAvatar 
                 uri={proxySupabaseUrl(item.avatar_url)} 
+                localUri={item.local_avatar_uri}
                 size={50} 
                 avatarType={item.avatar_type}
                 teddyVariant={item.teddy_variant}
             />
             <View style={styles.memberInfo}>
                 <View style={styles.memberNameRow}>
-                    <Text style={styles.memberName}>{item.id === currentUser?.id ? 'You' : (item.name || item.username)}</Text>
+                    <Text
+                        style={styles.memberName}
+                        numberOfLines={1}
+                    >
+                        {item.id === currentUser?.id ? 'You' : (item.name || item.username)}
+                    </Text>
                     {item.role === 'admin' && (
                         <View style={styles.adminBadge}>
                             <Text style={styles.adminBadgeText}>admin</Text>
                         </View>
                     )}
                 </View>
-                <Text style={styles.memberRole}>{item.role.toUpperCase()}</Text>
+                <Text style={styles.memberRole}>
+                    {item.id === currentUser?.id ? 'Group admin' : item.role === 'admin' ? 'Admin' : 'Member'}
+                </Text>
             </View>
             {isAdmin && item.id !== currentUser?.id && (
-                <View style={styles.memberMore}>
-                    <MaterialIcons name="more-vert" size={20} color="rgba(255,255,255,0.4)" />
-                </View>
+                <Pressable
+                    style={styles.memberMore}
+                    onPress={() => showMemberActions(item)}
+                    hitSlop={10}
+                >
+                    <MaterialIcons name="more-vert" size={20} color="rgba(255,255,255,0.6)" />
+                </Pressable>
             )}
         </Pressable>
     );
@@ -356,65 +880,124 @@ export default function GroupInfoScreen() {
         <SheetScreen 
             onClose={() => {
                 hapticService.impact(Haptics.ImpactFeedbackStyle.Light);
-                router.back();
+                if (!isClosingRef.current) {
+                    runDismissAnimation();
+                }
             }}
-            onCloseStart={() => hapticService.selection()}
+            onCloseStart={() => {
+                if (!isClosingRef.current) {
+                    hapticService.selection();
+                }
+            }}
             opacityOnGestureMove
+            disableRootScale
             customBackground={
-                <GlassView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
+                <Reanimated.View style={[StyleSheet.absoluteFill, pageBackgroundStyle]}>
+                    <GlassView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
+                </Reanimated.View>
             }
         >
             <View style={styles.container}>
 
 
             <StatusBar barStyle="light-content" translucent />
-            
-            {/* Hero Section */}
-            <Animated.View 
-                style={[
-                    styles.heroSection,
-                    {
-                        transform: [
-                            {
-                                scale: scrollY.interpolate({
-                                    inputRange: [-SCREEN_HEIGHT, 0],
-                                    outputRange: [3, 1],
-                                    extrapolate: 'clamp',
-                                }),
-                            },
-                        ],
-                    }
-                ]}
-            >
-                <Pressable onPress={handleUpdateGroupAvatar} disabled={!isAdmin || isUpdating}>
-                    <Image 
-                        source={{ uri: proxySupabaseUrl(group?.avatar_url) || 'https://via.placeholder.com/500?text=Group' }} 
-                        style={styles.heroImage}
-                    />
-                    {isAdmin && (
-                        <View style={styles.editAvatarOverlay}>
-                            <MaterialIcons name="photo-camera" size={24} color="#fff" />
+
+            <View style={styles.heroBackgroundContainer}>
+                <Reanimated.View
+                    style={[
+                        styles.heroSection,
+                        heroAnimatedStyle
+                    ]}
+                >
+                    {group?.local_avatar_uri || group?.avatar_url ? (
+                        <Reanimated.Image
+                            source={{ uri: proxySupabaseUrl(group?.local_avatar_uri || group?.avatar_url) }}
+                            style={[styles.heroImage]}
+                            resizeMode="cover"
+                        />
+                    ) : (
+                        <View style={styles.placeholderIconContainer}>
+                            <LinearGradient
+                                colors={['#222', '#111']}
+                                style={StyleSheet.absoluteFill}
+                            >
+                                <View style={styles.placeholderIconContainer}>
+                                    <MaterialIcons name="group" size={120} color="rgba(255,255,255,0.15)" />
+                                </View>
+                            </LinearGradient>
                         </View>
                     )}
-                </Pressable>
+                </Reanimated.View>
                 <ProgressiveBlur position="bottom" height={200} intensity={60} tint="dark" />
-            </Animated.View>
+            </View>
 
-            <View style={styles.header}>
-                <Pressable onPress={() => router.back()} style={styles.headerButton}>
+            {/* Center "Change Photo" sits OUTSIDE the hero so its Pressable lands above
+                the ScrollView (which overlaps the hero via negative marginTop). The
+                Animated wrapper applies the same translateY as the hero so it still
+                scrolls together with the photo. */}
+            {isAdmin && !(pendingAvatarUri || group?.local_avatar_uri || group?.avatar_url) && (
+                <Reanimated.View
+                    pointerEvents="box-none"
+                    style={[
+                        styles.floatingPhotoButton,
+                        heroAnimatedStyle,
+                        heroChromeStyle,
+                    ]}
+                >
+                    <Pressable
+                        onPress={handleUpdateGroupAvatar}
+                        disabled={isUpdating}
+                        hitSlop={16}
+                    >
+                        <View style={styles.editAvatarOverlay}>
+                            <View style={[styles.cameraIconCircle, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
+                                <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+                                <MaterialIcons name="photo-camera" size={28} color="#fff" />
+                            </View>
+                            <Text style={styles.changePhotoText}>
+                                {isUpdating ? 'Updating...' : 'Change Photo'}
+                            </Text>
+                            {isUpdating && (
+                                <View style={StyleSheet.absoluteFill}>
+                                    <SoulLoader size={100} />
+                                </View>
+                            )}
+                        </View>
+                    </Pressable>
+                </Reanimated.View>
+            )}
+
+            {isAdmin && (pendingAvatarUri || group?.local_avatar_uri || group?.avatar_url) && (
+                <Reanimated.View style={[styles.cornerPhotoButton, heroChromeStyle]}>
+                    <Pressable
+                        onPress={handleUpdateGroupAvatar}
+                        disabled={isUpdating}
+                        style={StyleSheet.absoluteFill}
+                        hitSlop={16}
+                    >
+                        <GlassView intensity={30} tint="dark" style={styles.headerIconGlass}>
+                            {isUpdating ? (
+                                <SoulLoader size={20} />
+                            ) : (
+                                <MaterialIcons name="photo-camera" size={20} color="#fff" />
+                            )}
+                        </GlassView>
+                    </Pressable>
+                </Reanimated.View>
+            )}
+
+            <Reanimated.View style={[styles.header, heroChromeStyle]}>
+                <Pressable onPress={() => runDismissAnimation()} style={styles.headerButton}>
                     <GlassView intensity={30} tint="dark" style={styles.headerIconGlass}>
                         <MaterialIcons name="arrow-back-ios" size={20} color="#fff" style={{ marginLeft: 8 }} />
                     </GlassView>
                 </Pressable>
-            </View>
+            </Reanimated.View>
 
-            <Animated.ScrollView 
-                style={styles.scrollView} 
+            <Reanimated.ScrollView 
+                style={[styles.scrollView, heroChromeStyle]} 
                 showsVerticalScrollIndicator={false}
-                onScroll={Animated.event(
-                    [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-                    { useNativeDriver: true }
-                )}
+                onScroll={onScroll}
                 scrollEventThrottle={16}
             >
                 <View style={styles.headerSpacer} />
@@ -514,8 +1097,9 @@ export default function GroupInfoScreen() {
                                         style: 'destructive',
                                         onPress: async () => {
                                             try {
+                                                const groupTable = await resolveGroupTable();
                                                 const { error } = await supabase
-                                                    .from('groups')
+                                                    .from(groupTable)
                                                     .delete()
                                                     .eq('id', id);
 
@@ -540,7 +1124,7 @@ export default function GroupInfoScreen() {
 
                     <View style={{ height: 100 }} />
                 </View>
-            </Animated.ScrollView>
+            </Reanimated.ScrollView>
 
             {/* Add Member Modal */}
             <Modal
@@ -613,8 +1197,23 @@ export default function GroupInfoScreen() {
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#000' },
-    heroSection: { height: SCREEN_HEIGHT * 0.45, position: 'relative' },
+    container: { flex: 1, backgroundColor: 'transparent' },
+    heroBackgroundContainer: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: SCREEN_HEIGHT * 0.45,
+        zIndex: 0,
+    },
+    heroSection: { 
+        height: SCREEN_HEIGHT * 0.45, 
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        zIndex: 0,
+        overflow: 'hidden',
+    },
     heroImage: { width: '100%', height: '100%' },
     header: {
         position: 'absolute',
@@ -631,13 +1230,12 @@ const styles = StyleSheet.create({
     groupName: { color: '#fff', fontSize: 32, fontWeight: '800', letterSpacing: -0.5 },
     groupSubTitle: { color: 'rgba(255,255,255,0.6)', fontSize: 16, marginTop: 4, fontWeight: '600' },
     headerSpacer: { height: SCREEN_HEIGHT * 0.35 },
-    scrollView: { flex: 1, marginTop: -SCREEN_HEIGHT * 0.45 },
+    scrollView: { flex: 1 },
     content: { padding: 20, paddingTop: 40 },
-    editAvatarOverlay: { 
-        ...StyleSheet.absoluteFillObject, 
-        backgroundColor: 'rgba(0,0,0,0.3)', 
-        alignItems: 'center', 
-        justifyContent: 'center' 
+    editAvatarOverlay: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center'
     },
     editInput: {
         backgroundColor: 'rgba(255,255,255,0.05)',
@@ -652,32 +1250,98 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'flex-end',
         marginTop: 15,
-        gap: 12,
+        // gap: 12,
     },
     cancelBtn: { padding: 10 },
     cancelBtnText: { color: 'rgba(255,255,255,0.5)', fontWeight: '600' },
-    saveBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 },
+    saveBtn: { 
+        marginLeft: 12,
+        paddingHorizontal: 20, 
+        paddingVertical: 10, 
+        borderRadius: 8 
+    },
     saveBtnText: { color: '#fff', fontWeight: '700' },
     sectionCard: { borderRadius: 20, padding: 20, marginBottom: 20, overflow: 'hidden' },
     sectionTitle: { color: 'rgba(255,255,255,0.4)', fontSize: 12, fontWeight: '800', letterSpacing: 1, marginBottom: 12 },
     descriptionText: { color: '#fff', fontSize: 15, lineHeight: 22 },
     membersSection: { marginBottom: 20 },
-    sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, paddingHorizontal: 5 },
-    addMemberBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    addMemberText: { fontWeight: '700', fontSize: 14 },
+    sectionHeader: { 
+        flexDirection: 'row', 
+        justifyContent: 'space-between', 
+        alignItems: 'center', 
+        marginBottom: 12, 
+        paddingHorizontal: 5 
+    },
+    addMemberBtn: { 
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        // gap: 6 
+    },
+    addMemberText: { fontWeight: '700', fontSize: 14, marginLeft: 6 },
     membersCard: { borderRadius: 20, overflow: 'hidden' },
-    memberItem: { flexDirection: 'row', alignItems: 'center', padding: 15 },
-    memberInfo: { flex: 1, marginLeft: 15 },
-    memberNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    memberName: { color: '#fff', fontSize: 16, fontWeight: '600' },
-    adminBadge: { backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-    adminBadgeText: { color: 'rgba(255,255,255,0.6)', fontSize: 10, fontWeight: '700' },
-    memberRole: { color: 'rgba(255,255,255,0.4)', fontSize: 11, fontWeight: '800', marginTop: 2 },
-    memberMore: { padding: 5 },
+    memberItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 14,
+        paddingHorizontal: 18,
+        minHeight: 78,
+    },
+    memberInfo: { 
+        flex: 1, 
+        marginLeft: 15,
+        justifyContent: 'center',
+        minWidth: 0,
+    },
+    memberNameRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        paddingRight: 12,
+    },
+    memberName: {
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: '700',
+        flexShrink: 1,
+        marginRight: 8,
+    },
+    adminBadge: { 
+        backgroundColor: 'rgba(255,255,255,0.1)', 
+        paddingHorizontal: 8, 
+        paddingVertical: 4, 
+        borderRadius: 999,
+        alignSelf: 'flex-start',
+    },
+    adminBadgeText: {
+        color: 'rgba(255,255,255,0.72)',
+        fontSize: 11,
+        fontWeight: '700',
+        textTransform: 'uppercase',
+        letterSpacing: 0.4,
+    },
+    memberRole: {
+        color: 'rgba(255,255,255,0.5)',
+        fontSize: 13,
+        fontWeight: '500',
+        marginTop: 4,
+    },
+    memberMore: {
+        width: 36,
+        height: 36,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginLeft: 8,
+    },
     divider: { height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginLeft: 80 },
     dangerButton: { borderRadius: 16, overflow: 'hidden' },
-    dangerButtonContent: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 16, gap: 12 },
-    dangerButtonText: { color: '#ff4444', fontSize: 16, fontWeight: '700' },
+    dangerButtonContent: { 
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        paddingHorizontal: 20, 
+        paddingVertical: 16, 
+        // gap: 12 
+    },
+    dangerButtonText: { color: '#ff4444', fontSize: 16, fontWeight: '700', marginLeft: 12 },
     
     // Modal & Contact Picker
     modalContainer: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
@@ -695,4 +1359,27 @@ const styles = StyleSheet.create({
     contactInfo: { flex: 1, marginLeft: 15 },
     contactName: { color: '#fff', fontSize: 16, fontWeight: '600' },
     checkbox: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
+    heroPressable: { flex: 1 },
+    floatingPhotoButton: {
+        position: 'absolute',
+        top: SCREEN_HEIGHT * 0.18,
+        left: 0,
+        right: 0,
+        zIndex: 30,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    placeholderIconContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', opacity: 0.5 },
+    cameraIconCircle: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+    changePhotoText: { color: '#fff', fontSize: 12, fontWeight: '700', marginTop: 12, textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
+    cornerPhotoButton: {
+        position: 'absolute',
+        top: Platform.OS === 'ios' ? 50 : 30,
+        right: 20,
+        zIndex: 30,
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        overflow: 'hidden',
+    },
 });

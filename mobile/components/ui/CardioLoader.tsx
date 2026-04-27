@@ -59,6 +59,7 @@ export const CardioLoader = ({
   // 2. A bright foreground pulse that moves along the dash
   
   const animatedProps = useAnimatedProps(() => {
+    'worklet';
     // Length of the path is roughly 150 units for this data
     const length = 160; 
     return {

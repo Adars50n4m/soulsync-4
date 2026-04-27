@@ -169,9 +169,21 @@ const ChatListContextMenu = ({
                                 </Text>
                             </Pressable>
 
+                            <Pressable style={ChatStyles.contextActionBtn} onPress={() => { onAction('select'); handleClose(); }}>
+                                <MaterialIcons name="check-circle-outline" size={22} color="#fff" />
+                                <Text style={ChatStyles.contextActionText}>Select</Text>
+                            </Pressable>
+
                             <Pressable style={ChatStyles.contextActionBtn} onPress={() => { onAction('archive'); handleClose(); }}>
                                 <MaterialIcons name="archive" size={22} color="#ff4444" />
                                 <Text style={[ChatStyles.contextActionText, { color: '#ff4444' }]}>Archive</Text>
+                            </Pressable>
+
+                            <Pressable style={ChatStyles.contextActionBtn} onPress={() => { onAction('delete'); handleClose(); }}>
+                                <MaterialIcons name="delete-outline" size={22} color="#ff4444" />
+                                <Text style={[ChatStyles.contextActionText, { color: '#ff4444' }]}>
+                                    {chatItem?.isGroup ? 'Exit / Delete Group' : 'Delete Chat'}
+                                </Text>
                             </Pressable>
 
                             <Pressable style={[ChatStyles.contextActionBtn, { borderBottomWidth: 0 }]} onPress={handleClose}>

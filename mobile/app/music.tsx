@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react';
 import {
     View, Text, Image, TextInput, Pressable, StyleSheet, StatusBar,
-    FlatList, useWindowDimensions, ActivityIndicator, ImageBackground,
+    FlatList, useWindowDimensions, ImageBackground,
     KeyboardAvoidingView, Platform, Keyboard, ScrollView
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 
 import { useRouter, useNavigation } from 'expo-router';
 import GlassView from '../components/ui/GlassView';
+import { SoulLoader } from '../components/ui/SoulLoader';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
 import Animated, { 
@@ -144,7 +145,7 @@ const ListHeader = memo(({
                     {/* Scrollable lyrics */}
                     {lyricsLoading ? (
                         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                            <ActivityIndicator color={magentaColor} size="small" />
+                            <SoulLoader size={60} />
                         </View>
                     ) : lyricsLines.length === 0 ? (
                         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -735,7 +736,7 @@ export default function MusicScreen() {
                                 ListFooterComponent={
                                     <View style={{ paddingBottom: 120 }}>
                                         {isLoading && activeTab === 'music' && songs.length > 0 && (
-                                            <ActivityIndicator color={themeAccent} style={{ marginVertical: 20 }} />
+                                            <SoulLoader size={80} />
                                         )}
                                         {/* Recommended Songs Section */}
                                         {recommendedSongs.length > 0 && activeTab === 'music' && !searchQuery && (
@@ -768,7 +769,9 @@ export default function MusicScreen() {
                                     </View>
                                 }
                                 ListEmptyComponent={isLoading && activeTab === 'music' && songs.length === 0 ? (
-                                    <ActivityIndicator color={themeAccent} style={{ marginTop: 20 }} />
+                                    <View style={{ marginTop: 50, alignItems: 'center' }}>
+                                        <SoulLoader size={200} />
+                                    </View>
                                 ) : activeTab === 'queue' && queue.length === 0 ? (
                                     <View style={{ alignItems: 'center', marginTop: 40 }}>
                                         <MaterialIcons name="queue-music" size={40} color="rgba(255,255,255,0.1)" />

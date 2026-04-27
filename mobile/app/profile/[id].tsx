@@ -15,6 +15,7 @@ import { proxySupabaseUrl } from '../../config/api';
 import { useApp } from '../../context/AppContext';
 import { useCall } from '../../context/CallContext';
 import { offlineService } from '../../services/LocalDBService';
+import { profileAvatarTransitionState } from '../../services/profileAvatarTransitionState';
 import { normalizeId, getSuperuserName, getSuperuserHandle } from '../../utils/idNormalization';
 import {
     getProfileAvatarTransitionTag,
@@ -31,12 +32,16 @@ import { useRouter } from 'expo-router';
 import { hapticService } from '../../services/HapticService';
 import * as Haptics from 'expo-haptics';
 
+const PROFILE_AVATAR_MORPH_DURATION = 500;
+const PROFILE_AVATAR_MORPH_EASING = Easing.bezier(0.5, 0, 0.1, 1);
+
 
 
 const MediaGalleryItem = ({ item, activeCategory, morphProgress }: any) => {
     const { width, height } = useWindowDimensions();
 
     const itemStyle = useAnimatedStyle(() => {
+        'worklet';
         return {
             transform: [
                 { scale: interpolate(morphProgress.value, [0, 1], [0.1, 1]) },
@@ -102,6 +107,18 @@ export default function ProfileScreen() {
         }
     }, [id, isOwnProfile, fetchOtherUserProfile]);
 
+    useEffect(() => {
+        if (!id) {
+            return;
+        }
+
+        profileAvatarTransitionState.show(id);
+
+        return () => {
+            profileAvatarTransitionState.clear(id);
+        };
+    }, [id]);
+
     const [activeCategory, setActiveCategory] = useState<'photos' | 'videos' | 'audio' | 'docs'>('photos');
     const [viewerVisible, setViewerVisible] = useState(false);
     const [selectedIndex, setSelectedIndex] = useState(0);
@@ -149,29 +166,31 @@ export default function ProfileScreen() {
     });
 
     const headerAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        const heroProgress = interpolate(heroMorphProgress.value, [0, 1], [0, 1], Extrapolation.CLAMP);
+        const scrollTranslateY = interpolate(
+            scrollY.value,
+            [-height, 0, height],
+            [-height / 2, 0, -height * 0.8],
+            Extrapolation.CLAMP
+        );
+        const scrollScale = interpolate(
+            scrollY.value,
+            [-height, 0],
+            [2, 1],
+            Extrapolation.CLAMP
+        );
+
         return {
             transform: [
-                {
-                    translateY: interpolate(
-                        scrollY.value,
-                        [-height, 0, height],
-                        [-height / 2, 0, -height * 0.8],
-                        Extrapolation.CLAMP
-                    )
-                },
-                {
-                    scale: interpolate(
-                        scrollY.value,
-                        [-height, 0],
-                        [2, 1],
-                        Extrapolation.CLAMP
-                    )
-                }
+                { translateY: scrollTranslateY * heroProgress },
+                { scale: 1 + ((scrollScale - 1) * heroProgress) }
             ] as any,
         };
     });
 
     const heroEntryAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
         if (!hasAvatarMorph) {
             return {
                 left: 0,
@@ -194,17 +213,24 @@ export default function ProfileScreen() {
         };
     });
 
-    const chromeAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: headerOpacity.value,
-        transform: [{ translateY: interpolate(headerOpacity.value, [0, 1], [16, 0]) }],
-    }));
+    const chromeAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: headerOpacity.value,
+            transform: [{ translateY: interpolate(headerOpacity.value, [0, 1], [16, 0]) }],
+        };
+    });
 
-    const scrollDismissAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: headerOpacity.value,
-        transform: [{ translateY: interpolate(headerOpacity.value, [0, 1], [32, 0]) }],
-    }));
+    const scrollDismissAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: headerOpacity.value,
+            transform: [{ translateY: interpolate(headerOpacity.value, [0, 1], [32, 0]) }],
+        };
+    });
 
     const contentAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
         return {
             transform: [
                 { translateY: 0 }
@@ -212,21 +238,31 @@ export default function ProfileScreen() {
         };
     });
 
-    const bgMorphStyle = useAnimatedStyle(() => ({
-        opacity: morphProgress.value,
-        backgroundColor: 'black'
-    }));
+    const bgMorphStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: morphProgress.value,
+            backgroundColor: 'black'
+        };
+    });
 
-    const pageBackgroundStyle = useAnimatedStyle(() => ({
-        // Delay the background "fog-in" until the avatar has expanded significantly
-        opacity: interpolate(heroMorphProgress.value, [0, 0.4, 1], [0, 1, 1], Extrapolation.CLAMP),
-    }));
+    const pageBackgroundStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            // Delay the background "fog-in" until the avatar has expanded significantly
+            opacity: interpolate(heroMorphProgress.value, [0, 0.4, 1], [0, 1, 1], Extrapolation.CLAMP),
+        };
+    });
 
-    const galleryStyle = useAnimatedStyle(() => ({
-        opacity: isReady.value ? 1 : 0
-    }));
+    const galleryStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: isReady.value ? 1 : 0
+        };
+    });
 
     const morphImageStyle = useAnimatedStyle(() => {
+        'worklet';
         const p = morphProgress.value;
         if (isReady.value) return { opacity: 0 };
         
@@ -259,10 +295,13 @@ export default function ProfileScreen() {
         };
     });
 
-    const controlsStyle = useAnimatedStyle(() => ({
-        opacity: isReady.value ? 1 : 0,
-        transform: [{ translateY: interpolate(morphProgress.value, [0, 1], [20, 0]) }]
-    }));
+    const controlsStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: isReady.value ? 1 : 0,
+            transform: [{ translateY: interpolate(morphProgress.value, [0, 1], [20, 0]) }]
+        };
+    });
 
     const allChatMessages = useMemo(() =>
         (messages[id as string] || []),
@@ -430,12 +469,18 @@ export default function ProfileScreen() {
         }
         if (navigation.canGoBack()) {
             navigation.goBack();
+        } else {
+            router.back();
         }
-    }, [navigation]);
+    }, [navigation, router]);
 
     const runDismissAnimation = useCallback((action?: any) => {
         if (isClosingRef.current) return;
         isClosingRef.current = true;
+
+        if (id) {
+            profileAvatarTransitionState.dismiss(id);
+        }
 
         if (useSharedAvatarTransition) {
             finishDismiss(action);
@@ -451,15 +496,12 @@ export default function ProfileScreen() {
         hapticService.selection();
 
         headerOpacity.value = withTiming(0, { duration: 250 });
-        heroMorphProgress.value = withSpring(0, {
-            damping: 28,
-            stiffness: 180,
-            mass: 1.0,
+        heroMorphProgress.value = withTiming(0, {
+            duration: PROFILE_AVATAR_MORPH_DURATION,
+            easing: PROFILE_AVATAR_MORPH_EASING,
         });
-        setTimeout(() => {
-            finishDismiss(action);
-        }, 500);
-    }, [finishDismiss, hasAvatarMorph, headerOpacity, heroMorphProgress, useSharedAvatarTransition]);
+        setTimeout(() => finishDismiss(action), PROFILE_AVATAR_MORPH_DURATION);
+    }, [finishDismiss, hasAvatarMorph, headerOpacity, heroMorphProgress, id, useSharedAvatarTransition]);
 
     useEffect(() => {
         if (useSharedAvatarTransition) {
@@ -489,14 +531,20 @@ export default function ProfileScreen() {
         };
     }, [hasAvatarMorph, navigation, runDismissAnimation, useSharedAvatarTransition]);
 
-    const headerContentAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: fadeAnim.value * headerOpacity.value
-    }));
+    const headerContentAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: fadeAnim.value * headerOpacity.value
+        };
+    });
 
-    const mediaSectionAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: fadeAnim.value * headerOpacity.value,
-        transform: [{ translateY: slideAnim.value + interpolate(headerOpacity.value, [0, 1], [28, 0]) }]
-    }));
+    const mediaSectionAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: fadeAnim.value * headerOpacity.value,
+            transform: [{ translateY: slideAnim.value + interpolate(headerOpacity.value, [0, 1], [28, 0]) }]
+        };
+    });
 
     const heroAvatarUri = useMemo(() => {
         const avatarType = profileUser?.avatarType || profileUser?.avatar_type || 'default';
@@ -518,7 +566,7 @@ export default function ProfileScreen() {
 
     if (!profileUser) {
         return (
-            <SheetScreen onClose={() => router.back()}>
+            <SheetScreen onClose={() => runDismissAnimation()}>
                 <View style={styles.container}>
                     <StatusBar barStyle="light-content" translucent />
                     <View style={styles.header}>
@@ -541,11 +589,18 @@ export default function ProfileScreen() {
         <SheetScreen
             onClose={() => {
                 hapticService.impact(Haptics.ImpactFeedbackStyle.Light);
-                router.back();
+                if (!isClosingRef.current) {
+                    runDismissAnimation();
+                }
             }}
-            onCloseStart={() => hapticService.selection()}
+            onCloseStart={() => {
+                if (!isClosingRef.current) {
+                    hapticService.selection();
+                }
+            }}
             style={{ backgroundColor: 'transparent' }}
             opacityOnGestureMove
+            disableRootScale
             customBackground={
                 <Animated.View style={[StyleSheet.absoluteFill, pageBackgroundStyle]}>
                     <GlassView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
@@ -936,7 +991,7 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#09090E',
+        backgroundColor: 'transparent',
     },
     orb: {
         position: 'absolute',
@@ -1304,7 +1359,6 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-
     morphContainer: {
         width: '100%',
         height: '80%',

@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
-import { StyleSheet, View, ActivityIndicator } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { SoulLoader } from './SoulLoader';
 import { Image, ImageProps, ImageContentFit } from 'expo-image';
 
 interface OptimizedImageProps extends ImageProps {
@@ -67,7 +68,7 @@ export const OptimizedImage = ({
       />
       {showLoader && (
         <View style={styles.loaderContainer}>
-          <ActivityIndicator size="small" color="#9CA3AF" />
+          <SoulLoader size={30} />
         </View>
       )}
     </View>

@@ -68,7 +68,7 @@ export interface LocalGroup {
   name: string;
   description?: string;
   avatarUrl?: string;
-  createdBy?: string;
+  creatorId?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -157,6 +157,19 @@ async function getDb(): Promise<SQLite.SQLiteDatabase> {
             await MIGRATE_DB(dbInstance);
         },
         onOpen: async (db) => {
+          // Concurrency hardening:
+          //   journal_mode = WAL allows readers in parallel with one writer.
+          //   busy_timeout makes the engine wait for a lock instead of failing
+          //   immediately with SQLITE_BUSY (error 5: "database is locked"),
+          //   which was surfacing as `finalizeAsync` failures during avatar
+          //   updates while ChatContext realtime writes ran concurrently.
+          try {
+            await db.execAsync('PRAGMA journal_mode = WAL;');
+            await db.execAsync('PRAGMA busy_timeout = 5000;');
+            await db.execAsync('PRAGMA synchronous = NORMAL;');
+          } catch (e) {
+            console.warn('[SQLite] Failed to apply concurrency pragmas:', e);
+          }
           // Delay setup of WAL checkpoint slightly to allow other boot tasks to finish
           setTimeout(() => setupWalCheckpoint(db), 5000);
         }
@@ -281,22 +294,41 @@ class OfflineService {
 
   async saveGroup(group: LocalGroup): Promise<void> {
     const db = await getDb();
+    // Self-heal: older installs had `created_by` instead of `creator_id`.
+    const cols = await db.getAllAsync(`PRAGMA table_info(groups);`) as Array<{ name: string }>;
+    const hasCreatorId = cols.some(c => c.name === 'creator_id');
+    const hasCreatedBy = cols.some(c => c.name === 'created_by');
+    if (!hasCreatorId) {
+      if (hasCreatedBy) {
+        await db.execAsync(`ALTER TABLE groups RENAME COLUMN created_by TO creator_id;`);
+      } else {
+        await db.execAsync(`ALTER TABLE groups ADD COLUMN creator_id TEXT;`);
+      }
+    }
+    // Treat '' the same as missing — callers pass `uploadedAvatarUrl || ''`
+    // when no photo was chosen at create time, and we don't want a later
+    // benign saveGroup() (e.g. from a header heal) to clobber a real
+    // avatar_url that was uploaded in between.
+    const normalizedAvatar = group.avatarUrl && group.avatarUrl !== '' ? group.avatarUrl : null;
     await db.runAsync(
-      `INSERT INTO groups (id, name, description, avatar_url, created_by, created_at, updated_at)
+      `INSERT INTO groups (id, name, description, avatar_url, creator_id, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name,
          description = excluded.description,
-         avatar_url = excluded.avatar_url,
+         avatar_url = COALESCE(excluded.avatar_url, groups.avatar_url),
+         creator_id = COALESCE(excluded.creator_id, groups.creator_id),
          updated_at = excluded.updated_at;`,
-      [group.id, group.name, group.description ?? null, group.avatarUrl ?? null, group.createdBy ?? null, group.createdAt ?? null, group.updatedAt ?? null]
+      [group.id, group.name, group.description ?? null, normalizedAvatar, group.creatorId ?? null, group.createdAt ?? null, group.updatedAt ?? null]
     );
 
-    // Also ensure a contact entry exists for this group so it shows in chat list
+    // Also ensure a contact entry exists for this group so it shows in chat list.
+    // Pass `null` (not '') so the contacts batch upsert's COALESCE keeps any
+    // existing good avatar if this saveGroup call doesn't carry one.
     await this.saveContact({
         id: group.id,
         name: group.name,
-        avatar: group.avatarUrl,
+        avatar: normalizedAvatar,
         about: group.description,
         isGroup: true
     });
@@ -311,10 +343,52 @@ class OfflineService {
         name: row.name,
         description: row.description ?? undefined,
         avatarUrl: row.avatar_url ?? undefined,
-        createdBy: row.created_by ?? undefined,
+        creatorId: row.creator_id ?? undefined,
         createdAt: row.created_at ?? undefined,
         updatedAt: row.updated_at ?? undefined
     };
+  }
+
+  /**
+   * One-shot reconciliation between `groups` and `contacts`. Runs at app
+   * startup as a safety net: backfills empty contacts.avatar from
+   * groups.avatar_url and re-asserts is_group=1 for any contacts row that
+   * has a matching groups row. Idempotent.
+   *
+   * Important: this NEVER inserts a new contacts row. If the user deleted
+   * the contact (Exit Group / Delete Group), recreating it from a stale
+   * groups row would resurrect ghost chats. The complementary deleteGroup
+   * cleanup removes the groups row alongside the contacts row.
+   */
+  async reconcileGroupsToContacts(): Promise<void> {
+    const db = await getDb();
+    try {
+      await db.runAsync(
+        `UPDATE contacts
+            SET avatar = COALESCE(NULLIF(contacts.avatar, ''), (SELECT g.avatar_url FROM groups g WHERE g.id = contacts.id)),
+                is_group = 1
+          WHERE EXISTS (SELECT 1 FROM groups g WHERE g.id = contacts.id);`
+      );
+    } catch (e) {
+      console.warn('[SQLite] reconcileGroupsToContacts failed:', e);
+    }
+  }
+
+  /**
+   * Fully remove a group from local SQLite — contacts row, groups row, and
+   * group_members rows. Without this, deleting a group only purged the
+   * contacts row and the orphan groups row would resurrect the chat tile
+   * via reconcileGroupsToContacts on the next launch.
+   */
+  async deleteGroup(id: string): Promise<void> {
+    const db = await getDb();
+    try {
+      await db.runAsync(`DELETE FROM contacts WHERE id = ?;`, [id]);
+      await db.runAsync(`DELETE FROM groups WHERE id = ?;`, [id]);
+      await db.runAsync(`DELETE FROM group_members WHERE group_id = ?;`, [id]);
+    } catch (e) {
+      console.warn('[SQLite] deleteGroup failed for', id, e);
+    }
   }
 
   async saveGroupMembers(groupId: string, members: LocalGroupMember[]): Promise<void> {
@@ -692,43 +766,71 @@ class OfflineService {
 
   async getContacts(): Promise<any[]> {
     const db = await getDb();
-    const rows = await db.getAllAsync(`SELECT * FROM contacts ORDER BY name ASC;`);
-    return (rows as any[]).map(r => ({ 
-        id: r.id, 
-        name: r.name, 
-        avatar: r.avatar ?? '', 
-        avatarType: r.avatar_type ?? 'default',
-        teddyVariant: r.teddy_variant ?? undefined,
-        status: r.status ?? 'offline', 
-        lastMessage: r.last_message ?? '', 
-        unreadCount: r.unread_count ?? 0, 
-        about: r.about ?? r.bio ?? '', 
-        lastSeen: r.last_seen ?? undefined,
-        updatedAt: r.updated_at ?? undefined,
-        note: r.note ?? undefined,
-        noteTimestamp: r.note_timestamp ?? undefined,
-        localAvatarUri: r.local_avatar_uri ?? undefined,
-        avatarUpdatedAt: r.avatar_updated_at ?? undefined,
-        isArchived: r.is_archived === 1,
-        isGroup: r.is_group === 1
-    }));
+    // LEFT JOIN groups on c.id = g.id WITHOUT also requiring is_group=1.
+    // If a profile-sync write ever clobbered contacts.is_group from 1 to 0
+    // (the batch path uses `is_group = excluded.is_group` non-COALESCE), the
+    // row would lose its group flag but the canonical `groups.avatar_url`
+    // would still be there. Joining solely on id lets us recover that
+    // avatar — and we treat the row as a group if a groups row exists.
+    const rows = await db.getAllAsync(
+      `SELECT c.*, g.id AS g_id, g.avatar_url AS group_avatar_url, g.description AS group_description
+         FROM contacts c
+         LEFT JOIN groups g ON c.id = g.id
+        ORDER BY c.name ASC;`
+    );
+    return (rows as any[]).map(r => {
+        const hasGroupRow = !!r.g_id;
+        const isGroup = r.is_group === 1 || hasGroupRow;
+        const resolvedAvatar = isGroup
+          ? ((r.avatar && r.avatar !== '') ? r.avatar : (r.group_avatar_url ?? ''))
+          : (r.avatar ?? '');
+        return {
+            id: r.id,
+            name: r.name,
+            avatar: resolvedAvatar,
+            avatarType: r.avatar_type ?? 'default',
+            teddyVariant: r.teddy_variant ?? undefined,
+            status: r.status ?? 'offline',
+            lastMessage: r.last_message ?? '',
+            unreadCount: r.unread_count ?? 0,
+            about: (isGroup ? (r.about || r.group_description) : r.about) ?? r.bio ?? '',
+            lastSeen: r.last_seen ?? undefined,
+            updatedAt: r.updated_at ?? undefined,
+            note: r.note ?? undefined,
+            noteTimestamp: r.note_timestamp ?? undefined,
+            localAvatarUri: r.local_avatar_uri ?? undefined,
+            avatarUpdatedAt: r.avatar_updated_at ?? undefined,
+            isArchived: r.is_archived === 1,
+            isGroup
+        };
+    });
   }
 
   async getContact(id: string): Promise<any | null> {
     const db = await getDb();
-    const row = await db.getFirstAsync(`SELECT * FROM contacts WHERE id = ? LIMIT 1;`, [id]) as any;
+    const row = await db.getFirstAsync(
+      `SELECT c.*, g.id AS g_id, g.avatar_url AS group_avatar_url
+         FROM contacts c
+         LEFT JOIN groups g ON c.id = g.id
+        WHERE c.id = ? LIMIT 1;`,
+      [id]
+    ) as any;
     if (!row) return null;
+    const hasGroupRow = !!row.g_id;
+    const isGroup = row.is_group === 1 || hasGroupRow;
     return {
         id: row.id,
         name: row.name,
-        avatar: row.avatar ?? '',
+        avatar: isGroup
+          ? ((row.avatar && row.avatar !== '') ? row.avatar : (row.group_avatar_url ?? ''))
+          : (row.avatar ?? ''),
         avatarType: row.avatar_type ?? 'default',
         teddyVariant: row.teddy_variant ?? undefined,
         localAvatarUri: row.local_avatar_uri ?? undefined,
         avatarUpdatedAt: row.avatar_updated_at ?? undefined,
         updatedAt: row.updated_at ?? undefined,
         isArchived: row.is_archived === 1,
-        isGroup: row.is_group === 1
+        isGroup
     };
   }
 
@@ -744,6 +846,66 @@ class OfflineService {
     await this.saveContactsBatch([contact]);
   }
 
+  /**
+   * Lightweight single-row avatar update. Bypasses the heavyweight prepared-
+   * statement batch path so it can be used during avatar upload without
+   * contending with concurrent ChatContext bulk profile imports (which were
+   * holding the write lock long enough that even our retry-with-backoff path
+   * gave up). Falls back to a plain INSERT...ON CONFLICT auto-commit so we
+   * don't open a transaction at all — a single statement under WAL +
+   * busy_timeout=5s is far less likely to hit BUSY than a multi-statement
+   * BEGIN/COMMIT block.
+   */
+  async upsertContactAvatar(opts: {
+    id: string;
+    name?: string;
+    avatar?: string | null;
+    localAvatarUri?: string | null;
+    isGroup?: boolean;
+  }): Promise<void> {
+    if (!opts?.id) return;
+    const db = await getDb();
+    const isBusy = (err: any) => {
+      const msg = (err?.message || String(err || '')).toLowerCase();
+      return msg.includes('database is locked') || msg.includes('sqlite_busy') || msg.includes('error code 5');
+    };
+    const MAX = 6;
+    let attempt = 0;
+    while (true) {
+      try {
+        await db.runAsync(
+          `INSERT INTO contacts (id, name, avatar, status, last_message, unread_count, last_synced_at, local_avatar_uri, avatar_updated_at, is_group)
+           VALUES (?, ?, ?, 'offline', '', 0, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             name = COALESCE(NULLIF(excluded.name, ''), contacts.name),
+             avatar = COALESCE(excluded.avatar, contacts.avatar),
+             local_avatar_uri = COALESCE(excluded.local_avatar_uri, contacts.local_avatar_uri),
+             avatar_updated_at = COALESCE(excluded.avatar_updated_at, contacts.avatar_updated_at),
+             -- Sticky is_group: once a contact is flagged as a group it stays a group.
+             -- Prevents profile-sync writes (which don't carry isGroup) from wiping
+             -- the flag and breaking the chat-list group-avatar resolution.
+             is_group = MAX(excluded.is_group, contacts.is_group);`,
+          [
+            opts.id,
+            opts.name ?? 'Group',
+            opts.avatar ?? null,
+            new Date().toISOString(),
+            opts.localAvatarUri ?? null,
+            new Date().toISOString(),
+            opts.isGroup ? 1 : 0,
+          ]
+        );
+        return;
+      } catch (err) {
+        if (attempt >= MAX || !isBusy(err)) throw err;
+        const backoff = 100 * Math.pow(2, attempt); // 100,200,400,800,1600,3200
+        console.warn(`[SQLite] upsertContactAvatar BUSY (${attempt + 1}/${MAX + 1}), retrying in ${backoff}ms`);
+        await new Promise((resolve) => setTimeout(resolve, backoff));
+        attempt++;
+      }
+    }
+  }
+
   async saveContactsBatch(contacts: any[]): Promise<void> {
     if (!contacts.length) return;
 
@@ -755,13 +917,40 @@ class OfflineService {
 
     const { LEGACY_TO_UUID: MAPPING } = require('../config/supabase');
 
+    // SQLite BUSY/locked retry. WAL + busy_timeout=5s usually handles
+    // contention, but long-running parallel writes (e.g. ChatContext bulk
+    // profile imports) can still trip a finalize. Retry a few times with
+    // increasing backoff before giving up — losing a contact-row write on
+    // transient contention would otherwise leave the chat header avatarless.
+    const MAX_RETRIES = 4;
+    const isBusyError = (err: any) => {
+      const msg = (err?.message || String(err || '')).toLowerCase();
+      return msg.includes('database is locked') || msg.includes('sqlite_busy') || msg.includes('error code 5');
+    };
+
+    let attempt = 0;
+    while (true) {
+      try {
+        await this._saveContactsBatchInner(contacts, myUuid, MAPPING);
+        return;
+      } catch (err) {
+        if (attempt >= MAX_RETRIES || !isBusyError(err)) throw err;
+        const backoff = 100 * Math.pow(2, attempt); // 100, 200, 400, 800ms
+        console.warn(`[SQLite] saveContactsBatch BUSY (attempt ${attempt + 1}/${MAX_RETRIES + 1}), retrying in ${backoff}ms`);
+        await new Promise((resolve) => setTimeout(resolve, backoff));
+        attempt++;
+      }
+    }
+  }
+
+  private async _saveContactsBatchInner(contacts: any[], myUuid: string | null, MAPPING: Record<string, string>): Promise<void> {
     await this.runSerializedTransaction(async (db) => {
       const statement = await db.prepareAsync(
         `INSERT INTO contacts 
             (id, name, avatar, avatar_type, teddy_variant, status, last_message, unread_count, about, last_seen, last_synced_at, updated_at, note, note_timestamp, local_avatar_uri, avatar_updated_at, is_group) 
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
-            name = excluded.name,
+            name = COALESCE(NULLIF(excluded.name, ''), contacts.name),
             avatar = COALESCE(excluded.avatar, contacts.avatar),
             avatar_type = COALESCE(excluded.avatar_type, contacts.avatar_type),
             teddy_variant = COALESCE(excluded.teddy_variant, contacts.teddy_variant),
@@ -776,7 +965,8 @@ class OfflineService {
             note_timestamp = excluded.note_timestamp,
             local_avatar_uri = COALESCE(excluded.local_avatar_uri, contacts.local_avatar_uri),
             avatar_updated_at = COALESCE(excluded.avatar_updated_at, contacts.avatar_updated_at),
-            is_group = excluded.is_group;`
+            -- Sticky is_group: never demote a known group back to a regular contact.
+            is_group = MAX(excluded.is_group, contacts.is_group);`
       );
 
       try {

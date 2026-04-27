@@ -10,7 +10,6 @@ import {
     KeyboardAvoidingView,
     Platform,
     StatusBar,
-    ActivityIndicator,
     Modal,
 } from 'react-native';
 import { Image } from 'expo-image';

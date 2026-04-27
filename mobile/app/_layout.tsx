@@ -3,7 +3,7 @@ import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useContext, Component, ReactNode, useState, useRef, useCallback } from 'react';
-import { View, ActivityIndicator, Platform, AppState, Text, Pressable, StyleSheet as ViewStyle } from 'react-native';
+import { View, Platform, AppState, Text, Pressable, StyleSheet as ViewStyle } from 'react-native';
 
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -169,7 +169,7 @@ function RootContent() {
         // ✅ Navigation Settlement
         // We only settle if we are on the screen that matches our current auth state.
         const matchesAuth = (currentUser && !inAuthGroup) || (!currentUser && inAuthGroup);
-        
+
         if (matchesAuth && !isNavSettled) {
             console.log('[RootLayout] ✅ Navigation settled on target:', segments[0]);
             setIsNavSettled(true);

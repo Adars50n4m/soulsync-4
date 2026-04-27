@@ -12,9 +12,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   BackHandler,
-  ActivityIndicator,
   Vibration,
 } from 'react-native';
+import { SoulLoader } from './ui/SoulLoader';
 import LottieView from 'lottie-react-native';
 import { hapticService } from '../services/HapticService';
 import * as Haptics from 'expo-haptics';
@@ -202,7 +202,7 @@ export const StatusViewerModal = ({
                 )
             ) : (
                 <View style={styles.placeholderContainer}>
-                    <ActivityIndicator color="#fff" size="large" />
+                    <SoulLoader size={120} />
                 </View>
             )}
         </View>

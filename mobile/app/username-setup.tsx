@@ -10,7 +10,6 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  ActivityIndicator,
   StatusBar,
   Animated,
 } from 'react-native';
@@ -19,6 +18,7 @@ import { Feather, MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useApp } from '../context/AppContext';
 import { GlassView } from '../components/ui/GlassView';
+import { SoulLoader } from '../components/ui/SoulLoader';
 import { authService } from '../services/AuthService';
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -143,7 +143,7 @@ export default function UsernameSetupScreen() {
 
   const getStatusIcon = () => {
     switch (usernameState) {
-      case 'checking':  return <ActivityIndicator color={themeAccent} size="small" />;
+      case 'checking':  return <SoulLoader size={30} />;
       case 'available': return <Text style={styles.iconGreen}>✓</Text>;
       case 'taken':     return <Text style={styles.iconRed}>✗</Text>;
       case 'invalid':   return <Text style={styles.iconRed}>!</Text>;
@@ -403,7 +403,7 @@ export default function UsernameSetupScreen() {
           activeOpacity={0.85}
         >
           {loading
-            ? <ActivityIndicator color="#0A0A0F" size="small" />
+            ? <SoulLoader size={40} />
             : <Text style={styles.nextBtnText}>Continue to profile</Text>
           }
         </TouchableOpacity>

@@ -43,11 +43,12 @@ const TypingDots = () => {
         return () => clearInterval(id);
     }, []);
     return (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             {[0, 1, 2].map(i => (
                 <View
                     key={i}
                     style={{
+                        marginRight: 3,
                         width: 5,
                         height: 5,
                         borderRadius: 2.5,
@@ -582,11 +583,12 @@ const styles = StyleSheet.create({
         borderRadius: 32, // Pill shape!
         borderWidth: 1,
         borderColor: 'rgba(255, 255, 255, 0.22)',
-        gap: 2,
+        // gap: 2,
         overflow: 'hidden',
         zIndex: 10,
     },
     backButton: {
+        marginRight: 12,
         width: 36,
         height: 36,
         alignItems: 'center',
@@ -615,7 +617,7 @@ const styles = StyleSheet.create({
     },
     headerInfo: {
         flex: 1,
-        marginLeft: 4,
+        marginLeft: 6,
     },
     contactName: {
         color: '#ffffff',
@@ -694,7 +696,7 @@ const styles = StyleSheet.create({
     },
     quotedContainer: {
         flexDirection: 'row',
-        gap: 8,
+        // gap: 8,
         marginBottom: 8,
         padding: 8,
         backgroundColor: 'rgba(0,0,0,0.2)',
@@ -707,6 +709,7 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(0,0,0,0.2)',
     },
     quoteBar: {
+        marginRight: 8,
         width: 2,
         borderRadius: 2,
     },
@@ -742,10 +745,11 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         justifyContent: 'flex-end',
         alignItems: 'center',
-        gap: 4,
+        // gap: 4,
         marginTop: 4,
     },
     timestamp: {
+        marginRight: 4,
         color: 'rgba(255,255,255,0.4)',
         fontSize: 10,
         fontWeight: '600',
@@ -754,7 +758,7 @@ const styles = StyleSheet.create({
         position: 'absolute',
         bottom: -14,
         flexDirection: 'row',
-        gap: 4,
+        // gap: 4,
         zIndex: 10,
     },
     reactionsRight: {
@@ -764,6 +768,7 @@ const styles = StyleSheet.create({
         left: 12,
     },
     reactionPill: {
+        marginRight: 4,
         borderRadius: 12,
         paddingHorizontal: 6,
         paddingVertical: 3,
@@ -816,7 +821,7 @@ const styles = StyleSheet.create({
     },
     replyContent: {
         flexDirection: 'row',
-        gap: 10,
+        // gap: 10,
         flex: 1,
     },
     replyTextContainer: {
@@ -840,7 +845,7 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 12,
         paddingBottom: Platform.OS === 'ios' ? 32 : 12, // Increased bottom padding for iOS Home Indicator
-        gap: 10,
+        // gap: 10,
         borderTopWidth: 1,
         borderTopColor: 'rgba(255,255,255,0.08)',
         backgroundColor: '#09090b', // Ensure background is set if using flexible layout
@@ -908,7 +913,7 @@ const styles = StyleSheet.create({
     reactionModalContent: {
         borderRadius: 24,
         padding: 16,
-        gap: 12,
+        // gap: 12,
         overflow: 'hidden',
     },
     emojiBar: {
@@ -937,14 +942,14 @@ const styles = StyleSheet.create({
     },
     reactionActionsRow: {
         flexDirection: 'row',
-        gap: 8,
+        // gap: 8,
         width: '100%',
     },
     reactionActionButton: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 6,
+        // gap: 6,
         paddingVertical: 10,
         borderRadius: 16,
         borderWidth: 1,
@@ -993,12 +998,12 @@ const styles = StyleSheet.create({
     callOptions: {
         flexDirection: 'row',
         justifyContent: 'center',
-        gap: 32,
+        // gap: 32,
         marginBottom: 24,
     },
     callOption: {
         alignItems: 'center',
-        gap: 10,
+        // gap: 10,
     },
     callOptionIcon: {
         width: 64,
@@ -1029,9 +1034,10 @@ const styles = StyleSheet.create({
     nowPlayingStatus: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        // gap: 6,
     },
     playingDot: {
+        marginRight: 6,
         width: 6,
         height: 6,
         borderRadius: 3,
@@ -1052,11 +1058,12 @@ const styles = StyleSheet.create({
     callDropdownItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        // gap: 12,
         paddingVertical: 14,
         paddingHorizontal: 16,
     },
     callDropdownIcon: {
+        marginRight: 12,
         width: 36,
         height: 36,
         borderRadius: 18,

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Platform, RefreshControl, Alert } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, Platform, RefreshControl, Alert } from 'react-native';
+import { SoulLoader } from '../components/ui/SoulLoader';
 import { useRouter } from 'expo-router';
 import { SERVER_URL, proxySupabaseUrl } from '../config/api';
 import { supabase } from '../config/supabase';
@@ -194,7 +195,7 @@ export default function RequestsScreen() {
                                     disabled={actionId === item.id}
                                 >
                                     {actionId === item.id ? (
-                                        <ActivityIndicator size="small" color="#fff" />
+                                        <SoulLoader size={36} />
                                     ) : (
                                         <MaterialIcons name="check" size={20} color="#fff" />
                                     )}
@@ -214,7 +215,7 @@ export default function RequestsScreen() {
                                 disabled={actionId === item.id}
                             >
                                 {actionId === item.id ? (
-                                    <ActivityIndicator size="small" color="rgba(255,255,255,0.4)" />
+                                    <SoulLoader size={32} />
                                 ) : (
                                     <Text style={styles.cancelText}>Cancel</Text>
                                 )}
@@ -277,7 +278,7 @@ export default function RequestsScreen() {
             />
             {loading && !refreshing && (
                 <View style={styles.loader}>
-                    <ActivityIndicator size="large" color={activeTheme.primary} />
+                    <SoulLoader size={120} />
                 </View>
             )}
         </View>

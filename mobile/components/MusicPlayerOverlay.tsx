@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
     View, Text, Image, Pressable, StyleSheet, Modal,
-    ScrollView, ActivityIndicator, TextInput,
+    ScrollView, TextInput,
     Dimensions, PanResponder, KeyboardAvoidingView, Platform, Keyboard
 } from 'react-native';
+import { SoulLoader } from './ui/SoulLoader';
 import Animated, {
     useSharedValue,
     useAnimatedStyle,
@@ -162,7 +163,7 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
     onClose,
     contactName
 }) => {
-    const { musicState, playSong, togglePlayMusic, toggleFavoriteSong, getPlaybackPosition, seekTo, activeTheme,
+    const { musicState, playSong, togglePlayMusic, toggleFavoriteSong, getPlaybackPosition, seekTo, activeTheme, musicSyncScope,
         repeatMode, toggleRepeat, shuffle, toggleShuffle, queue, addToQueue, removeFromQueue, clearQueue, playNext, playPrevious } = useApp() as any;
     const themeAccent = activeTheme?.primary || '#fff';
     const [searchResults, setSearchResults] = useState<Song[]>([]);
@@ -476,7 +477,7 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                                     </View>
 
                                     {isLoading ? (
-                                        <ActivityIndicator color={themeAccent} style={{ marginTop: 20 }} />
+                                        <SoulLoader size={80} />
                                     ) : (
                                         (activeTab === 'queue' ? queue : searchResults).map((song: Song) => (
                                             <SongCard
@@ -529,6 +530,11 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                                         <Text style={[styles.trackArtist, { color: themeAccent }]} numberOfLines={1}>
                                             {musicState.currentSong?.artist || 'Soul Music'}
                                         </Text>
+                                        {musicSyncScope?.type === 'group' && (
+                                            <Text style={[styles.roomSyncLabel, { color: themeAccent }]}>
+                                                LIVE IN ROOM
+                                            </Text>
+                                        )}
                                     </View>
 
                                     {/* Progress Bar */}
@@ -582,6 +588,11 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                                             <Text style={[styles.miniArtist, { color: themeAccent }]} numberOfLines={1}>
                                                 {musicState.currentSong?.artist || 'Soul Music'}
                                             </Text>
+                                            {musicSyncScope?.type === 'group' && (
+                                                <Text style={[styles.roomSyncLabelMini, { color: themeAccent }]}>
+                                                    ROOM LIVE
+                                                </Text>
+                                            )}
                                         </View>
                                         <Pressable onPress={togglePlayMusic} style={styles.miniPlayBtn} hitSlop={15}>
                                             <MaterialIcons
@@ -803,6 +814,12 @@ const styles = StyleSheet.create({
         fontSize: 11,
         fontWeight: '600',
     },
+    roomSyncLabelMini: {
+        fontSize: 9,
+        fontWeight: '800',
+        letterSpacing: 0.8,
+        marginTop: 2,
+    },
     miniPlayBtn: {
         padding: 4,
     },
@@ -863,6 +880,12 @@ const styles = StyleSheet.create({
     trackArtist: {
         fontSize: 13,
         fontWeight: '600',
+    },
+    roomSyncLabel: {
+        fontSize: 11,
+        fontWeight: '800',
+        letterSpacing: 1,
+        marginTop: 6,
     },
     playerBottomContainer: {
         width: '100%',

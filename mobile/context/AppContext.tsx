@@ -110,7 +110,7 @@ interface AppContextType {
     setPinEnabled: (val: boolean) => void;
     pin: string | null;
     setPin: (pin: string | null) => void;
-    refreshLocalCache: () => Promise<void>;
+    refreshLocalCache: (force?: boolean) => Promise<void>;
     offlineService: any;
 
     // Music
@@ -133,6 +133,10 @@ interface AppContextType {
     sleepTimerMinutes: number | null;
     setSleepTimer: (minutes: number | null) => void;
     setMusicPartner: (partnerId: string) => void;
+    joinGroupMusicRoom: (groupId: string) => void;
+    leaveGroupMusicRoom: (groupId?: string) => Promise<void>;
+    requestMusicSync: () => void;
+    musicSyncScope: any;
 }
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -315,6 +319,10 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         sleepTimerMinutes: music.sleepTimerMinutes,
         setSleepTimer: music.setSleepTimer,
         setMusicPartner: music.setMusicPartner,
+        joinGroupMusicRoom: music.joinGroupMusicRoom,
+        leaveGroupMusicRoom: music.leaveGroupMusicRoom,
+        requestMusicSync: music.requestMusicSync,
+        musicSyncScope: music.musicSyncScope,
 
         // Settings
         theme,
@@ -449,6 +457,10 @@ export const useAppContext = (): AppContextType => {
             sleepTimerMinutes: null,
             setSleepTimer: () => {},
             setMusicPartner: () => {},
+            joinGroupMusicRoom: () => {},
+            leaveGroupMusicRoom: async () => {},
+            requestMusicSync: () => {},
+            musicSyncScope: { type: 'none' },
             offlineService: null,
         } as any;
     }

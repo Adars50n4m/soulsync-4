@@ -13,11 +13,11 @@ import {
   View,
   Text,
   Pressable,
-  ActivityIndicator,
   StyleSheet,
   useWindowDimensions,
   Platform,
 } from 'react-native';
+import { SoulLoader } from './ui/SoulLoader';
 import { Image } from 'expo-image'; // expo-image has built-in disk+memory cache — no flicker
 import { MaterialIcons } from '@expo/vector-icons';
 import GlassView from './ui/GlassView';
@@ -189,7 +189,7 @@ export const MediaBubble: React.FC<MediaBubbleProps> = ({
       return (
         <View style={[styles.placeholder, { width: mediaWidth, height: mediaHeight }]}>
           <GlassView intensity={80} style={styles.blurOverlay}>
-            <ActivityIndicator size="large" color={theme.primary} />
+            <SoulLoader size={60} />
             <Text style={styles.downloadingText}>
               {downloadProgress > 0 ? `${downloadProgress}%` : 'Downloading...'}
             </Text>

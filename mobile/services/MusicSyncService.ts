@@ -11,47 +11,178 @@ export interface PlaybackState {
     scheduledStartTime?: number;
 }
 
-type PlaybackUpdateCallback = (state: PlaybackState, eventType: 'update' | 'sync_request' | 'ping' | 'pong') => void;
+export type MusicSyncScope =
+    | { type: 'none' }
+    | { type: 'direct'; targetId: string }
+    | { type: 'group'; targetId: string };
+
+type PlaybackUpdateEvent =
+    | 'update'
+    | 'sync_request'
+    | 'ping'
+    | 'pong'
+    | 'room_snapshot';
+
+type PlaybackUpdateCallback = (state: PlaybackState, eventType: PlaybackUpdateEvent) => void;
 
 const MAX_RETRIES = 3;
 
 class MusicSyncService {
     private onUpdate: PlaybackUpdateCallback | null = null;
     private userId: string | null = null;
-    private partnerId: string | null = null;
-    private isInitialized: boolean = false;
+    private isInitialized = false;
     private channel: RealtimeChannel | null = null;
-    private retryCount: number = 0;
+    private retryCount = 0;
     private retryTimeout: NodeJS.Timeout | null = null;
-    private errorHandled: boolean = false;
+    private errorHandled = false;
+    private scope: MusicSyncScope = { type: 'none' };
+
+    get partnerId(): string | null {
+        return this.scope.type === 'direct' ? this.scope.targetId : null;
+    }
+
+    getCurrentScope(): MusicSyncScope {
+        return this.scope;
+    }
 
     initialize(userId: string, callback: PlaybackUpdateCallback, partnerId?: string): void {
         this.userId = userId;
         this.onUpdate = callback;
-        this.partnerId = partnerId || null;
         this.isInitialized = true;
 
-        // DON'T connect if there's no partner — no one to sync with
-        if (!this.partnerId) {
-            console.log('[MusicSync] No partner set — skipping Realtime connection (saves a slot)');
+        if (partnerId) {
+            this.scope = { type: 'direct', targetId: partnerId };
+            this.setupBroadcastListener();
             return;
         }
 
-        this.setupBroadcastListener();
+        this.scope = { type: 'none' };
+        console.log('[MusicSync] No sync target set — idle');
     }
 
-    /** Call when partner changes (e.g. opening a chat with someone) */
     setPartner(partnerId: string): void {
-        if (this.partnerId === partnerId) return;
-        this.partnerId = partnerId;
+        if (this.scope.type === 'direct' && this.scope.targetId === partnerId) return;
+        this.scope = { type: 'direct', targetId: partnerId };
         this.retryCount = 0;
         if (this.isInitialized) {
             this.setupBroadcastListener();
         }
     }
 
+    clearPartner(): void {
+        if (this.scope.type !== 'direct') return;
+        this.scope = { type: 'none' };
+        this.teardownChannel();
+    }
+
+    joinGroupRoom(groupId: string): void {
+        if (this.scope.type === 'group' && this.scope.targetId === groupId) return;
+        this.scope = { type: 'group', targetId: groupId };
+        this.retryCount = 0;
+        if (this.isInitialized) {
+            this.setupBroadcastListener();
+        }
+    }
+
+    leaveGroupRoom(groupId?: string): void {
+        if (this.scope.type !== 'group') return;
+        if (groupId && this.scope.targetId !== groupId) return;
+        this.scope = { type: 'none' };
+        this.teardownChannel();
+    }
+
+    private buildChannelName(): string | null {
+        if (!this.userId) return null;
+
+        if (this.scope.type === 'direct') {
+            const ids = [this.userId, this.scope.targetId].sort();
+            return `music_sync_${ids[0]}_${ids[1]}`;
+        }
+
+        if (this.scope.type === 'group') {
+            return `group_music_room_${this.scope.targetId}`;
+        }
+
+        return null;
+    }
+
+    private isEventRelevant(state: PlaybackState): boolean {
+        if (!this.userId) return false;
+        if (state.updatedBy === this.userId) return false;
+
+        if (this.scope.type === 'direct') {
+            return state.updatedBy === this.scope.targetId;
+        }
+
+        return this.scope.type === 'group';
+    }
+
+    private teardownChannel(): void {
+        if (this.retryTimeout) {
+            clearTimeout(this.retryTimeout);
+            this.retryTimeout = null;
+        }
+        if (this.channel) {
+            try { supabase.removeChannel(this.channel); } catch (_) {}
+            this.channel = null;
+        }
+        this.errorHandled = true;
+    }
+
+    private async emitGroupSnapshot(): Promise<void> {
+        if (!this.userId || this.scope.type !== 'group') return;
+
+        try {
+            const { data, error } = await supabase
+                .from('group_music_sessions')
+                .select('current_song, is_playing, position_ms, updated_at, updated_by, scheduled_start_time_ms')
+                .eq('group_id', this.scope.targetId)
+                .maybeSingle();
+
+            if (error || !data || !data.current_song) return;
+
+            this.onUpdate?.({
+                currentSong: data.current_song as Song,
+                isPlaying: !!data.is_playing,
+                position: Number(data.position_ms || 0),
+                updatedAt: data.updated_at ? new Date(data.updated_at).getTime() : Date.now(),
+                updatedBy: data.updated_by,
+                scheduledStartTime: data.scheduled_start_time_ms ? Number(data.scheduled_start_time_ms) : undefined,
+            }, 'room_snapshot');
+        } catch (error) {
+            console.warn('[MusicSync] Failed to fetch room snapshot:', error);
+        }
+    }
+
+    private async persistGroupState(state: PlaybackState): Promise<void> {
+        if (!this.userId || this.scope.type !== 'group') return;
+
+        try {
+            await supabase
+                .from('group_music_sessions')
+                .upsert({
+                    group_id: this.scope.targetId,
+                    host_id: state.updatedBy,
+                    current_song: state.currentSong,
+                    is_playing: state.isPlaying,
+                    position_ms: Math.round(state.position || 0),
+                    scheduled_start_time_ms: state.scheduledStartTime ? Math.round(state.scheduledStartTime) : null,
+                    updated_by: state.updatedBy,
+                    updated_at: new Date(state.updatedAt).toISOString(),
+                    last_heartbeat_at: new Date().toISOString(),
+                }, { onConflict: 'group_id' });
+        } catch (error) {
+            console.warn('[MusicSync] Failed to persist group room state:', error);
+        }
+    }
+
     private setupBroadcastListener(): void {
-        if (!this.userId || !this.partnerId) return;
+        const channelName = this.buildChannelName();
+        if (!this.userId || !channelName) {
+            console.log('[MusicSync] No sync target set — skipping Realtime connection');
+            this.teardownChannel();
+            return;
+        }
 
         if (this.retryTimeout) {
             clearTimeout(this.retryTimeout);
@@ -70,9 +201,6 @@ class MusicSyncService {
 
         this.errorHandled = false;
 
-        const ids = [this.userId, this.partnerId].sort();
-        const channelName = `music_sync_${ids[0]}_${ids[1]}`;
-
         console.log(`[MusicSync] Connecting: ${channelName} (attempt ${this.retryCount + 1}/${MAX_RETRIES})`);
 
         this.channel = supabase.channel(channelName, {
@@ -81,63 +209,71 @@ class MusicSyncService {
 
         this.channel.on('broadcast', { event: 'playback_update' }, ({ payload }) => {
             const state = payload as PlaybackState;
-            if (this.userId && state.updatedBy !== this.userId) {
-                if (this.partnerId && state.updatedBy !== this.partnerId) return;
+            if (this.isEventRelevant(state)) {
                 this.onUpdate?.(state, 'update');
             }
         });
 
         this.channel.on('broadcast', { event: 'sync_request' }, ({ payload }) => {
             const state = payload as PlaybackState;
-            if (this.userId && state.updatedBy !== this.userId) {
-                if (this.partnerId && state.updatedBy !== this.partnerId) return;
+            if (this.isEventRelevant(state)) {
                 this.onUpdate?.(state, 'sync_request');
             }
         });
 
         this.channel.on('broadcast', { event: 'ping' }, ({ payload }) => {
             const state = payload as PlaybackState;
-            if (this.userId && state.updatedBy !== this.userId) {
-                if (this.partnerId && state.updatedBy !== this.partnerId) return;
+            if (this.isEventRelevant(state)) {
                 this.onUpdate?.(state, 'ping');
             }
         });
 
         this.channel.on('broadcast', { event: 'pong' }, ({ payload }) => {
             const state = payload as PlaybackState;
-            if (this.userId && state.updatedBy !== this.userId) {
-                if (this.partnerId && state.updatedBy !== this.partnerId) return;
+            if (this.isEventRelevant(state)) {
                 this.onUpdate?.(state, 'pong');
             }
         });
 
+        if (this.scope.type === 'group') {
+            this.channel.on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'group_music_sessions',
+                    filter: `group_id=eq.${this.scope.targetId}`,
+                },
+                () => {
+                    void this.emitGroupSnapshot();
+                }
+            );
+        }
+
         const thisChannel = this.channel;
 
         this.channel.subscribe((status) => {
-            // Ignore callbacks from channels we already replaced
             if (thisChannel !== this.channel) return;
 
             if (status === 'SUBSCRIBED') {
-                console.log(`[MusicSync] ✅ Connected`);
+                console.log('[MusicSync] ✅ Connected');
                 this.retryCount = 0;
                 this.errorHandled = false;
+                if (this.scope.type === 'group') {
+                    void this.emitGroupSnapshot();
+                }
                 return;
             }
 
-            // Only handle the FIRST error event per channel (Supabase fires CLOSED 100+ times)
             if (this.errorHandled) return;
             this.errorHandled = true;
 
             console.log(`[MusicSync] Channel ${status} — will retry later`);
-
-            if (this.channel) {
-                try { supabase.removeChannel(this.channel); } catch (_) {}
-                this.channel = null;
-            }
+            this.teardownChannel();
 
             this.retryCount++;
             if (this.retryCount >= MAX_RETRIES) {
-                console.log(`[MusicSync] Paused. Will retry on foreground.`);
+                console.log('[MusicSync] Paused. Will retry on foreground.');
                 return;
             }
 
@@ -153,7 +289,7 @@ class MusicSyncService {
     }
 
     retryNow(): void {
-        if (!this.isInitialized || this.channel || !this.partnerId) return;
+        if (!this.isInitialized || this.channel || this.scope.type === 'none') return;
         this.retryCount = 0;
         this.setupBroadcastListener();
     }
@@ -167,10 +303,9 @@ class MusicSyncService {
             position: 0,
             updatedAt: Date.now(),
             updatedBy: this.userId,
-            ...state
+            ...state,
         } as PlaybackState;
 
-        // Ensure timestamp is ALWAYS fresh on broadcast
         fullState.updatedAt = Date.now();
 
         this.channel.send({
@@ -178,12 +313,22 @@ class MusicSyncService {
             event: 'playback_update',
             payload: fullState,
         }).catch(() => {});
+
+        if (this.scope.type === 'group') {
+            void this.persistGroupState(fullState);
+        }
     }
 
     requestSync(): void {
-        if (!this.userId || !this.channel) return;
-        
-        console.log('[MusicSync] 🔄 Requesting initial sync from partner');
+        if (!this.userId) return;
+
+        if (this.scope.type === 'group') {
+            console.log('[MusicSync] 🔄 Requesting room snapshot');
+            void this.emitGroupSnapshot();
+        }
+
+        if (!this.channel) return;
+
         this.channel.send({
             type: 'broadcast',
             event: 'sync_request',
@@ -214,7 +359,7 @@ class MusicSyncService {
             payload: {
                 updatedBy: this.userId,
                 updatedAt: Date.now(),
-                position: pingTime, // Use position field to store the original ping time
+                position: pingTime,
             },
         }).catch(() => {});
     }
@@ -226,17 +371,10 @@ class MusicSyncService {
     cleanup(): void {
         this.isInitialized = false;
         this.errorHandled = true;
-        if (this.retryTimeout) {
-            clearTimeout(this.retryTimeout);
-            this.retryTimeout = null;
-        }
-        if (this.channel) {
-            try { supabase.removeChannel(this.channel); } catch (_) {}
-            this.channel = null;
-        }
+        this.teardownChannel();
         this.onUpdate = null;
         this.userId = null;
-        this.partnerId = null;
+        this.scope = { type: 'none' };
         this.retryCount = 0;
     }
 }

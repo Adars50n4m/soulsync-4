@@ -26,6 +26,7 @@ let hasRenderedTabBarOnce = false;
 const TabIcon = ({ name, focused, size = 26 }: { name: string; focused: boolean; size?: number }) => {
   const { activeTheme } = useApp();
   const scale = useSharedValue(1);
+  const opacity = useSharedValue(focused ? 1 : 0.7);
 
   useEffect(() => {
     // Premium spring pop animation
@@ -37,12 +38,16 @@ const TabIcon = ({ name, focused, size = 26 }: { name: string; focused: boolean;
     } else {
       scale.value = withSpring(1, { damping: 15 });
     }
-  }, [focused, scale]);
+    opacity.value = withTiming(focused ? 1 : 0.7, { duration: 200 });
+  }, [focused, scale, opacity]);
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-    opacity: withTiming(focused ? 1 : 0.7, { duration: 200 }),
-  }));
+  const animatedStyle = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      transform: [{ scale: scale.value }],
+      opacity: opacity.value,
+    };
+  });
 
   // WhatsApp-style: Use filled version when focused, outline when not
   const iconName = focused ? (name as any) : (`${name}-outline` as any);
@@ -112,10 +117,13 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
     );
   }, [tabBarOpacity]);
 
-  const indicatorStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: translateX.value }],
-    backgroundColor: 'rgba(255, 255, 255, 0.07)',
-  }));
+  const indicatorStyle = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      transform: [{ translateX: translateX.value }],
+      backgroundColor: 'rgba(255, 255, 255, 0.07)',
+    };
+  });
 
   // Glow blob — always visible, locked to pill position
   // offset centers the wider glow on the pill: (tabWidth - glowWidth) / 2
@@ -132,9 +140,12 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
     };
   });
 
-  const tabBarFadeStyle = useAnimatedStyle(() => ({
-    opacity: tabBarOpacity.value,
-  }));
+  const tabBarFadeStyle = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      opacity: tabBarOpacity.value,
+    };
+  });
 
   const searchScale = useSharedValue(1);
 
@@ -164,15 +175,21 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
     });
   }, [isTabBarHidden, translateY]);
 
-  const dropDownStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: translateY.value }],
-  }));
+  const dropDownStyle = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      transform: [{ translateY: translateY.value }],
+    };
+  });
 
-  const searchFabStyle = useAnimatedStyle(() => ({
-    width: '100%',
-    height: '100%',
-    transform: [{ scale: searchScale.value }],
-  }));
+  const searchFabStyle = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      width: '100%',
+      height: '100%',
+      transform: [{ scale: searchScale.value }],
+    };
+  });
 
   const searchSourceX = SCREEN_WIDTH - 72;
   const searchSourceY = SCREEN_HEIGHT - 90;

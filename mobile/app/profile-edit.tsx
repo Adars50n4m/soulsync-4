@@ -3,8 +3,9 @@ import { useEffect, useRef, useState } from 'react';
 import {
     View, Text, Pressable, StyleSheet, StatusBar,
     TextInput, ScrollView, Alert, Modal, Animated as RNAnimated,
-    KeyboardAvoidingView, useWindowDimensions, Platform, ActivityIndicator, BackHandler
+    KeyboardAvoidingView, useWindowDimensions, Platform, BackHandler
 } from 'react-native';
+import { SoulLoader } from '../components/ui/SoulLoader';
 import { Image } from 'expo-image';
 import { GlassView } from '../components/ui/GlassView';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
@@ -218,6 +219,7 @@ export default function ProfileEditScreen() {
 
     const slideAnim = useRef(new RNAnimated.Value(0)).current;
     const heroMorphAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
         const targetLeft = (width - targetSize) / 2;
         const targetTop = 118;
 
@@ -284,6 +286,7 @@ export default function ProfileEditScreen() {
     });
 
     const heroMorphImageAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
         if (!hasHeroMorph) {
             return {
                 top: 0,
@@ -333,38 +336,50 @@ export default function ProfileEditScreen() {
         };
     });
 
-    const backdropAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: hasHeroMorph
-            ? interpolate(morphProgress.value, [0, 0.2, 1], [0, 0.45, 1], Extrapolation.CLAMP)
-            : 1,
-    }));
+    const backdropAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: hasHeroMorph
+                ? interpolate(morphProgress.value, [0, 0.2, 1], [0, 0.45, 1], Extrapolation.CLAMP)
+                : 1,
+        };
+    });
 
-    const chromeAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: hasHeroMorph
-            ? interpolate(morphProgress.value, [0, 0.5, 0.86, 1], [0, 0, 0.5, 1], Extrapolation.CLAMP)
-            : chromeOpacity.value,
-        transform: [{ translateY: interpolate(morphProgress.value, [0, 1], [18, 0], Extrapolation.CLAMP) }],
-    }));
+    const chromeAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: hasHeroMorph
+                ? interpolate(morphProgress.value, [0, 0.5, 0.86, 1], [0, 0, 0.5, 1], Extrapolation.CLAMP)
+                : chromeOpacity.value,
+            transform: [{ translateY: interpolate(morphProgress.value, [0, 1], [18, 0], Extrapolation.CLAMP) }],
+        };
+    });
 
-    const contentAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: hasHeroMorph
-            ? interpolate(morphProgress.value, [0, 0.56, 0.9, 1], [0, 0, 0.45, 1], Extrapolation.CLAMP)
-            : chromeOpacity.value,
-        transform: [{ translateY: interpolate(morphProgress.value, [0, 1], [22, 0], Extrapolation.CLAMP) }],
-    }));
+    const contentAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: hasHeroMorph
+                ? interpolate(morphProgress.value, [0, 0.56, 0.9, 1], [0, 0, 0.45, 1], Extrapolation.CLAMP)
+                : chromeOpacity.value,
+            transform: [{ translateY: interpolate(morphProgress.value, [0, 1], [22, 0], Extrapolation.CLAMP) }],
+        };
+    });
 
-    const avatarRevealAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: hasHeroMorph
-            ? interpolate(morphProgress.value, [0, 0.96, 1], [0, 0, 1], Extrapolation.CLAMP)
-            : 1,
-        transform: [
-            {
-                scale: hasHeroMorph
-                    ? interpolate(morphProgress.value, [0, 0.96, 1], [0.985, 0.985, 1], Extrapolation.CLAMP)
-                    : 1,
-            },
-        ] as any,
-    }));
+    const avatarRevealAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: hasHeroMorph
+                ? interpolate(morphProgress.value, [0, 0.96, 1], [0, 0, 1], Extrapolation.CLAMP)
+                : 1,
+            transform: [
+                {
+                    scale: hasHeroMorph
+                        ? interpolate(morphProgress.value, [0, 0.96, 1], [0.985, 0.985, 1], Extrapolation.CLAMP)
+                        : 1,
+                },
+            ] as any,
+        };
+    });
 
     const finishDismiss = React.useCallback((action?: any) => {
         allowNativePopRef.current = true;
@@ -701,7 +716,7 @@ export default function ProfileEditScreen() {
                                 )}
                                 {isUploadingAvatar && (
                                     <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' }]}>
-                                        <ActivityIndicator color={activeTheme.primary} size="large" />
+                                        <SoulLoader size={100} />
                                     </View>
                                 )}
                             </Pressable>

@@ -235,7 +235,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         remoteVideoOff: false,
                         roomId: signal.roomId,
                         groupId: signal.groupId,
-                        participantIds: (signal as any).participantIds || []
+                        participantIds: signal.participants || (signal as any).participantIds || []
                     });
                     
                     callService.notifyRinging(signal.roomId!, signal.callerId, signal.callType)

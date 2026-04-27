@@ -5,8 +5,9 @@ import {
     View, Text, TextInput, Pressable, AppState,
     StyleSheet, StatusBar, Platform,
     Modal, Animated as RNAnimated, Dimensions, Keyboard, KeyboardEvent, Alert, InteractionManager, ScrollView, FlatList,
-    Image as RNImage, KeyboardAvoidingView, TouchableWithoutFeedback, ActivityIndicator
+    Image as RNImage, KeyboardAvoidingView, TouchableWithoutFeedback
 } from 'react-native';
+import { SoulLoader } from '../../components/ui/SoulLoader';
 import { Image } from 'expo-image';
 import { FlashList } from '@shopify/flash-list';
 
@@ -60,6 +61,7 @@ import Animated, {
     Easing,
     FadeInDown,
     FadeOutDown,
+    LinearTransition,
     runOnJS,
     useAnimatedProps,
     useDerivedValue,
@@ -76,6 +78,7 @@ import { normalizeId } from '../../utils/idNormalization';
 import { SoulAvatar } from '../../components/SoulAvatar';
 import { chatService } from '../../services/ChatService';
 import { chatTransitionState } from '../../services/chatTransitionState';
+import { profileAvatarTransitionState } from '../../services/profileAvatarTransitionState';
 import { MusicPlayerOverlay } from '../../components/MusicPlayerOverlay';
 import { MediaPickerSheet } from '../../components/MediaPickerSheet';
 import { MediaPreviewModal } from '../../components/MediaPreviewModal';
@@ -105,7 +108,7 @@ const LIST_PILL_HEIGHT = 72;
 const LIST_PILL_RADIUS = 36;
 const MORPH_IN_OUT_DURATION = 500;
 const MORPH_OUT_HANDOFF = Math.round(MORPH_IN_OUT_DURATION * 0.94);
-const BACK_BTN_SIZE = 54;
+const BACK_BTN_SIZE = 46;
 const BACK_BTN_GAP = 10;
 const MAIN_PILL_LEFT = 16 + BACK_BTN_SIZE + BACK_BTN_GAP;
 
@@ -274,7 +277,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
 
     const router = useRouter();
     const isFocused = useIsFocused();
-    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, toggleHeart, deleteMessage, musicState, getPlaybackPosition, seekTo, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, initializeChatSession, cleanupChatSession, fetchOtherUserProfile, setMusicPartner, requestMusicSync, startGroupCall, sendMediaLikePulse, remoteLikePulse } = useApp() as any;
+    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, toggleHeart, deleteMessage, musicState, getPlaybackPosition, seekTo, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, initializeChatSession, cleanupChatSession, fetchOtherUserProfile, setMusicPartner, joinGroupMusicRoom, leaveGroupMusicRoom, requestMusicSync, startGroupCall, sendMediaLikePulse, remoteLikePulse, offlineService, refreshLocalCache } = useApp() as any;
     const themeAccent = activeTheme?.primary || '#BC002A';
     const themeAccentSoft = activeTheme?.accent || '#FF6A88';
     const { getPresence } = usePresence();
@@ -690,9 +693,23 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
         return undefined;
     }, [contacts, id, remoteContact]);
 
+    // For groups, if the local contact row is missing the avatar (e.g. an
+    // earlier saveContact got dropped due to SQLite BUSY), prefer the merged
+    // groups+contacts lookup from `remoteContact` whenever it has a richer
+    // avatar. This makes the chat header self-heal even when the contacts
+    // row is partially populated.
+    const isGroupContact = !!(contact?.isGroup);
+    const remoteHasBetterAvatar =
+        isGroupContact && !!remoteContact && (!contact?.avatar || contact.avatar === '') && !!remoteContact.avatar;
+
     // Fetch profile if contact not found locally (e.g. after account switch or from discovery)
+    const remoteFetchAttemptedRef = React.useRef<string | null>(null);
     useEffect(() => {
-        if (!contact && stringId && !isLoadingProfile) {
+        // Trigger the same remote/local-merge fetch we use for missing contacts
+        // when the contact exists but is a group with an empty avatar.
+        const needsAvatarHeal = isGroupContact && (!contact?.avatar || contact.avatar === '');
+        if ((!contact || needsAvatarHeal) && stringId && !isLoadingProfile && remoteFetchAttemptedRef.current !== stringId) {
+            remoteFetchAttemptedRef.current = stringId;
             console.log('[Chat] Contact not found locally, fetching remote profile for:', stringId);
             setIsLoadingProfile(true);
             
@@ -700,8 +717,112 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             const fetchRemote = async () => {
                 try {
                     const sid = (stringId && LEGACY_TO_UUID[stringId]) || stringId;
+
+                    // Group fallback: if a local group row exists for this id, use it
+                    // as the contact. We probe the contacts table too — handleUpdateGroupAvatar
+                    // writes the locally-cached file path there (groups table only stores
+                    // the remote storage key). And if BOTH local sources are missing the
+                    // avatar we hit Supabase's chat_groups table as a last resort to heal
+                    // legacy state where an avatar was uploaded before the local-tables
+                    // sync was wired up.
+                    try {
+                        // allSettled so one read failing (e.g. transient SQLite BUSY)
+                        // doesn't take down the other.
+                        const [groupResult, contactResult] = await Promise.allSettled([
+                            offlineService?.getGroup?.(sid),
+                            offlineService?.getContact?.(sid),
+                        ]);
+                        const localGroup = groupResult.status === 'fulfilled' ? groupResult.value : null;
+                        const localContact = contactResult.status === 'fulfilled' ? contactResult.value : null;
+                        console.log('[Chat] Group fallback probe:', {
+                            sid,
+                            localGroupAvatar: localGroup?.avatarUrl ?? null,
+                            localContactAvatar: localContact?.avatar ?? null,
+                            localContactIsGroup: localContact?.isGroup ?? null,
+                        });
+                        if (localGroup || localContact?.isGroup) {
+                            // Prefer the storage key from whichever source has it (contacts is
+                            // updated last when the avatar changes, so it's freshest).
+                            let avatarKey = localContact?.avatar || localGroup?.avatarUrl;
+
+                            // If local SQLite has the avatar but the chat-list contacts
+                            // state was hydrated before the heal landed, copy it onto
+                            // contacts.avatar (in case it lives only in groups.avatar_url)
+                            // and re-hydrate. Cheap: only fires when the group is missing
+                            // its avatar in the contacts row but groups has it.
+                            if (avatarKey && (!localContact?.avatar || localContact.avatar === '')) {
+                                try {
+                                    await offlineService?.upsertContactAvatar?.({
+                                        id: sid,
+                                        name: localGroup?.name || localContact?.name || 'Group',
+                                        avatar: avatarKey,
+                                        isGroup: true,
+                                    });
+                                } catch {}
+                                try { await refreshLocalCache?.(true); } catch {}
+                            }
+
+                            // Both local sources empty → ask Supabase. Self-heal local
+                            // tables for next time so we don't have to round-trip again.
+                            if (!avatarKey) {
+                                try {
+                                    const { data: groupRow } = await supabase
+                                        .from('chat_groups')
+                                        .select('avatar_url, name, description')
+                                        .eq('id', sid)
+                                        .maybeSingle();
+                                    if (groupRow?.avatar_url) {
+                                        avatarKey = groupRow.avatar_url;
+                                        // Heal local SQLite, then re-hydrate ChatContext so the
+                                        // chat list picks up the avatar without an app restart.
+                                        // Without the refresh, the heal writes succeed but the
+                                        // contacts state in memory stays stale until next launch.
+                                        try {
+                                            await offlineService?.saveGroup?.({
+                                                id: sid,
+                                                name: groupRow.name || localGroup?.name || 'Group',
+                                                description: groupRow.description ?? null,
+                                                avatarUrl: groupRow.avatar_url,
+                                                creatorId: null,
+                                                createdAt: null,
+                                                updatedAt: new Date().toISOString(),
+                                            } as any);
+                                        } catch {}
+                                        try {
+                                            await offlineService?.upsertContactAvatar?.({
+                                                id: sid,
+                                                name: groupRow.name || localGroup?.name || localContact?.name || 'Group',
+                                                avatar: groupRow.avatar_url,
+                                                isGroup: true,
+                                            });
+                                        } catch {}
+                                        try { await refreshLocalCache?.(true); } catch {}
+                                    }
+                                } catch (cloudErr) {
+                                    console.warn('[Chat] Cloud group avatar lookup failed:', cloudErr);
+                                }
+                            }
+
+                            setRemoteContact({
+                                id: (localGroup?.id || localContact?.id || sid) as string,
+                                name: localGroup?.name || localContact?.name || 'Group',
+                                avatar: proxySupabaseUrl(avatarKey),
+                                // CRITICAL: never use 'teddy' here — that makes SoulAvatar fetch
+                                // a generated avatar URL and ignore the actual group photo.
+                                avatarType: 'default',
+                                localAvatarUri: localContact?.localAvatarUri,
+                                status: 'offline',
+                                about: localGroup?.description || '',
+                                lastMessage: '',
+                                unreadCount: 0,
+                                isGroup: true,
+                            } as Contact);
+                            return;
+                        }
+                    } catch { /* ignore and fall through to profiles fetch */ }
+
                     const { data, error } = await supabase.from('profiles').select('*').eq('id', sid).maybeSingle();
-                    
+
                     if (data) {
                         const normalized: Contact = {
                             id: data.id,
@@ -735,12 +856,28 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
     }, [contact?.id, id]);
     const isGroup = contact?.isGroup || false;
     const targetProfileId = String(contact?.id || id || '');
+    const normalizedTargetProfileId = useMemo(() => normalizeId(targetProfileId), [targetProfileId]);
+    const [profileAvatarTransition, setProfileAvatarTransition] = useState(() =>
+        profileAvatarTransitionState.getState()
+    );
+    const shouldHideHeaderAvatar = !isFocused
+        && !!normalizedTargetProfileId
+        && profileAvatarTransition.phase !== 'idle'
+        && normalizeId(profileAvatarTransition.profileId || '') === normalizedTargetProfileId;
+
+    useEffect(() => {
+        const unsubscribe = profileAvatarTransitionState.subscribe(setProfileAvatarTransition);
+        return unsubscribe;
+    }, []);
 
     const openProfileWithMorph = useCallback(() => {
         try {
             console.log('[ChatScreen] Opening profile for:', targetProfileId);
             const pushProfile = (origin?: { x: number; y: number; width: number; height: number }) => {
                 try {
+                    if (normalizedTargetProfileId) {
+                        profileAvatarTransitionState.show(normalizedTargetProfileId);
+                    }
                     router.push({
                         pathname: (isGroup ? '/group-info/[id]' : '/profile/[id]') as any,
                         params: !isGroup && ENABLE_PROFILE_AVATAR_SHARED_TRANSITION && profileAvatarTransitionTag
@@ -762,8 +899,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                     });
                 } catch (pushErr) {
                     console.error('[ChatScreen] Navigation push failed:', pushErr);
-                    // Fallback to simple push if complex params fail
-                    router.push(`/profile/${targetProfileId}` as any);
+                    router.push((isGroup ? `/group-info/${targetProfileId}` : `/profile/${targetProfileId}`) as any);
                 }
             };
 
@@ -772,24 +908,45 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                 return;
             }
 
-            if (!profileAvatarRef.current) {
-                console.warn('[ChatScreen] profileAvatarRef is null, jumping to profile');
-                pushProfile();
+            // Measure the avatar's real on-screen position so the dismiss
+            // morph lands exactly back on the chat header avatar — no ghost,
+            // no offset from safe-area or status-bar insets.
+            const node = profileAvatarRef.current;
+            if (node && typeof (node as any).measureInWindow === 'function') {
+                (node as any).measureInWindow((pageX: number, pageY: number, w: number, h: number) => {
+                    if (!Number.isFinite(pageX) || !Number.isFinite(pageY) || !w || !h) {
+                        pushProfile({ x: MAIN_PILL_LEFT + 8, y: HEADER_PILL_TOP + (HEADER_PILL_HEIGHT - 46) / 2, width: 46, height: 46 });
+                        return;
+                    }
+                    pushProfile({ x: pageX, y: pageY, width: w, height: h });
+                });
+                return;
+            }
+            if (node && typeof (node as any).measure === 'function') {
+                (node as any).measure((_x: number, _y: number, w: number, h: number, pageX: number, pageY: number) => {
+                    if (!Number.isFinite(pageX) || !Number.isFinite(pageY) || !w || !h) {
+                        pushProfile({ x: MAIN_PILL_LEFT + 8, y: HEADER_PILL_TOP + (HEADER_PILL_HEIGHT - 46) / 2, width: 46, height: 46 });
+                        return;
+                    }
+                    pushProfile({ x: pageX, y: pageY, width: w, height: h });
+                });
                 return;
             }
 
-            profileAvatarRef.current.measure((x, y, width, height, pageX, pageY) => {
-                if (!width || !height || isNaN(pageX) || isNaN(pageY)) {
-                    pushProfile();
-                    return;
-                }
-                pushProfile({ x: pageX, y: pageY, width, height });
+            pushProfile({
+                x: MAIN_PILL_LEFT + 8,
+                y: HEADER_PILL_TOP + (HEADER_PILL_HEIGHT - 46) / 2,
+                width: 46,
+                height: 46,
             });
         } catch (err) {
             console.error('[ChatScreen] openProfileWithMorph failed:', err);
-            router.push(`/profile/${targetProfileId}` as any);
+            if (normalizedTargetProfileId) {
+                profileAvatarTransitionState.clear(normalizedTargetProfileId);
+            }
+            router.push((isGroup ? `/group-info/${targetProfileId}` : `/profile/${targetProfileId}`) as any);
         }
-    }, [isGroup, profileAvatarTransitionTag, router, targetProfileId]);
+    }, [isGroup, normalizedTargetProfileId, profileAvatarTransitionTag, router, targetProfileId]);
 
     // FIX: Use contact.id (UUID) for message lookup, not the raw id param
     const messageKey = contact?.id || id || '';
@@ -807,12 +964,15 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             initializeChatSession?.(id, isGroup);
             if (!isGroup) {
                 fetchOtherUserProfile?.(id);
-            if (id) {
-                setMusicPartner?.(id);
-                // Wait briefly for channel to subscribe, then request sync
-                setTimeout(() => requestMusicSync?.(), 1000);
-            }
+                if (id) {
+                    setMusicPartner?.(id);
+                    setTimeout(() => requestMusicSync?.(), 1000);
+                }
             } else {
+                if (id) {
+                    joinGroupMusicRoom?.(id);
+                    setTimeout(() => requestMusicSync?.(), 700);
+                }
                 // Fetch roles for all group members
                 const { data: members } = await supabase
                     .from('group_members')
@@ -834,9 +994,12 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
 
         return () => {
             task.cancel();
+            if (isGroup && id) {
+                void leaveGroupMusicRoom?.(id);
+            }
             cleanupChatSession?.(id);
         };
-    }, [cleanupChatSession, id, currentUser?.id, initializeChatSession, fetchOtherUserProfile, isFocused, isGroup]);
+    }, [cleanupChatSession, id, currentUser?.id, initializeChatSession, fetchOtherUserProfile, isFocused, isGroup, joinGroupMusicRoom, leaveGroupMusicRoom, requestMusicSync, setMusicPartner]);
 
     // Mark incoming messages as read when chat is open or app returns to foreground
     useEffect(() => {
@@ -1302,7 +1465,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             try {
                 // Fetch group members from supabase
                 const { data, error } = await supabase
-                    .from('chat_group_members')
+                    .from('group_members')
                     .select('user_id')
                     .eq('group_id', id);
 
@@ -1645,7 +1808,11 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
         const showDateSeparator = nextItem && new Date(nextItem.timestamp).toDateString() !== msgDate.toDateString();
 
         return (
-            <>
+            <Animated.View
+                entering={FadeInDown.springify().damping(24).stiffness(200)}
+                exiting={FadeOutDown}
+                layout={LinearTransition.springify().damping(24).stiffness(200)}
+            >
                 <MessageBubble
                     msg={item}
                     contactName={contact?.name || 'Them'}
@@ -1683,7 +1850,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                         </View>
                     </View>
                 )}
-            </>
+            </Animated.View>
         );
     }, [selectedContextMessage, chatMessages, contact?.name, handleReaction, handleDoubleTap, handleMediaTap, selectionMode, selectedMessageIds, handleSelectToggle, uploadProgressTracker, handleMediaDownload, handleRetryMessage, handleQuotePress, highlightedMessageId, reversedMessages, unreadIncomingIds, formatDateLabel]);
 
@@ -1911,7 +2078,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
         return (
             <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
                 {isLoadingProfile ? (
-                    <ActivityIndicator size="large" color={themeAccent} />
+                    <SoulLoader size={120} />
                 ) : (
                     <Text style={styles.errorText}>Contact not found</Text>
                 )}
@@ -1934,7 +2101,6 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                     {/* Standard Navigation Header (Only in non-overlay mode) */}
                     <View style={[StyleSheet.absoluteFill, { zIndex: 10 }]} pointerEvents="box-none">
                         <Animated.View
-                            {...(ENABLE_SHARED_TRANSITIONS ? { sharedTransitionTag: `pill-${contact?.id || id}` } : {})}
                             style={[
                                 styles.headerPill,
                                 headerMorphAnimatedStyle,
@@ -1993,15 +2159,22 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
 
                             <View style={[styles.header, { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, height: '100%', paddingRight: 8 }]} pointerEvents="box-none">
                                 <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
-                                    <Pressable collapsable={false} style={styles.avatarWrapper} onPress={openProfileWithMorph}>
-                                        <SoulAvatar 
+                                    <Pressable
+                                        collapsable={false}
+                                        style={[styles.avatarWrapper, shouldHideHeaderAvatar && styles.avatarWrapperHidden]}
+                                        onPress={openProfileWithMorph}
+                                    >
+                                        <SoulAvatar
                                             ref={profileAvatarRef}
-                                            uri={contact?.avatar} 
-                                            size={46} 
-                                            isOnline={contact?.id ? getPresence(contact.id).isOnline : false} 
-                                            sharedTransitionTag={profileAvatarTransitionTag}
-                                            sharedTransition={PROFILE_AVATAR_SHARED_TRANSITION}
-                                            allowExperimentalSharedTransition={true}
+                                            uri={(remoteHasBetterAvatar ? remoteContact?.avatar : contact?.avatar) || contact?.avatar}
+                                            localUri={contact?.localAvatarUri || remoteContact?.localAvatarUri}
+                                            avatarType={contact?.avatarType as any}
+                                            teddyVariant={(contact as any)?.teddyVariant}
+                                            size={46}
+                                            isOnline={contact?.id ? getPresence(contact.id).isOnline : false}
+                                            sharedTransitionTag={ENABLE_PROFILE_AVATAR_SHARED_TRANSITION ? profileAvatarTransitionTag : undefined}
+                                            sharedTransition={ENABLE_PROFILE_AVATAR_SHARED_TRANSITION ? PROFILE_AVATAR_SHARED_TRANSITION : undefined}
+                                            allowExperimentalSharedTransition={ENABLE_PROFILE_AVATAR_SHARED_TRANSITION}
                                         />
                                     </Pressable>
                                     <View style={styles.headerInfo}>
@@ -2013,9 +2186,9 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                             }
                                         </Text>
                                     </View>
-                                    <View style={{ flexDirection: 'row', gap: 8, marginLeft: 'auto', marginRight: 0 }}>
-                                        <Pressable style={styles.headerButton} onPress={() => setShowMusicPlayer(true)}>
-                                            <MaterialIcons name="music-note" size={20} color="#ffffff" />
+                                    <View style={{ flexDirection: 'row', marginLeft: 'auto', marginRight: 0 }}>
+                                        <Pressable style={[styles.headerButton, { marginRight: 6 }]} onPress={() => setShowMusicPlayer(true)}>
+                                            <MaterialIcons name="music-note" size={20} color="#ffffff" style={{ marginLeft: -2.5 }} />
                                         </Pressable>
                                         <Pressable style={styles.headerButton} onPress={openCallModal}>
                                             <MaterialIcons name="call" size={20} color="#ffffff" />
@@ -2038,8 +2211,9 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                     zIndex: 20 
                                 }
                             ]}>
-                                <Pressable onPress={handleBack} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-                                    <MaterialIcons name="arrow-back" size={28} color="#ffffff" />
+                                <Pressable onPress={handleBack} style={{ flex: 1, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderRadius: BACK_BTN_SIZE / 2 }}>
+                                    <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
+                                    <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
                                 </Pressable>
                             </Animated.View>
                         )}
@@ -2112,6 +2286,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                                             isOverlayKeyboardVisible && styles.overlayMessagesContentKeyboard,
                                                         ]}
                                                         showsVerticalScrollIndicator={false}
+                                                        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
                                                         scrollEventThrottle={16}
                                                         keyboardShouldPersistTaps="handled"
                                                         keyboardDismissMode="on-drag"
@@ -2139,6 +2314,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                                     style={styles.messagesList}
                                                     contentContainerStyle={styles.messagesContent}
                                                     showsVerticalScrollIndicator={false}
+                                                    maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
                                                     scrollEventThrottle={16}
                                                     keyboardShouldPersistTaps="handled"
                                                     keyboardDismissMode="on-drag"
@@ -2237,7 +2413,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                     { name: 'insert-drive-file', label: 'Document', color: '#4ade80', action: handleSelectDocument },
                                     { name: 'person-outline', label: 'Contact', color: 'rgba(255,255,255,0.8)', action: handleSelectContact },
                                 ].map((opt) => (
-                                    <Pressable key={opt.label} style={{ alignItems: 'center', gap: 4 }} onPress={() => { opt.action(); toggleOptions(); }}>
+                                    <Pressable key={opt.label} style={{ alignItems: 'center' }} onPress={() => { opt.action(); toggleOptions(); }}>
                                         <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.05)', alignItems: 'center', justifyContent: 'center' }}>
                                             <MaterialIcons name={opt.name as any} size={24} color={opt.color} />
                                         </View>
@@ -2597,13 +2773,16 @@ const styles = StyleSheet.create({
         paddingRight: 16,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 14,
+        // gap: 14,
     },
     backButton: {
         padding: 4,
     },
     avatarWrapper: {
         position: 'relative',
+    },
+    avatarWrapperHidden: {
+        opacity: 0,
     },
     avatar: {
         width: 46,
@@ -2752,7 +2931,7 @@ const styles = StyleSheet.create({
     },
     replyContent: {
         flexDirection: 'row',
-        gap: 10,
+        // gap: 10,
         flex: 1,
     },
     replyTextContainer: {
@@ -2788,7 +2967,7 @@ const styles = StyleSheet.create({
     inputAreaRow: {
         flexDirection: 'row',
         alignItems: 'flex-end',
-        gap: 8,
+        // gap: 8,
     },
     unifiedPillContainer: {
         flex: 1,
@@ -2818,6 +2997,7 @@ const styles = StyleSheet.create({
         borderColor: 'rgba(255, 255, 255, 0.22)',
         flexShrink: 0,
         marginBottom: 0,
+        marginRight: 6,
         overflow: 'hidden',
     },
     input: {
@@ -2839,6 +3019,7 @@ const styles = StyleSheet.create({
         borderColor: 'rgba(255, 255, 255, 0.22)',
         flexShrink: 0,
         overflow: 'hidden',
+        marginLeft: 6,
     },
     sendButtonActive: {
         // Handled via inline themeAccent for dynamic switching
@@ -2885,7 +3066,7 @@ const styles = StyleSheet.create({
     callDropdownItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        // gap: 12,
         paddingVertical: 14,
         paddingHorizontal: 16,
     },
@@ -2959,7 +3140,7 @@ const styles = StyleSheet.create({
     mediaCollectionReactionBar: {
         flexDirection: 'row',
         justifyContent: 'center',
-        gap: 12,
+        // gap: 12,
         paddingVertical: 12,
         borderTopWidth: 1,
         borderTopColor: 'rgba(255,255,255,0.1)',
@@ -3016,7 +3197,7 @@ const styles = StyleSheet.create({
     },
     mediaViewerReactionsRow: {
         flexDirection: 'row',
-        gap: 10,
+        // gap: 10,
     },
     mediaViewerReactionBtn: {
         width: 42,
@@ -3037,7 +3218,7 @@ const styles = StyleSheet.create({
     nowPlayingStatus: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        // gap: 4,
     },
     optionsMenu: {
         position: 'absolute',
@@ -3133,7 +3314,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 10,
-        gap: 6,
+        // gap: 6,
     },
     searchInput: {
         flex: 1,

@@ -147,6 +147,27 @@ class ChatService {
   private appStateListener:     any = null;
   private isRealtimeConnecting: boolean = false;
 
+  private isRowRelevantToActiveChat(row: any): boolean {
+    if (!this.userId || !this.partnerId) return false;
+    if (this.isGroup) {
+      return row.group_id === this.partnerId;
+    }
+
+    return (
+      (row.sender === this.partnerId && row.receiver === this.userId) ||
+      (row.sender === this.userId && row.receiver === this.partnerId)
+    );
+  }
+
+  private isIncomingRowForCurrentUser(row: any): boolean {
+    if (!this.userId) return false;
+    if (this.isGroup) {
+      return row.group_id === this.partnerId && row.sender !== this.userId;
+    }
+
+    return row.receiver === this.userId && row.sender === this.partnerId;
+  }
+
   async initialize(
     userId: string,
     partnerId: string,
@@ -294,14 +315,14 @@ class ChatService {
         { event: 'INSERT', schema: 'public', table: 'messages' },
         async (payload) => {
           const incoming = this.mapDbRowToChatMessage(payload.new);
-          if (incoming.receiver_id !== this.userId) return;
+          if (!this.isRowRelevantToActiveChat(payload.new)) return;
 
           await this.persistRemoteMessageRow(
             payload.new,
-            incoming.sender_id === this.partnerId ? 'if_new' : 'never'
+            this.isIncomingRowForCurrentUser(payload.new) ? 'if_new' : 'never'
           );
 
-          if (incoming.sender_id === this.partnerId) {
+          if (this.isIncomingRowForCurrentUser(payload.new)) {
             this.updateMessageStatusOnServer(incoming.id, 'delivered');
           }
         }
@@ -354,15 +375,15 @@ class ChatService {
             return;
           }
 
-          if (updated.receiver !== this.userId) return;
+          if (!this.isRowRelevantToActiveChat(updated)) return;
 
           const incoming = this.mapDbRowToChatMessage(updated);
           await this.persistRemoteMessageRow(
             updated,
-            incoming.sender_id === this.partnerId ? 'always' : 'never'
+            this.isIncomingRowForCurrentUser(updated) ? 'always' : 'never'
           );
 
-          if (incoming.sender_id === this.partnerId) {
+          if (this.isIncomingRowForCurrentUser(updated)) {
             this.updateMessageStatusOnServer(incoming.id, 'delivered');
           }
         }

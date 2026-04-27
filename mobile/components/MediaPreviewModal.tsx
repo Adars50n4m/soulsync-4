@@ -8,10 +8,10 @@ import {
   KeyboardAvoidingView,
   Platform,
   StatusBar,
-  ActivityIndicator,
   useWindowDimensions,
   Alert,
 } from 'react-native';
+import { SoulLoader } from './ui/SoulLoader';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Video, ResizeMode } from 'expo-av';
@@ -337,7 +337,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
               {currentType === 'video' && (
                 <Pressable style={styles.iconButton} onPress={handleTrimVideo} disabled={isUploading || isTrimming}>
                   {isTrimming ? (
-                    <ActivityIndicator size="small" color="#fff" />
+                    <SoulLoader size={30} />
                   ) : (
                     <MaterialIcons name="content-cut" size={22} color="#fff" />
                   )}
@@ -489,7 +489,7 @@ export const MediaPreviewModal: React.FC<MediaPreviewModalProps> = ({
                 disabled={isUploading}
               >
                 {isUploading ? (
-                  <ActivityIndicator size="small" color="#fff" />
+                  <SoulLoader size={30} />
                 ) : (
                   <MaterialIcons name="send" size={18} color="#fff" />
                 )}

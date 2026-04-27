@@ -1,0 +1,150 @@
+diff --git a/node_modules/react-native-sheet-transitions/src/SheetProvider.tsx b/node_modules/react-native-sheet-transitions/src/SheetProvider.tsx
+index 2e3964c..9c281fb 100644
+--- a/node_modules/react-native-sheet-transitions/src/SheetProvider.tsx
++++ b/node_modules/react-native-sheet-transitions/src/SheetProvider.tsx
+@@ -1,4 +1,4 @@
+-import React, { createContext, useContext, useCallback, useEffect } from 'react'
++import React, { createContext, useContext, useCallback, useEffect, useRef } from 'react'
+ import { Platform, View } from 'react-native'
+ import Animated, {
+   useSharedValue,
+@@ -30,21 +30,24 @@ export function SheetProvider({
+ }: SheetProviderProps) {
+   const scale = useSharedValue(1)
+   const isMounted = useSharedValue(false)
++  const isMountedRef = useRef(false)
+ 
+   useEffect(() => {
+     // Delay setting isMounted to ensure view is ready
+     requestAnimationFrame(() => {
++      isMountedRef.current = true
+       isMounted.value = true
+     })
+ 
+     return () => {
++      isMountedRef.current = false
+       isMounted.value = false
+       cancelAnimation(scale)
+     }
+   }, [])
+ 
+   const setScale = useCallback((newScale: number) => {
+-    if (!isMounted.value) return
++    if (!isMountedRef.current) return
+ 
+     if (Platform.OS === 'android') {
+       scale.value = newScale
+diff --git a/node_modules/react-native-sheet-transitions/src/SheetScreen.tsx b/node_modules/react-native-sheet-transitions/src/SheetScreen.tsx
+index 3eebf71..e7fb9a8 100644
+--- a/node_modules/react-native-sheet-transitions/src/SheetScreen.tsx
++++ b/node_modules/react-native-sheet-transitions/src/SheetScreen.tsx
+@@ -1,4 +1,4 @@
+-import React, { useEffect, useRef, useCallback } from 'react'
++import React, { useEffect, useRef, useCallback, useState } from 'react'
+ import { Dimensions, StyleSheet, View, Platform } from 'react-native'
+ import Animated, { 
+   useSharedValue, 
+@@ -40,6 +40,13 @@ interface Props {
+   disableSheetContentResizeOnDragDown?: boolean
+ }
+ 
++interface ScrollStateSnapshot {
++  isAtTop: boolean
++  isAtBottom: boolean
++  scrollY: number
++  velocity: number
++}
++
+ //  TODO; containerRadiusSync = true
+ 
+ export function SheetScreen({
+@@ -82,18 +89,26 @@ export function SheetScreen({
+   const hasPassedThreshold = useSharedValue(false)
+   const previousTranslation = useSharedValue(0)
+   const isMounted = useSharedValue(true)
++  const isMountedRef = useRef(true)
+   const scrollState = useSharedValue({
+     isAtTop: true,
+     isAtBottom: false,
+     scrollY: 0,
+     velocity: 0
+   })
++  const [scrollStateSnapshot, setScrollStateSnapshot] = useState<ScrollStateSnapshot>({
++    isAtTop: true,
++    isAtBottom: false,
++    scrollY: 0,
++    velocity: 0,
++  })
+   const isDragging = useSharedValue(false)
+ 
+   const shouldEnableScale = Platform.OS === 'ios' && !disableRootScale
+ 
+   useEffect(() => {
+     return () => {
++      isMountedRef.current = false
+       isMounted.value = false
+       cancelAnimation(translateY)
+       cancelAnimation(translateX)
+@@ -103,7 +118,7 @@ export function SheetScreen({
+   }, [])
+ 
+   const updateScale = React.useCallback((newScale: number) => {
+-    if (Platform.OS === 'android' || !isMounted.value) {
++    if (Platform.OS === 'android' || !isMountedRef.current) {
+       return
+     }
+     setScale(newScale)
+@@ -128,18 +143,24 @@ export function SheetScreen({
+ 
+   const effectiveDragDirections = React.useMemo(() => ({
+     ...dragDirections,
+-    toTop: isScrollable ? scrollState.value.isAtBottom : dragDirections.toTop,
+-    toBottom: isScrollable ? scrollState.value.isAtTop : dragDirections.toBottom,
+-  }), [dragDirections, isScrollable, scrollState.value])
+-
+-  const handleScrollStateChange = useCallback((state: {
+-    isAtTop: boolean
+-    isAtBottom: boolean
+-    scrollY: number
+-    velocity: number
+-  }) => {
++    toTop: isScrollable ? scrollStateSnapshot.isAtBottom : dragDirections.toTop,
++    toBottom: isScrollable ? scrollStateSnapshot.isAtTop : dragDirections.toBottom,
++  }), [dragDirections, isScrollable, scrollStateSnapshot.isAtBottom, scrollStateSnapshot.isAtTop])
++
++  const handleScrollStateChange = useCallback((state: ScrollStateSnapshot) => {
+     scrollState.value = state
+-  }, [])
++    setScrollStateSnapshot((prev) => {
++      if (
++        prev.isAtTop === state.isAtTop &&
++        prev.isAtBottom === state.isAtBottom &&
++        prev.scrollY === state.scrollY &&
++        prev.velocity === state.velocity
++      ) {
++        return prev
++      }
++      return state
++    })
++  }, [scrollState])
+ 
+   const panGesture = React.useMemo(
+     () => Gesture.Pan()
+@@ -261,7 +282,7 @@ export function SheetScreen({
+     , [effectiveDragDirections, isScrollable, scrollState]
+   )
+ 
+-  const animatedStyle = useAnimatedStyle(() => {
++  const animatedStyle = useAnimatedStyle((): any => {
+     if (!isMounted.value) return {}
+     
+     const scale = disableSheetContentResizeOnDragDown ? 1 : interpolate(
+@@ -282,7 +303,7 @@ export function SheetScreen({
+     }
+   }, [disableSheetContentResizeOnDragDown])
+ 
+-  const backgroundStyle = useAnimatedStyle(() => ({
++  const backgroundStyle = useAnimatedStyle((): any => ({
+     opacity: opacity.value,
+     position: 'absolute',
+     top: 0,

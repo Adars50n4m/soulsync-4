@@ -9,10 +9,10 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
-  ActivityIndicator,
   Animated,
   StatusBar,
 } from 'react-native';
+import { SoulLoader } from '../components/ui/SoulLoader';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { authService } from '../services/AuthService';
 import { useApp } from '../context/AppContext';
@@ -246,7 +246,7 @@ export default function OTPScreen() {
             activeOpacity={0.85}
           >
             {loading
-              ? <ActivityIndicator color="#0A0A0F" size="small" />
+              ? <SoulLoader size={36} />
               : <Text style={styles.verifyBtnText}>Verify →</Text>
             }
           </TouchableOpacity>
@@ -254,7 +254,7 @@ export default function OTPScreen() {
 
         {loading && filledCount === OTP_LENGTH && (
           <View style={styles.loadingRow}>
-            <ActivityIndicator color={themeAccent} size="small" />
+            <SoulLoader size={32} />
             <Text style={[styles.loadingText, { color: themeAccent }]}>Verifying...</Text>
           </View>
         )}
@@ -263,7 +263,7 @@ export default function OTPScreen() {
           {canResend ? (
             <TouchableOpacity onPress={handleResend} disabled={resending}>
               {resending
-                ? <ActivityIndicator color={themeAccent} size="small" />
+                ? <SoulLoader size={32} />
                 : <Text style={[styles.resendActive, { color: themeAccent }]}>Resend code</Text>
               }
             </TouchableOpacity>

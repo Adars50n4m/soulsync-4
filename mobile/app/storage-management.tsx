@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     View, Text, StyleSheet, Pressable, StatusBar, ScrollView,
-    Image, Platform, Alert, ActivityIndicator,
+    Image, Platform, Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import GlassView from '../components/ui/GlassView';
@@ -18,6 +18,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useApp } from '../context/AppContext';
 import BreakdownItem from '../components/storage/BreakdownItem';
+import { SoulLoader } from '../components/ui/SoulLoader';
 import ChatStorageItem from '../components/storage/ChatStorageItem';
 import { useWindowDimensions } from 'react-native';
 
@@ -351,7 +352,7 @@ export default function StorageManagementScreen() {
                     <View style={{ width: 40 }} />
                 </View>
                 <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color={activeTheme.primary} />
+                    <SoulLoader size={200} />
                     <Text style={styles.loadingText}>Calculating storage...</Text>
                 </View>
             </View>
@@ -611,7 +612,7 @@ export default function StorageManagementScreen() {
                                 </Text>
                             </View>
                             {clearingCache ? (
-                                <ActivityIndicator color={activeTheme.primary} size="small" />
+                                <SoulLoader size={30} />
                             ) : (
                                 <MaterialIcons name="chevron-right" size={24} color="rgba(255,255,255,0.2)" />
                             )}

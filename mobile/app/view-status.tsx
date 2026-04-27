@@ -2,9 +2,9 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import LottieView from 'lottie-react-native';
 import {
     View, Text, Image, StyleSheet, StatusBar,
-    useWindowDimensions, Pressable, Alert, TextInput, Modal, ScrollView,
-    ActivityIndicator
+    useWindowDimensions, Pressable, Alert, TextInput, Modal, ScrollView
 } from 'react-native';
+import { SoulLoader } from '../components/ui/SoulLoader';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -30,13 +30,16 @@ import { UserStatusGroup } from '../types';
 import { supabase } from '../config/supabase';
 
 const StatusProgressBar = ({ idx, currentIndex, progress }: any) => {
-    const style = useAnimatedStyle(() => ({
-        width: idx < currentIndex
-            ? '100%'
-            : idx === currentIndex
-                ? `${progress.value * 100}%`
-                : '0%'
-    }));
+    const style = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            width: idx < currentIndex
+                ? '100%'
+                : idx === currentIndex
+                    ? `${progress.value * 100}%`
+                    : '0%'
+        };
+    });
     return <View style={styles.progressBar}><Animated.View style={[styles.progressFill, style]} /></View>;
 };
 
@@ -47,6 +50,7 @@ export default function ViewStatusScreen() {
     const router = useRouter();
     const { currentUser, sendChatMessage, activeTheme } = useApp();
     const themeAccent = activeTheme.primary;
+    const currentUserId = currentUser?.id;
     
     const [statusGroup, setStatusGroup] = useState<UserStatusGroup | null>(null);
     const [currentIndex, setCurrentIndex] = useState(0);
@@ -116,23 +120,23 @@ export default function ViewStatusScreen() {
             }
 
             // Mark as viewed
-            if (currentUser) {
-                statusService.onStatusViewed(currentStatus.id, currentUser.id);
+            if (currentUserId) {
+                statusService.onStatusViewed(currentStatus.id, currentUserId);
             }
         };
         loadMedia();
 
         if (statusGroup.isMine) {
             statusService.getMyStatusViewers(currentStatus.id).then(setViewers);
-            
+
             // Realtime listener for new viewers
             const channel = supabase
                 .channel(`status_views_${currentStatus.id}`)
                 .on(
                     'postgres_changes',
-                    { 
-                        event: 'INSERT', 
-                        schema: 'public', 
+                    {
+                        event: 'INSERT',
+                        schema: 'public',
                         table: 'status_views',
                         filter: `status_id=eq.${currentStatus.id}`
                     },
@@ -147,7 +151,13 @@ export default function ViewStatusScreen() {
                 supabase.removeChannel(channel);
             };
         }
-    }, [currentIndex, currentUser, progress, statusGroup]);
+        // We depend on currentUser?.id (a stable primitive) instead of currentUser
+        // (the full object). AppContext re-creates currentUser on most renders,
+        // which was retriggering this effect and re-loading the media (showing
+        // the heartbeat loader) every few seconds even when the status hadn't
+        // actually changed.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [currentIndex, currentUserId, statusGroup]);
 
     const handleNext = useCallback(() => {
         if (statusGroup && currentIndex < statusGroup.statuses.length - 1) {
@@ -240,32 +250,47 @@ export default function ViewStatusScreen() {
 
     const composedGestures = Gesture.Simultaneous(longPressGesture, Gesture.Exclusive(panGesture, tapGesture));
 
-    const animatedStyle = useAnimatedStyle(() => ({
-        transform: [
-            { translateY: translateY.value },
-            { scale: scale.value }
-        ] as any,
-        borderRadius: translateY.value > 0 ? 30 : 0,
-        overflow: 'hidden'
-    }));
+    const animatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            transform: [
+                { translateY: translateY.value },
+                { scale: scale.value }
+            ] as any,
+            borderRadius: translateY.value > 0 ? 30 : 0,
+            overflow: 'hidden'
+        };
+    });
 
-    const mediaAnimatedStyle = useAnimatedStyle(() => ({
-        transform: [
-            { scale: withTiming(isLongPressing.value ? 1 : 1.15, { duration: 300 }) }
-        ],
-    }));
+    const mediaAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            transform: [
+                { scale: withTiming(isLongPressing.value ? 1 : 1.15, { duration: 300 }) }
+            ],
+        };
+    });
 
-    const uiAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: withTiming(1 - isLongPressing.value, { duration: 200 }),
-    }));
+    const uiAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: withTiming(1 - isLongPressing.value, { duration: 200 }),
+        };
+    });
 
-    const overlayAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: withTiming(1 - isLongPressing.value, { duration: 250 }),
-    }));
+    const overlayAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: withTiming(1 - isLongPressing.value, { duration: 250 }),
+        };
+    });
 
-    const maskAnimatedStyle = useAnimatedStyle(() => ({
-        opacity: withTiming(isLongPressing.value, { duration: 250 }),
-    }));
+    const maskAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: withTiming(isLongPressing.value, { duration: 250 }),
+        };
+    });
 
     const currentStatus = statusGroup?.statuses[currentIndex] ?? null;
     const trimmedReplyText = replyText.trim();
@@ -395,7 +420,7 @@ export default function ViewStatusScreen() {
                             
                             {loading && (
                                 <View style={styles.loader}>
-                                    <ActivityIndicator color="#fff" size="large" />
+                                    <SoulLoader size={80} />
                                 </View>
                             )}
                         </Animated.View>
@@ -518,7 +543,7 @@ export default function ViewStatusScreen() {
                                     disabled={isReplyActionLoading || (showSendAction && !trimmedReplyText)}
                                 >
                                     {isReplyActionLoading ? (
-                                        <ActivityIndicator color="#fff" />
+                                        <SoulLoader size={40} />
                                     ) : (
                                         <Ionicons
                                             name={showSendAction ? "send" : "heart"}

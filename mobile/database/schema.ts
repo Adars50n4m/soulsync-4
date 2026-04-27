@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ⬆️  Bump this number every time you change the schema.
-const DB_TARGET_VERSION = 34;
+const DB_TARGET_VERSION = 35;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper — read the stored schema version (returns 0 if brand-new install)
@@ -997,7 +997,7 @@ async function migration_v33(db: any): Promise<void> {
             name TEXT NOT NULL,
             description TEXT,
             avatar_url TEXT,
-            created_by TEXT,
+            creator_id TEXT,
             created_at TEXT,
             updated_at TEXT
         );
@@ -1030,6 +1030,22 @@ async function migration_v34(db: any): Promise<void> {
     };
     await safeAlter(`ALTER TABLE messages ADD COLUMN sender_name TEXT;`);
     console.log('[SQLite] Migration v34: Added sender_name to messages');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MIGRATION v35 — Rename groups.created_by → creator_id to match remote schema
+// ─────────────────────────────────────────────────────────────────────────────
+async function migration_v35(db: any): Promise<void> {
+    const cols = await db.getAllAsync(`PRAGMA table_info(groups);`) as Array<{ name: string }>;
+    const hasCreatedBy = cols.some(c => c.name === 'created_by');
+    const hasCreatorId = cols.some(c => c.name === 'creator_id');
+
+    if (hasCreatedBy && !hasCreatorId) {
+        await db.execAsync(`ALTER TABLE groups RENAME COLUMN created_by TO creator_id;`);
+    } else if (!hasCreatorId) {
+        await db.execAsync(`ALTER TABLE groups ADD COLUMN creator_id TEXT;`);
+    }
+    console.log('[SQLite] Migration v35: groups.creator_id ready');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1091,6 +1107,7 @@ export const MIGRATE_DB = async (db: any): Promise<void> => {
         case 32: await migration_v32(db); break;
         case 33: await migration_v33(db); break;
         case 34: await migration_v34(db); break;
+        case 35: await migration_v35(db); break;
         default:
           console.error(`[SQLite] No migration logic for v${nextVersion}!`);
       }

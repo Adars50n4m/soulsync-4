@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useDeferredValue, useMemo } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Platform, Alert, Pressable, useWindowDimensions, KeyboardAvoidingView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Platform, Alert, Pressable, useWindowDimensions, KeyboardAvoidingView } from 'react-native';
+import { SoulLoader } from '../components/ui/SoulLoader';
 import { FlashList } from '@shopify/flash-list';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SERVER_URL, proxySupabaseUrl } from '../config/api';
@@ -1347,7 +1348,7 @@ export default function SearchScreen() {
                                         <Ionicons name="close-circle" size={20} color="rgba(255,255,255,0.3)" />
                                     </TouchableOpacity>
                                 )}
-                                {loading && <ActivityIndicator color={activeTheme.primary} size="small" />}
+                                {loading && <SoulLoader size={32} />}
                             </View>
                         </View>
 
