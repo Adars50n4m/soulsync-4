@@ -3,6 +3,8 @@ import { Tabs, usePathname, useRouter } from 'expo-router';
 import { View, StyleSheet, useWindowDimensions, Platform, Pressable } from 'react-native';
 import GlassView, { GlassPressable } from '../../components/ui/GlassView';
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
+import MaskedView from '@react-native-masked-view/masked-view';
 import { LinearGradient } from 'expo-linear-gradient';
 import { hapticService } from '../../services/HapticService';
 import * as Haptics from 'expo-haptics';
@@ -65,6 +67,28 @@ const TabIcon = ({ name, focused, size = 26 }: { name: string; focused: boolean;
 };
 
 const SEARCH_BUTTON_SIZE_CONST = 56;
+
+const ProgressiveBlur = ({ style }: { style?: any }) => {
+  return (
+    <Animated.View 
+      pointerEvents="none" 
+      style={[styles.progressiveBlurContainer, style]}
+    >
+      <MaskedView
+        style={StyleSheet.absoluteFill}
+        maskElement={
+          <LinearGradient
+            colors={['transparent', 'black', 'black']}
+            locations={[0, 0.5, 1]}
+            style={StyleSheet.absoluteFill}
+          />
+        }
+      >
+        <BlurView intensity={25} tint="dark" style={StyleSheet.absoluteFill} />
+      </MaskedView>
+    </Animated.View>
+  );
+};
 
 const SearchFab = ({
   searchFocused,
@@ -253,6 +277,7 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
 
   return (
     <Animated.View style={[styles.tabBarContainer, tabBarFadeStyle, dropDownStyle]}>
+      <ProgressiveBlur />
       <View style={styles.bottomActionsRow}>
         <View style={[styles.tabBarGlassContainer, { width: navBarWidth }]}>
           <GlassView intensity={35} tint="dark" style={[StyleSheet.absoluteFillObject, { borderRadius: 40, overflow: 'hidden' }]} />
@@ -430,5 +455,13 @@ const styles = StyleSheet.create({
   },
   searchFabShellActive: {
     backgroundColor: 'rgba(255, 255, 255, 0.07)',
+  },
+  progressiveBlurContainer: {
+    position: 'absolute',
+    bottom: -34, // Align with the bottom edge of the screen
+    left: -16,
+    right: -16,
+    height: 140, // Height of the blur area
+    zIndex: -1,
   },
 });
