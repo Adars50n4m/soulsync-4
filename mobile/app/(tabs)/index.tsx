@@ -21,6 +21,7 @@ import { useRouter, useNavigation } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import GlassView from '../../components/ui/GlassView';
+import { GlassChipButton, GlassPillSurface } from '../../components/ui/IOS26Primitives';
 import ConnectionBanner from '../../components/ConnectionBanner';
 import { SoulPullToRefresh } from '../../components/ui/SoulPullToRefresh';
 import ChatListItemSkeleton from '../../components/ui/ChatListItemSkeleton';
@@ -136,6 +137,7 @@ interface ChatListItemProps {
 }
 
 const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, isTyping, getPresence, connectivity, homeMorphProgress, selectedPillId, unreadCount, isPinned, isMuted, isClone, isSelected }: ChatListItemProps) => {
+  const { activeTheme } = useApp();
   const scaleAnim = useSharedValue(1);
   const opacityAnim = useSharedValue(1);
   const itemRef = useRef<View>(null);
@@ -166,12 +168,16 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
     };
   });
 
+  const [pressed, setPressed] = useState(false);
+
   const handlePressIn = useCallback(() => {
+    setPressed(true);
     scaleAnim.value = withSpring(0.96, { damping: 15, stiffness: 300 });
     opacityAnim.value = withTiming(0.92, { duration: 90 });
   }, []);
 
   const handlePressOut = useCallback(() => {
+    setPressed(false);
     scaleAnim.value = withSpring(1, { damping: 15, stiffness: 300 });
     opacityAnim.value = withTiming(1, { duration: 120 });
   }, []);
@@ -198,71 +204,65 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
     >
       {/* Outer container — manual morph in chat screen handles the pill expansion */}
       <View
-        style={[styles.chatPillContainer, isSelected && { borderWidth: 2, borderColor: '#ff4444', borderRadius: 36 }]}
+        style={styles.chatPillContainer}
       >
         {isSelected && (
           <View style={{ position: 'absolute', top: 8, right: 12, zIndex: 5, backgroundColor: '#ff4444', borderRadius: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center' }}>
             <MaterialIcons name="check" size={16} color="#fff" />
           </View>
         )}
-        {/* Inner container handles the press scale animation */}
         <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
-          {/* Glass background — blur on iOS, solid on Android (flattened for perf) */}
-          {Platform.OS === 'android' ? (
-            <View style={[StyleSheet.absoluteFill, { borderRadius: 32, backgroundColor: '#0A0A0A' }]} />
-          ) : (
-            <View style={[StyleSheet.absoluteFill, { borderRadius: 32, overflow: 'hidden' }]}>
-              <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
+          <GlassPillSurface
+            radius={32}
+            intensity={35}
+            selected={isSelected}
+            selectedColor="#ff4444"
+            pressed={pressed}
+            pressColor={activeTheme.primary}
+            style={styles.chatPillSurface}
+            contentStyle={styles.pillContent}
+          >
+            <View style={styles.avatarContainer}>
+              <SoulAvatar
+                uri={proxySupabaseUrl(item.avatar) || DEFAULT_AVATAR}
+                localUri={item.localAvatarUri}
+                size={46}
+                avatarType={item.avatarType}
+                teddyVariant={item.teddyVariant}
+                isOnline={getPresence(item.id).isOnline}
+                style={[
+                  item.stories && item.stories.length > 0 && {
+                    borderWidth: 2,
+                    borderColor: item.stories.some((s) => !s.seen) ? '#3b82f6' : 'rgba(255,255,255,0.4)',
+                    padding: 2,
+                    overflow: 'hidden'
+                  }
+                ]}
+              />
             </View>
-          )}
-        {/* Subtle dark tint overlay */}
-        <View
-            style={[StyleSheet.absoluteFill, { borderRadius: 32, backgroundColor: 'rgba(0, 0, 0, 0.15)' }]}
-        />
-            
-        {/* Content rendered safely as an overlay, decoupled from Reanimated's snapshot engine */}
-        <View style={[styles.pillContent, { position: 'absolute', width: '100%', height: '100%', paddingHorizontal: 16 }]} pointerEvents="box-none">
-          <View style={styles.avatarContainer}>
-            <SoulAvatar
-              uri={proxySupabaseUrl(item.avatar) || DEFAULT_AVATAR}
-              localUri={item.localAvatarUri}
-              size={46}
-              avatarType={item.avatarType}
-              teddyVariant={item.teddyVariant}
-              isOnline={getPresence(item.id).isOnline}
-              style={[
-                item.stories && item.stories.length > 0 && {
-                  borderWidth: 2,
-                  borderColor: item.stories.some((s) => !s.seen) ? '#3b82f6' : 'rgba(255,255,255,0.4)',
-                  padding: 2,
-                  overflow: 'hidden'
-                }
-              ]}
-            />
-          </View>
 
-          <View style={styles.chatContent}>
-            <Text style={styles.contactName}>
-              {item.name}
-            </Text>
-            <Text numberOfLines={1} style={isTyping ? [styles.lastMessage, typingStyle] : styles.lastMessage}>
-              {isTyping ? 'Typing...' : (lastMsg.text || 'Start a conversation')}
-            </Text>
-          </View>
-
-          <View style={styles.rightSide}>
-            {lastMsg.timestamp && <Text style={styles.timestamp}>{formatTime(lastMsg.timestamp)}</Text>}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              {isMuted && <MaterialIcons name="volume-off" size={12} color="rgba(255,255,255,0.45)" />}
-              {isPinned && <MaterialIcons name="push-pin" size={12} color="#facc15" />}
-              {unreadCount > 0 && (
-                <View style={styles.unreadBadge}>
-                  <Text style={styles.unreadBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
-                </View>
-              )}
+            <View style={styles.chatContent}>
+              <Text style={styles.contactName}>
+                {item.name}
+              </Text>
+              <Text numberOfLines={1} style={isTyping ? [styles.lastMessage, typingStyle] : styles.lastMessage}>
+                {isTyping ? 'Typing...' : (lastMsg.text || 'Start a conversation')}
+              </Text>
             </View>
-          </View>
-        </View>
+
+            <View style={styles.rightSide}>
+              {lastMsg.timestamp && <Text style={styles.timestamp}>{formatTime(lastMsg.timestamp)}</Text>}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                {isMuted && <MaterialIcons name="volume-off" size={12} color="rgba(255,255,255,0.45)" />}
+                {isPinned && <MaterialIcons name="push-pin" size={12} color="#facc15" />}
+                {unreadCount > 0 && (
+                  <View style={styles.unreadBadge}>
+                    <Text style={styles.unreadBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          </GlassPillSurface>
         </Animated.View>
       </View>
     </Pressable>
@@ -497,37 +497,16 @@ const FilterPill = React.memo(({
   };
 
   return (
-    <Pressable
-      onPress={() => onPress(id)}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
-    >
-      <Animated.View
-        style={[
-          {
-            paddingHorizontal: 16,
-            paddingVertical: 8,
-            borderRadius: 20,
-            backgroundColor: isActive ? `${activeTheme.primary}26` : 'rgba(255,255,255,0.06)',
-            borderWidth: isActive ? 1 : 0,
-            borderColor: isActive ? activeTheme.primary : 'transparent',
-            justifyContent: 'center',
-            alignItems: 'center',
-          },
-          animatedStyle
-        ]}
-      >
-        <Text
-          style={{
-            color: isActive ? activeTheme.primary : 'rgba(255,255,255,0.5)',
-            fontSize: 13,
-            fontWeight: '600',
-          }}
-        >
-          {label}
-        </Text>
-      </Animated.View>
-    </Pressable>
+    <Animated.View style={animatedStyle}>
+      <GlassChipButton
+        onPress={() => onPress(id)}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        active={isActive}
+        themeColor={activeTheme.primary}
+        label={label}
+      />
+    </Animated.View>
   );
 });
 
@@ -1151,9 +1130,12 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
                 </View>
               ) : hasStatus ? (
                 <View style={StyleSheet.absoluteFill}>
-                  {latestMyStatus.mediaType === 'text' ? (
+                  {((latestMyStatus as any)?.mediaType === 'text') ? (
                     <LinearGradient
-                      colors={[latestMyStatus.backgroundColor || '#6366f1', (latestMyStatus.backgroundColor || '#6366f1') + 'CC']}
+                      colors={[
+                        (latestMyStatus as any)?.backgroundColor || '#6366f1',
+                        `${(latestMyStatus as any)?.backgroundColor || '#6366f1'}CC`,
+                      ]}
                       style={[styles.myStatusPreviewBgFull, { justifyContent: 'center', alignItems: 'center', padding: 15 }]}
                     >
                       <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600', textAlign: 'center', marginTop: 10 }} numberOfLines={4}>
@@ -1439,19 +1421,17 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
             activeTheme={activeTheme}
           />
         ))}
-        <Pressable 
+        <GlassChipButton
           onPress={() => router.push('/create-group')}
-          style={{
-              width: 32,
-              height: 32,
-              borderRadius: 16,
-              backgroundColor: 'rgba(255,255,255,0.06)',
-              justifyContent: 'center',
-              alignItems: 'center'
-          }}
+          active={false}
+          themeColor={activeTheme.primary}
+          iconOnly
+          radius={16}
+          style={styles.addChip}
+          contentStyle={styles.addChipContent}
         >
           <MaterialIcons name="add" size={18} color="rgba(255,255,255,0.6)" />
-        </Pressable>
+        </GlassChipButton>
       </ScrollView>
     </View>
   ), [contactsWithStories, renderStatusItem, statusRailAnimStyle, router, chatFilter, selectionMode, selectedChatIds.length, exitSelectionMode, bulkDeleteSelected]);
@@ -1838,7 +1818,7 @@ const styles = StyleSheet.create({
   // past COLLAPSE_SCROLL (~90px) — drives the status-rail morph even when
   // the user has only a handful of chats.
   listContent: { paddingBottom: 600, paddingHorizontal: 4 },
-  chatItem: { marginBottom: 4, marginHorizontal: 10, borderRadius: 32, height: 64 },
+  chatItem: { marginBottom: 5, marginHorizontal: 8, borderRadius: 32, height: 64 },
   notePositioner: {
       position: 'absolute',
       top: -34,
@@ -1850,15 +1830,15 @@ const styles = StyleSheet.create({
   // Removed overflow: 'hidden' to let shared elements escape during flight
   chatPillContainer: { 
     flex: 1, 
-    borderRadius: 32, 
-    borderWidth: 1, 
-    borderColor: Platform.OS === 'android' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(255, 255, 255, 0.22)', 
-    overflow: 'hidden' 
+    borderRadius: 32,
+  },
+  chatPillSurface: {
+    flex: 1,
   },
 
   pillBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0, 0, 0, 0.15)', opacity: 0.95 },
   pillBlur: { ...StyleSheet.absoluteFillObject },
-  pillContent: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 14 },
+  pillContent: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingLeft: 9, paddingRight: 16, gap: 12 },
   avatarContainer: { position: 'relative' },
   avatar: { width: 46, height: 46, borderRadius: 23 },
   onlineIndicator: { position: 'absolute', bottom: 0, right: 0, width: 14, height: 14, borderRadius: 7, backgroundColor: '#22c55e', borderWidth: 2, borderColor: '#151515' },
@@ -1867,6 +1847,14 @@ const styles = StyleSheet.create({
   lastMessage: { color: 'rgba(255,255,255,0.5)', fontSize: 13, fontWeight: '500' },
   rightSide: { alignItems: 'flex-end', justifyContent: 'center', paddingRight: 4, gap: 4 },
   timestamp: { color: 'rgba(255,255,255,0.5)', fontSize: 11, fontWeight: '600' },
+  addChip: {
+    width: 32,
+    height: 32,
+  },
+  addChipContent: {
+    minHeight: 32,
+    minWidth: 32,
+  },
   moreMenuItemMorph: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,7 @@ import {
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import GlassView from '../components/ui/GlassView';
+import { GlassPillSurface } from '../components/ui/IOS26Primitives';
 import { SoulAvatar } from '../components/SoulAvatar';
 import { useApp } from '../context/AppContext';
 import type { Contact } from '../types';
@@ -29,6 +29,58 @@ const formatTime = (ts?: string) => {
     return '';
   }
 };
+
+type ArchivedRowItem = Contact & { previewText: string; previewTime: string };
+
+const ArchivedRow = React.memo(({
+  item,
+  themeColor,
+  onOpen,
+  onUnarchive,
+}: {
+  item: ArchivedRowItem;
+  themeColor: string;
+  onOpen: () => void;
+  onUnarchive: () => void;
+}) => {
+  const [pressed, setPressed] = useState(false);
+  return (
+    <Pressable
+      onPress={onOpen}
+      onPressIn={() => setPressed(true)}
+      onPressOut={() => setPressed(false)}
+      onLongPress={() => {
+        Alert.alert(item.name, undefined, [
+          { text: 'Unarchive', onPress: onUnarchive },
+          { text: 'Cancel', style: 'cancel' },
+        ]);
+      }}
+      style={styles.rowPressable}
+    >
+      <GlassPillSurface
+        radius={28}
+        intensity={32}
+        pressed={pressed}
+        pressColor={themeColor}
+        style={styles.row}
+        contentStyle={styles.rowContent}
+      >
+        <SoulAvatar uri={item.localAvatarUri || item.avatar} size={54} />
+        <View style={styles.textWrap}>
+          <View style={styles.topLine}>
+            <Text style={styles.name} numberOfLines={1}>{item.name || 'Unknown'}</Text>
+            <Text style={styles.time}>{formatTime(item.previewTime)}</Text>
+          </View>
+          <Text style={styles.preview} numberOfLines={1}>{item.previewText}</Text>
+        </View>
+        <Pressable onPress={onUnarchive} style={styles.actionBtn}>
+          <MaterialIcons name="unarchive" size={22} color={themeColor} />
+        </Pressable>
+      </GlassPillSurface>
+    </Pressable>
+  );
+});
+ArchivedRow.displayName = 'ArchivedRow';
 
 export default function ArchivedChatsScreen() {
   const router = useRouter();
@@ -58,31 +110,12 @@ export default function ArchivedChatsScreen() {
   }, [archiveContact]);
 
   const renderItem = useCallback(({ item }: { item: Contact & { previewText: string; previewTime: string } }) => (
-    <Pressable
-      onPress={() => router.push(`/chat/${item.id}`)}
-      onLongPress={() => {
-        Alert.alert(item.name, undefined, [
-          { text: 'Unarchive', onPress: () => handleUnarchive(item) },
-          { text: 'Cancel', style: 'cancel' },
-        ]);
-      }}
-      style={styles.row}
-    >
-      <GlassView intensity={30} tint="dark" style={styles.rowGlass} />
-      <View style={styles.rowContent}>
-        <SoulAvatar uri={item.localAvatarUri || item.avatar} size={54} />
-        <View style={styles.textWrap}>
-          <View style={styles.topLine}>
-            <Text style={styles.name} numberOfLines={1}>{item.name || 'Unknown'}</Text>
-            <Text style={styles.time}>{formatTime(item.previewTime)}</Text>
-          </View>
-          <Text style={styles.preview} numberOfLines={1}>{item.previewText}</Text>
-        </View>
-        <Pressable onPress={() => handleUnarchive(item)} style={styles.actionBtn}>
-          <MaterialIcons name="unarchive" size={22} color={activeTheme.primary} />
-        </Pressable>
-      </View>
-    </Pressable>
+    <ArchivedRow
+      item={item}
+      themeColor={activeTheme.primary}
+      onOpen={() => router.push(`/chat/${item.id}`)}
+      onUnarchive={() => handleUnarchive(item)}
+    />
   ), [activeTheme.primary, handleUnarchive, router]);
 
   return (
@@ -157,12 +190,11 @@ const styles = StyleSheet.create({
     paddingBottom: 32,
     flexGrow: 1,
   },
-  row: {
+  rowPressable: {
     marginBottom: 12,
-    borderRadius: 28,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  row: {
+    minHeight: 84,
   },
   rowGlass: {
     ...StyleSheet.absoluteFillObject,

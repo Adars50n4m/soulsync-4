@@ -26,6 +26,23 @@ export const DEFAULT_PRIVACY: PrivacySettings = {
     readReceipts: true,
 };
 
+const isNoSpaceLeftError = (error: unknown): boolean => {
+    const text = String(
+        (error as any)?.message
+        || (error as any)?.reason
+        || (error as any)?.description
+        || error
+        || ''
+    ).toLowerCase();
+
+    return text.includes('no space left on device')
+        || text.includes('errno optional(28)')
+        || text.includes('nsposixerrordomain code=28')
+        || text.includes('code=28')
+        || text.includes('mktemp failed')
+        || text.includes('failed to write manifest file');
+};
+
 // AvatarType imported from AuthService
 export type TeddyVariant = 'boy' | 'girl';
 
@@ -250,7 +267,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }).catch(err => console.warn('[AuthContext] Push token sync failed:', err));
             }
         } catch (e) {
-            console.error('[AuthContext] Session synchronization failed:', e);
+            if (isNoSpaceLeftError(e)) {
+                console.warn('[AuthContext] Session synchronization skipped because device storage is full:', e);
+                setSessionError('Device storage is full. Clear simulator/mac storage and relaunch.');
+            } else {
+                console.error('[AuthContext] Session synchronization failed:', e);
+            }
         } finally {
             isSyncingRef.current = false;
             // Process queued sync if another call came in while we were busy
@@ -446,7 +468,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 const error = (sessionResult as any)?.error;
 
                 if (error) {
-                    console.error('[AuthContext] Session check error:', error);
+                    if (isNoSpaceLeftError(error)) {
+                        console.warn('[AuthContext] Session check skipped because device storage is full:', error);
+                        setSessionError('Device storage is full. Clear simulator/mac storage and relaunch.');
+                    } else {
+                        console.error('[AuthContext] Session check error:', error);
+                    }
                     // On error, we keep the optimistic user if it exists, hoping for recovery
                     setIsReady(true);
                     return;
@@ -486,7 +513,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     }
                 }
             } catch (err) {
-                console.error('[AuthContext] Initialization exception:', err);
+                if (isNoSpaceLeftError(err)) {
+                    console.warn('[AuthContext] Initialization completed with storage-full errors:', err);
+                    setSessionError('Device storage is full. Clear simulator/mac storage and relaunch.');
+                } else {
+                    console.error('[AuthContext] Initialization exception:', err);
+                }
             } finally {
                 if (isMounted) {
                     console.log(`[AuthContext] Reached ready state (total init time: ${Date.now() - startInit}ms)`);
@@ -532,21 +564,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             // Clear local media cache
             await soulFolderService.clearAllMedia();
         } catch (e) {
-            console.error('[AuthContext] Failed to clear local data during logout:', e);
+            if (isNoSpaceLeftError(e)) {
+                console.warn('[AuthContext] Local cleanup during logout hit storage-full state:', e);
+                setSessionError('Device storage is full. Clear simulator/mac storage and relaunch.');
+            } else {
+                console.error('[AuthContext] Failed to clear local data during logout:', e);
+            }
         }
 
-        await authService.signOut();
+        try {
+            await authService.signOut();
+        } catch (e) {
+            if (isNoSpaceLeftError(e)) {
+                console.warn('[AuthContext] Sign out completed with storage-full errors:', e);
+                setSessionError('Device storage is full. Clear simulator/mac storage and relaunch.');
+            } else {
+                console.error('[AuthContext] Sign out failed:', e);
+            }
+        }
+
         setCurrentUser(null);
-        await AsyncStorage.multiRemove([
-            'ss_current_user',
-            'ss_cached_user_profile',
-            'ss_cached_user_profile_at',
-            'ss_device_session_id',
-            'ss_last_contact_sync',
-            'ss_pinned_chats',
-            'ss_muted_chats',
-            'auth_token_expired',
-        ]);
+
+        try {
+            await AsyncStorage.multiRemove([
+                'ss_current_user',
+                'ss_cached_user_profile',
+                'ss_cached_user_profile_at',
+                'ss_device_session_id',
+                'ss_last_contact_sync',
+                'ss_pinned_chats',
+                'ss_muted_chats',
+                'auth_token_expired',
+            ]);
+        } catch (e) {
+            if (isNoSpaceLeftError(e)) {
+                console.warn('[AuthContext] AsyncStorage cleanup during logout skipped because device storage is full:', e);
+                setSessionError('Device storage is full. Clear simulator/mac storage and relaunch.');
+            } else {
+                console.error('[AuthContext] AsyncStorage cleanup during logout failed:', e);
+            }
+        }
+
         router.replace('/login');
     }, []);
 

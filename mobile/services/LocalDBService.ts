@@ -323,13 +323,10 @@ class OfflineService {
     );
 
     // Also ensure a contact entry exists for this group so it shows in chat list.
-    // Pass `null` (not '') so the contacts batch upsert's COALESCE keeps any
-    // existing good avatar if this saveGroup call doesn't carry one.
-    await this.saveContact({
+    await this.upsertContactAvatar({
         id: group.id,
         name: group.name,
         avatar: normalizedAvatar,
-        about: group.description,
         isGroup: true
     });
   }

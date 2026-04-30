@@ -1,8 +1,9 @@
 import React, { useEffect } from 'react';
 import { Tabs, usePathname, useRouter } from 'expo-router';
-import { View, Pressable, StyleSheet, useWindowDimensions, Platform } from 'react-native';
-import GlassView from '../../components/ui/GlassView';
+import { View, StyleSheet, useWindowDimensions, Platform, Pressable } from 'react-native';
+import GlassView, { GlassPressable } from '../../components/ui/GlassView';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { hapticService } from '../../services/HapticService';
 import * as Haptics from 'expo-haptics';
 import Animated, {
@@ -60,6 +61,48 @@ const TabIcon = ({ name, focused, size = 26 }: { name: string; focused: boolean;
         color={focused ? activeTheme.primary : '#8E8E93'}
       />
     </Animated.View>
+  );
+};
+
+const SEARCH_BUTTON_SIZE_CONST = 56;
+
+const SearchFab = ({
+  searchFocused,
+  searchFabStyle,
+  onPress,
+  activeTheme,
+}: {
+  searchFocused: boolean;
+  searchFabStyle: any;
+  onPress: () => void;
+  activeTheme: any;
+}) => {
+  return (
+    <GlassPressable
+      onPress={onPress}
+      glassIntensity={40}
+      glassTint="dark"
+      glowIntensity={0.55}
+      glowColor={activeTheme?.primary || '#ffffff'}
+      style={[
+        styles.searchFabPressable,
+        {
+          width: SEARCH_BUTTON_SIZE_CONST,
+          height: SEARCH_BUTTON_SIZE_CONST,
+          borderRadius: SEARCH_BUTTON_SIZE_CONST / 2,
+        },
+      ]}
+    >
+      <Animated.View style={searchFabStyle}>
+        <View style={[styles.searchFabShell, searchFocused && styles.searchFabShellActive]}>
+          <Ionicons
+            name="search"
+            size={18}
+            color={searchFocused ? activeTheme.primary : '#8E8E93'}
+          />
+        </View>
+      </Animated.View>
+    </GlassPressable>
   );
 };
 
@@ -121,20 +164,16 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
     'worklet';
     return {
       transform: [{ translateX: translateX.value }],
-      backgroundColor: 'rgba(255, 255, 255, 0.07)',
     };
   });
 
-  // Glow blob — always visible, locked to pill position
-  // offset centers the wider glow on the pill: (tabWidth - glowWidth) / 2
-  // iOS glowWidth = tabWidth * 4.5 → offset = -tabWidth * 1.75
-  // Android glowWidth = tabWidth * 1.5 → offset = -tabWidth * 0.25
+  // Glow blob — flashes only on tab tap, idle = invisible.
+  // Sized to the indicator pill so the bloom takes the pill's shape.
   const glowStyle = useAnimatedStyle(() => {
     'worklet';
-    const offset = -tabWidth * 0.25; // Standardized offset for width=tabWidth*1.5
     return {
       transform: [
-        { translateX: translateX.value + offset } as const,
+        { translateX: translateX.value } as const,
       ] as const,
       opacity: glowProgress.value,
     };
@@ -202,30 +241,64 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
     return null;
   }
 
+  // STREAKED FIX: Strictly only render TabBar on base tab paths.
+  // If we are in Chat or any other sub-screen, this MUST be null to prevent bleeding artifacts like the "dabba".
+  const tabRoutes = ['/', '/calls', '/settings', '/(tabs)', '/(tabs)/index', '/(tabs)/calls', '/(tabs)/settings'];
+  const currentPath = pathname.toLowerCase();
+  const isTabRoute = tabRoutes.some(route => currentPath === route || currentPath === route.replace('/(tabs)', ''));
+  
+  if (!isTabRoute || currentPath.includes('/chat/')) {
+    return null;
+  }
+
   return (
     <Animated.View style={[styles.tabBarContainer, tabBarFadeStyle, dropDownStyle]}>
       <View style={styles.bottomActionsRow}>
         <View style={[styles.tabBarGlassContainer, { width: navBarWidth }]}>
-          <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFillObject} />
+          <GlassView intensity={35} tint="dark" style={[StyleSheet.absoluteFillObject, { borderRadius: 40, overflow: 'hidden' }]} />
 
-          {/* Standardized Glow blob — Unified shadow-based bloom for both platforms */}
+          {/* Indicator pill — soft iOS 26 liquid-glass tint at rest: base tint + two
+              corner specular highlights. No border — keeps the idle state clean. */}
           <Animated.View
+            pointerEvents="none"
             style={[
-              styles.glowBlob,
-              { 
-                width: tabWidth * 1.5, 
-                borderRadius: 30, 
-                shadowColor: activeTheme.primary,
-                shadowOpacity: Platform.OS === 'ios' ? 0.9 : 1,
-                shadowRadius: Platform.OS === 'ios' ? 25 : 30,
+              styles.indicatorPill,
+              {
+                width: tabWidth,
+                backgroundColor: `${activeTheme.primary}1F`,
+                overflow: 'hidden',
+              },
+              indicatorStyle,
+            ]}
+          >
+            <LinearGradient
+              colors={[`${activeTheme.primary}33`, 'transparent']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 0.7, y: 0.7 }}
+              style={StyleSheet.absoluteFill}
+            />
+            <LinearGradient
+              colors={['transparent', `${activeTheme.primary}22`]}
+              start={{ x: 0.3, y: 0.3 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
+          </Animated.View>
+
+          {/* Tap flash — colored fill + red edge appears only on tap, fades back. */}
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.indicatorPill,
+              {
+                width: tabWidth,
+                backgroundColor: `${activeTheme.primary}66`,
+                borderColor: `${activeTheme.primary}99`,
+                borderWidth: 1,
               },
               glowStyle,
             ]}
-            pointerEvents="none"
           />
-
-          {/* Indicator pill */}
-          <Animated.View style={[styles.indicatorPill, { width: tabWidth }, indicatorStyle]} />
 
           <View style={styles.tabBarInner}>
             {state.routes.map((route: any, index: number) => {
@@ -249,7 +322,14 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
               if (route.name === 'settings') iconName = 'settings';
 
               return (
-                <Pressable key={route.key} onPress={onPress} style={styles.tabButton}>
+                <Pressable
+                  key={route.key}
+                  onPress={onPress}
+                  style={({ pressed }) => [
+                    styles.tabButton,
+                    pressed && styles.tabButtonPressed,
+                  ]}
+                >
                   <TabIcon name={iconName} focused={isFocused} />
                 </Pressable>
               );
@@ -257,23 +337,15 @@ const TabBar = ({ state, descriptors, navigation }: any) => {
           </View>
         </View>
 
-        <Pressable
+        <SearchFab
+          searchFocused={searchFocused}
+          searchFabStyle={searchFabStyle}
           onPress={() => {
             hapticService.impact(Haptics.ImpactFeedbackStyle.Light);
             router.push(`/search?context=${searchContext}&sourceX=${searchSourceX}&sourceY=${searchSourceY}&sourceW=${SEARCH_BUTTON_SIZE}&sourceH=${SEARCH_BUTTON_SIZE}`);
           }}
-          style={[styles.searchFabPressable, { width: SEARCH_BUTTON_SIZE, height: SEARCH_BUTTON_SIZE, borderRadius: SEARCH_BUTTON_SIZE / 2 }]}
-        >
-          <Animated.View style={searchFabStyle}>
-          <View style={[
-            styles.searchFabShell,
-            searchFocused && styles.searchFabShellActive,
-          ]}>
-            <GlassView intensity={40} tint="dark" style={StyleSheet.absoluteFillObject} />
-            <Ionicons name="search" size={18} color={searchFocused ? activeTheme.primary : '#8E8E93'} />
-          </View>
-          </Animated.View>
-        </Pressable>
+          activeTheme={activeTheme}
+        />
       </View>
     </Animated.View>
   );
@@ -314,21 +386,10 @@ const styles = StyleSheet.create({
   },
   tabBarGlassContainer: {
     borderRadius: 40,
-    overflow: 'hidden',
+    overflow: 'hidden', // Re-enabled to contain glow within the bar
     borderWidth: Platform.OS === 'android' ? 1 : 1.2,
     borderColor: Platform.OS === 'android' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.22)',
     backgroundColor: Platform.OS === 'android' ? '#0A0A0A' : 'transparent',
-  },
-  glowBlob: {
-    position: 'absolute',
-    top: 8,
-    height: 48,
-    left: 12,
-    backgroundColor: 'transparent',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 1,
-    shadowRadius: 30,
-    elevation: 20,
   },
   tabBarInner: {
     flexDirection: 'row',
@@ -349,6 +410,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     height: '100%',
+    borderRadius: 24,
+  },
+  tabButtonPressed: {
+    opacity: 0.82,
   },
   searchFabPressable: {
     overflow: 'hidden',

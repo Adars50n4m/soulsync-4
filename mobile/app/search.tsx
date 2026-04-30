@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useDeferredValue, useMemo } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Platform, Alert, Pressable, useWindowDimensions, KeyboardAvoidingView } from 'react-native';
 import { SoulLoader } from '../components/ui/SoulLoader';
+import * as Haptics from 'expo-haptics';
 import { FlashList } from '@shopify/flash-list';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SERVER_URL, proxySupabaseUrl } from '../config/api';
@@ -8,9 +9,11 @@ import { supabase, LEGACY_TO_UUID } from '../config/supabase';
 import { useApp } from '../context/AppContext';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import GlassView from '../components/ui/GlassView';
+import { GlassChipButton, GlassPillSurface } from '../components/ui/IOS26Primitives';
 import { SoulAvatar } from '../components/SoulAvatar';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, { FadeInDown, Easing, Extrapolation, interpolate, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { FadeInDown, Easing, Extrapolation, interpolate, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import { hapticService } from '../services/HapticService';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type SearchContext = 'chats' | 'calls' | 'settings' | 'soulmate';
@@ -175,6 +178,62 @@ export default function SearchScreen() {
     const debounceRef = useRef<NodeJS.Timeout | null>(null);
     const deferredQuery = useDeferredValue(query);
     const inputRef = useRef<TextInput | null>(null);
+    const tabLayouts = useRef<Record<string, { x: number; width: number }>>({});
+    // iOS-26 Liquid Glass: track LEFT and RIGHT edges independently. The
+    // edge moving in the direction of motion uses a fast spring, the
+    // trailing edge uses a softer one — pill stretches along axis of
+    // motion mid-slide, then settles. This is the true elastic-pull effect.
+    const highlightLeft = useSharedValue(0);
+    const highlightRight = useSharedValue(0);
+    const highlightOpacity = useSharedValue(0);
+
+    // Apple's interactiveSpring(response: 0.4, dampingFraction: 0.7) feel.
+    const LEAD_SPRING = { damping: 16, stiffness: 240, mass: 1.0 } as const;
+    const TRAIL_SPRING = { damping: 22, stiffness: 175, mass: 1.05 } as const;
+
+    const syncHighlight = useCallback(() => {
+        const layout = tabLayouts.current[activeFilter];
+        if (!layout) return;
+
+        const targetLeft = layout.x;
+        const targetRight = layout.x + layout.width;
+        const currentLeft = highlightLeft.value;
+        const currentWidth = highlightRight.value - highlightLeft.value;
+
+        // First render — snap into place without stretch.
+        if (currentWidth <= 0) {
+            highlightLeft.value = targetLeft;
+            highlightRight.value = targetRight;
+            highlightOpacity.value = withTiming(1, { duration: 200 });
+            return;
+        }
+
+        const slidingRight = targetLeft > currentLeft;
+        if (slidingRight) {
+            // Right edge leads, left trails → pill elongates rightward.
+            highlightRight.value = withSpring(targetRight, LEAD_SPRING);
+            highlightLeft.value = withSpring(targetLeft, TRAIL_SPRING);
+        } else {
+            // Left edge leads, right trails → pill elongates leftward.
+            highlightLeft.value = withSpring(targetLeft, LEAD_SPRING);
+            highlightRight.value = withSpring(targetRight, TRAIL_SPRING);
+        }
+        highlightOpacity.value = withTiming(1, { duration: 200 });
+    }, [activeFilter]);
+
+    useEffect(() => {
+        syncHighlight();
+    }, [activeFilter, syncHighlight]);
+
+    const highlightAnimatedStyle = useAnimatedStyle(() => {
+        const left = highlightLeft.value;
+        const width = Math.max(0, highlightRight.value - highlightLeft.value);
+        return {
+            transform: [{ translateX: left }] as any,
+            width,
+            opacity: highlightOpacity.value,
+        };
+    });
 
     const sourceFrame = useMemo(() => {
         const x = Number(params.sourceX);
@@ -915,12 +974,8 @@ export default function SearchScreen() {
 
     const renderChatResult = useCallback((item: ChatSearchResult, index: number) => (
         <Animated.View entering={FadeInDown.delay(Math.min(index * 35, 180)).duration(280)}>
-            <Pressable
-                style={styles.chatCard}
-                onPress={() => router.push(`/chat/${item.contactId}`)}
-            >
-                <GlassView intensity={20} tint="dark" style={styles.glassBackground} />
-                <View style={styles.cardContent}>
+            <Pressable onPress={() => router.push(`/chat/${item.contactId}`)}>
+                <GlassPillSurface style={styles.chatCard} contentStyle={styles.cardContent} intensity={22} radius={24}>
                     <SoulAvatar
                         uri={proxySupabaseUrl(item.avatar)}
                         localUri={item.localAvatarUri}
@@ -943,16 +998,14 @@ export default function SearchScreen() {
                     <View style={styles.chatJumpButton}>
                         <MaterialIcons name="arrow-forward-ios" size={16} color="rgba(255,255,255,0.45)" />
                     </View>
-                </View>
+                </GlassPillSurface>
             </Pressable>
         </Animated.View>
     ), [router]);
 
     const renderPersonResult = useCallback((item: PersonResult, index: number) => (
         <Animated.View entering={FadeInDown.delay(Math.min(index * 35, 180)).duration(280)}>
-            <View style={styles.userCard}>
-                <GlassView intensity={25} tint="dark" style={styles.glassBackground} />
-                <View style={styles.cardContent}>
+            <GlassPillSurface style={styles.userCard} contentStyle={styles.cardContent} intensity={24} radius={24}>
                     <SoulAvatar uri={proxySupabaseUrl(item.avatar_url)} size={52} />
                     <View style={styles.userInfo}>
                         <Text style={styles.username} numberOfLines={1}>{item.username}</Text>
@@ -1002,8 +1055,7 @@ export default function SearchScreen() {
                             </TouchableOpacity>
                         </View>
                     )}
-                </View>
-            </View>
+            </GlassPillSurface>
         </Animated.View>
     ), [activeTheme, cancelRequest, handleAccept, handleUnfriend, router, sendRequest]);
 
@@ -1013,15 +1065,13 @@ export default function SearchScreen() {
         return (
             <Animated.View entering={FadeInDown.delay(Math.min(index * 35, 180)).duration(280)}>
                 <Pressable
-                    style={styles.chatCard}
                     onPress={() => {
                         if (startCall && item.contactId) {
                             startCall(item.contactId, item.callType);
                         }
                     }}
                 >
-                    <GlassView intensity={20} tint="dark" style={styles.glassBackground} />
-                    <View style={styles.cardContent}>
+                    <GlassPillSurface style={styles.chatCard} contentStyle={styles.cardContent} intensity={22} radius={24}>
                         <SoulAvatar uri={proxySupabaseUrl(item.avatar)} size={52} />
                         <View style={styles.userInfo}>
                             <View style={styles.resultTitleRow}>
@@ -1048,7 +1098,7 @@ export default function SearchScreen() {
                                 color={activeTheme.primary}
                             />
                         </View>
-                    </View>
+                    </GlassPillSurface>
                 </Pressable>
             </Animated.View>
         );
@@ -1091,9 +1141,8 @@ export default function SearchScreen() {
 
     const renderSettingResult = useCallback((item: SettingsSearchResult, index: number) => (
         <Animated.View entering={FadeInDown.delay(Math.min(index * 35, 180)).duration(280)}>
-            <Pressable style={styles.settingSearchCard} onPress={() => handleSettingPress(item)}>
-                <GlassView intensity={20} tint="dark" style={styles.glassBackground} />
-                <View style={styles.cardContent}>
+            <Pressable onPress={() => handleSettingPress(item)}>
+                <GlassPillSurface style={styles.settingSearchCard} contentStyle={styles.cardContent} intensity={22} radius={24}>
                     <View style={[
                         styles.settingSearchIcon,
                         { backgroundColor: item.danger ? 'rgba(239,68,68,0.12)' : `${activeTheme.primary}20` },
@@ -1113,7 +1162,7 @@ export default function SearchScreen() {
                     <View style={styles.chatJumpButton}>
                         <MaterialIcons name="arrow-forward-ios" size={16} color="rgba(255,255,255,0.45)" />
                     </View>
-                </View>
+                </GlassPillSurface>
             </Pressable>
         </Animated.View>
     ), [activeTheme.primary, handleSettingPress]);
@@ -1139,12 +1188,8 @@ export default function SearchScreen() {
 
         return (
             <Animated.View entering={FadeInDown.delay(Math.min(index * 35, 180)).duration(280)}>
-                <Pressable
-                    style={styles.chatCard}
-                    onPress={() => router.push(`/chat/${item.contactId}`)}
-                >
-                    <GlassView intensity={20} tint="dark" style={styles.glassBackground} />
-                    <View style={styles.cardContent}>
+                <Pressable onPress={() => router.push(`/chat/${item.contactId}`)}>
+                    <GlassPillSurface style={styles.chatCard} contentStyle={styles.cardContent} intensity={22} radius={24}>
                         <SoulAvatar
                             uri={proxySupabaseUrl(item.avatar)}
                             localUri={item.localAvatarUri}
@@ -1167,7 +1212,7 @@ export default function SearchScreen() {
                         <View style={styles.chatJumpButton}>
                             <MaterialIcons name="arrow-forward-ios" size={16} color="rgba(255,255,255,0.45)" />
                         </View>
-                    </View>
+                    </GlassPillSurface>
                 </Pressable>
             </Animated.View>
         );
@@ -1205,14 +1250,14 @@ export default function SearchScreen() {
         return {
             opacity: interpolate(entryProgress.value, [0, 0.52, 0.72], [1, 0.92, 0], Extrapolation.CLAMP),
             transform: [
-                { translateX: interpolate(entryProgress.value, [0, 1], [sourceFrame.x, targetFrame.x], Extrapolation.CLAMP) },
-                { translateY: interpolate(entryProgress.value, [0, 0.82, 1], [sourceFrame.y, targetFrame.y - 10, targetFrame.y], Extrapolation.CLAMP) },
-                { scale: interpolate(entryProgress.value, [0, 0.78, 1], [1, 1.015, 1], Extrapolation.CLAMP) },
+                { translateX: interpolate(entryProgress.value, [0, 1], [sourceFrame.x, targetFrame.x], Extrapolation.CLAMP) } as const,
+                { translateY: interpolate(entryProgress.value, [0, 0.82, 1], [sourceFrame.y, targetFrame.y - 10, targetFrame.y], Extrapolation.CLAMP) } as const,
+                { scale: interpolate(entryProgress.value, [0, 0.78, 1], [1, 1.015, 1], Extrapolation.CLAMP) } as const,
             ],
             width: interpolate(entryProgress.value, [0, 1], [sourceFrame.width, targetFrame.width], Extrapolation.CLAMP),
             height: interpolate(entryProgress.value, [0, 1], [sourceFrame.height, targetFrame.height], Extrapolation.CLAMP),
             borderRadius: interpolate(entryProgress.value, [0, 1], [sourceFrame.height / 2, targetFrame.height / 2], Extrapolation.CLAMP),
-        };
+        } as any;
     }, [sourceFrame, targetFrame]);
 
     const transitionBubbleInnerStyle = useAnimatedStyle(() => ({
@@ -1298,29 +1343,64 @@ export default function SearchScreen() {
                     style={[styles.hero, { paddingBottom: (insets.bottom || 12) + 4 }, headerRevealStyle]}
                 >
                     {searchContext === 'chats' && (
-                        <View style={styles.segmentRail}>
-                            <GlassView intensity={24} tint="dark" style={StyleSheet.absoluteFillObject} />
+                        <GlassPillSurface
+                            radius={24}
+                            intensity={24}
+                            style={styles.segmentRail}
+                            borderColor="rgba(255,255,255,0.22)"
+                            contentStyle={{ paddingVertical: 5 }}
+                        >
                             <Animated.ScrollView
                                 horizontal
                                 showsHorizontalScrollIndicator={false}
                                 contentContainerStyle={styles.segmentRailContent}
+                                bounces={true}
                             >
-                                {filterOptions.map((option) => {
-                                    const active = option.key === activeFilter;
-                                    return (
-                                        <Pressable
-                                            key={option.key}
-                                            onPress={() => setActiveFilter(option.key)}
-                                            style={[styles.segmentChip, active && styles.segmentChipActive]}
-                                        >
-                                            <Text style={[styles.segmentLabel, active && styles.segmentLabelActive]}>
-                                                {option.label}
-                                            </Text>
-                                        </Pressable>
-                                    );
-                                })}
+                                <View style={{ position: 'relative', flexDirection: 'row', alignItems: 'center' }}>
+                                    {/* Liquid Highlight */}
+                                    <Animated.View style={[
+                                        { position: 'absolute', height: 38, zIndex: 0 },
+                                        highlightAnimatedStyle
+                                    ]}>
+                                        <GlassPillSurface
+                                            radius={19}
+                                            intensity={30}
+                                            style={StyleSheet.absoluteFillObject}
+                                            borderColor="rgba(255,255,255,0.15)"
+                                            overlayOpacity={0.12}
+                                        />
+                                    </Animated.View>
+
+                                    {filterOptions.map((option) => {
+                                        const active = option.key === activeFilter;
+                                        return (
+                                            <Pressable
+                                                key={option.key}
+                                                onLayout={(e) => {
+                                                    const { x, width } = e.nativeEvent.layout;
+                                                    tabLayouts.current[option.key] = { x, width };
+                                                    if (option.key === activeFilter) {
+                                                        syncHighlight();
+                                                    }
+                                                }}
+                                                onPress={() => {
+                                                    hapticService.impact(Haptics.ImpactFeedbackStyle.Light);
+                                                    setActiveFilter(option.key);
+                                                }}
+                                                style={styles.segmentTab}
+                                            >
+                                                <Text style={[
+                                                    styles.segmentLabel,
+                                                    active ? { color: activeTheme.primary } : { color: 'rgba(255,255,255,0.5)' }
+                                                ]}>
+                                                    {option.label}
+                                                </Text>
+                                            </Pressable>
+                                        );
+                                    })}
+                                </View>
                             </Animated.ScrollView>
-                        </View>
+                        </GlassPillSurface>
                     )}
 
                     <View style={styles.searchHeroRow}>
@@ -1405,35 +1485,26 @@ const styles = StyleSheet.create({
         paddingTop: 6,
     },
     segmentRail: {
-        height: 42,
-        borderRadius: 21,
+        height: 48,
+        borderRadius: 24,
         overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
         marginBottom: 14,
     },
     segmentRailContent: {
-        paddingHorizontal: 6,
+        paddingHorizontal: 12,
         alignItems: 'center',
-        gap: 6,
+        gap: 8,
     },
-    segmentChip: {
-        height: 32,
-        borderRadius: 16,
-        paddingHorizontal: 14,
+    segmentTab: {
+        height: 38,
+        paddingHorizontal: 18,
+        borderRadius: 19,
         alignItems: 'center',
         justifyContent: 'center',
     },
-    segmentChipActive: {
-        backgroundColor: 'rgba(255,255,255,0.12)',
-    },
     segmentLabel: {
-        color: 'rgba(255,255,255,0.5)',
         fontSize: 14,
         fontWeight: '700',
-    },
-    segmentLabelActive: {
-        color: '#fff',
     },
     searchHeroRow: {
         flexDirection: 'row',

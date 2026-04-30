@@ -11,12 +11,12 @@ import { useLocalSearchParams, useNavigation } from 'expo-router';
 import GlassView from '../../components/ui/GlassView';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
-import { proxySupabaseUrl } from '../../config/api';
 import { useApp } from '../../context/AppContext';
 import { useCall } from '../../context/CallContext';
 import { offlineService } from '../../services/LocalDBService';
 import { profileAvatarTransitionState } from '../../services/profileAvatarTransitionState';
 import { normalizeId, getSuperuserName, getSuperuserHandle } from '../../utils/idNormalization';
+import { normalizeAvatarSource, resolveAvatarImageUri, warmAvatarSource } from '../../utils/avatarSource';
 import {
     getProfileAvatarTransitionTag,
     SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION,
@@ -26,7 +26,6 @@ import Animated, {
     useSharedValue, useAnimatedStyle, withTiming, withDelay, withSpring, interpolate, runOnJS, Easing,
     useAnimatedScrollHandler, Extrapolation
 } from 'react-native-reanimated';
-import ProgressiveBlur from '../../components/chat/ProgressiveBlur';
 import { SheetScreen } from 'react-native-sheet-transitions';
 import { useRouter } from 'expo-router';
 import { hapticService } from '../../services/HapticService';
@@ -79,7 +78,7 @@ export default function ProfileScreen() {
 
     const { width, height } = useWindowDimensions();
 
-    const params = useLocalSearchParams<{ id: string; avatarX?: string; avatarY?: string; avatarW?: string; avatarH?: string; avatarTransition?: string }>();
+    const params = useLocalSearchParams<{ id: string; avatarX?: string; avatarY?: string; avatarW?: string; avatarH?: string; avatarTransition?: string; avatarSource?: string }>();
     const rawId = Array.isArray(params.id) ? params.id[0] : params.id;
     const id = rawId ? normalizeId(rawId) : null;
     const navigation = useNavigation();
@@ -134,6 +133,10 @@ export default function ProfileScreen() {
         height: Number(Array.isArray(params.avatarH) ? params.avatarH[0] : params.avatarH),
     }), [params.avatarH, params.avatarW, params.avatarX, params.avatarY]);
     const avatarTransitionParam = Array.isArray(params.avatarTransition) ? params.avatarTransition[0] : params.avatarTransition;
+    const routeAvatarSource = useMemo(
+        () => normalizeAvatarSource(Array.isArray(params.avatarSource) ? params.avatarSource[0] : params.avatarSource),
+        [params.avatarSource]
+    );
     const profileAvatarTransitionTag = useMemo(() => {
         const transitionId = normalizeId(id as string);
         return transitionId ? getProfileAvatarTransitionTag(transitionId) : undefined;
@@ -546,21 +549,27 @@ export default function ProfileScreen() {
         };
     });
 
-    const heroAvatarUri = useMemo(() => {
+    const profileResolvedAvatarUri = useMemo(() => {
         const avatarType = profileUser?.avatarType || profileUser?.avatar_type || 'default';
         const uri = profileUser?.avatar || profileUser?.avatar_url;
         const localUri = profileUser?.localAvatarUri || profileUser?.local_avatar_uri;
         const fallbackId = profileUser?.id || id || 'default';
-        const proxiedUri = proxySupabaseUrl(uri);
-
-        if (avatarType === 'teddy') {
-            return `https://avatar.iran.liara.run/public/boy?username=${fallbackId}`;
-        }
-        if (avatarType === 'memoji') {
-            return `https://avatar.iran.liara.run/public/girl?username=${fallbackId}`;
-        }
-        return localUri || proxiedUri || uri || '';
+        return resolveAvatarImageUri({
+            uri,
+            localUri,
+            avatarType: avatarType as any,
+            teddyVariant: (profileUser?.teddyVariant || profileUser?.teddy_variant) as any,
+            fallbackId,
+        });
     }, [id, profileUser]);
+    const heroAvatarUri = routeAvatarSource || profileResolvedAvatarUri;
+
+    useEffect(() => {
+        if (!heroAvatarUri) {
+            return;
+        }
+        void warmAvatarSource(heroAvatarUri);
+    }, [heroAvatarUri]);
 
     const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
@@ -602,9 +611,7 @@ export default function ProfileScreen() {
             opacityOnGestureMove
             disableRootScale
             customBackground={
-                <Animated.View style={[StyleSheet.absoluteFill, pageBackgroundStyle]}>
-                    <GlassView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
-                </Animated.View>
+                <Animated.View style={[StyleSheet.absoluteFill, pageBackgroundStyle, { backgroundColor: '#000' }]} />
             }
         >
             <View style={styles.container}>
@@ -625,6 +632,8 @@ export default function ProfileScreen() {
                                 source={{ uri: heroAvatarUri }}
                                 style={[styles.heroImage, { backgroundColor: '#111' }]}
                                 contentFit="cover"
+                                cachePolicy="memory-disk"
+                                priority="high"
                                 transition={0} // Fast handover for shared transition
                             />
                         ) : (
@@ -634,13 +643,19 @@ export default function ProfileScreen() {
                         )}
                     </Animated.View>
 
-                    {/* Progressive Blur — subtle bottom fade */}
-                    <ProgressiveBlur
-                        position="bottom"
-                        height={240}
-                        intensity={Platform.OS === 'ios' ? 80 : 40}
-                        tint="dark"
-                        maxAlpha={1}
+                    {/* Avatar→background blend: short fade at the top of this
+                        zone, then solid opaque black for the rest. No transparency
+                        at the bottom, no glass — just clean solid black. */}
+                    <LinearGradient
+                        colors={[
+                            'transparent',
+                            'rgba(0,0,0,0.5)',
+                            '#000',
+                            '#000',
+                        ]}
+                        locations={[0, 0.35, 0.6, 1]}
+                        pointerEvents="none"
+                        style={styles.heroBottomFade}
                     />
                 </View>
 
@@ -739,32 +754,19 @@ export default function ProfileScreen() {
                         {/* Message Search */}
                         <Pressable
                             onPress={() => setIsSearching(prev => !prev)}
-                            style={{
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                                backgroundColor: 'rgba(255,255,255,0.06)',
-                                borderRadius: 12,
-                                paddingHorizontal: 14,
-                                paddingVertical: 12,
-                                marginBottom: 20,
-                            }}
+                            style={styles.searchBarContainer}
                         >
-                            <MaterialIcons name="search" size={20} color="rgba(255,255,255,0.5)" />
-                            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 14, marginLeft: 10, flex: 1 }}>
-                                Search in conversation
-                            </Text>
+                            <GlassView intensity={20} tint="dark" style={styles.searchBarGlass}>
+                                <MaterialIcons name="search" size={20} color="rgba(255,255,255,0.5)" />
+                                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 14, marginLeft: 10, flex: 1 }}>
+                                    Search in conversation
+                                </Text>
+                            </GlassView>
                         </Pressable>
 
                         {isSearching && (
                             <View style={{ marginBottom: 20 }}>
-                                <View style={{
-                                    flexDirection: 'row',
-                                    alignItems: 'center',
-                                    backgroundColor: 'rgba(255,255,255,0.08)',
-                                    borderRadius: 10,
-                                    paddingHorizontal: 12,
-                                    marginBottom: 10,
-                                }}>
+                                <GlassView intensity={30} tint="dark" style={styles.searchInnerGlass}>
                                     <MaterialIcons name="search" size={18} color="rgba(255,255,255,0.4)" />
                                     <TextInput
                                         autoFocus
@@ -780,7 +782,7 @@ export default function ProfileScreen() {
                                             <MaterialIcons name="close" size={16} color="rgba(255,255,255,0.4)" />
                                         </Pressable>
                                     )}
-                                </View>
+                                </GlassView>
                                 {searchResults.length > 0 && (
                                     <View style={{ maxHeight: 240 }}>
                                         <FlatList
@@ -927,9 +929,7 @@ export default function ProfileScreen() {
                     onRequestClose={closeViewer}
                 >
                     <View style={[styles.viewerContainer, { backgroundColor: 'transparent' }]}>
-                        <Animated.View style={[StyleSheet.absoluteFill, bgMorphStyle]}>
-                            <GlassView intensity={90} tint="dark" style={StyleSheet.absoluteFill} />
-                        </Animated.View>
+                        <Animated.View style={[StyleSheet.absoluteFill, bgMorphStyle, { backgroundColor: '#000' }]} />
 
                         {/* Integrated Gallery & Transition Layer */}
                         <Animated.View style={[StyleSheet.absoluteFill, galleryStyle]}>
@@ -1058,6 +1058,14 @@ const styles = StyleSheet.create({
         height: 540,
         overflow: 'hidden',
         backgroundColor: 'transparent',
+    },
+    heroBottomFade: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 0,
+        height: 360,
+        zIndex: 6,
     },
     heroMediaShell: {
         position: 'absolute',
@@ -1190,6 +1198,27 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.05)',
     },
+    searchBarContainer: {
+        marginBottom: 20,
+        borderRadius: 12,
+        overflow: 'hidden',
+    },
+    searchBarGlass: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        backgroundColor: 'rgba(255,255,255,0.04)',
+    },
+    searchInnerGlass: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 12,
+        marginBottom: 10,
+        borderRadius: 10,
+        overflow: 'hidden',
+        backgroundColor: 'rgba(255,255,255,0.06)',
+    },
     tabBtn: {
         flex: 1,
         paddingVertical: 10,
@@ -1290,6 +1319,12 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.05)',
         gap: 20,
+    },
+    listItemGlass: {
+        borderRadius: 20,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.08)',
     },
     infoRow: {
         flexDirection: 'row',

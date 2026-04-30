@@ -1,11 +1,18 @@
-import React, { useState, useEffect, forwardRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, forwardRef } from 'react';
 import Animated from 'react-native-reanimated';
 import { View } from 'react-native';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
-import { proxySupabaseUrl } from '../config/api';
 import { useApp } from '../context/AppContext';
 import { SUPPORT_SHARED_TRANSITIONS } from '../constants/sharedTransitions';
+import {
+  normalizeAvatarSource,
+  proxyAvatarRemoteUri,
+  resolveAvatarImageUri,
+  markAvatarSourceWarm,
+  isAvatarSourceWarm,
+  warmAvatarSource,
+} from '../utils/avatarSource';
 
 
 interface SoulAvatarProps {
@@ -44,10 +51,9 @@ export const SoulAvatar = forwardRef<View, SoulAvatarProps>(({
 }, ref) => {
   const { activeTheme } = useApp();
   const [error, setError] = useState(false);
-
-  useEffect(() => {
-    setError(false);
-  }, [uri, localUri]);
+  const normalizedLocalUri = normalizeAvatarSource(localUri);
+  const normalizedUri = normalizeAvatarSource(uri);
+  const lastSuccessfulSourceRef = useRef<string | undefined>(undefined);
 
   const sharedProps = (sharedTransitionTag)
     ? {
@@ -57,19 +63,38 @@ export const SoulAvatar = forwardRef<View, SoulAvatarProps>(({
       }
     : {};
 
-  const proxiedUri = proxySupabaseUrl(uri);
-  const [currentSource, setCurrentSource] = useState<string | undefined>(localUri || proxiedUri);
+  const proxiedUri = useMemo(() => {
+    if (!normalizedUri) return undefined;
+    return proxyAvatarRemoteUri(normalizedUri) || normalizedUri;
+  }, [normalizedUri]);
+  const preferredSource = normalizedLocalUri || proxiedUri || normalizedUri || undefined;
+  const [currentSource, setCurrentSource] = useState<string | undefined>(preferredSource);
+  const [imageLoaded, setImageLoaded] = useState(
+    Boolean(preferredSource && isAvatarSourceWarm(preferredSource))
+  );
   const [hasFallbackToRemote, setHasFallbackToRemote] = useState(false);
   const [hasFallbackToDirect, setHasFallbackToDirect] = useState(false);
   const [hasFallbackToGlobalProxy, setHasFallbackToGlobalProxy] = useState(false);
 
   useEffect(() => {
-    setCurrentSource(localUri || proxiedUri);
+    if (preferredSource && preferredSource !== currentSource) {
+      setCurrentSource(preferredSource);
+      setImageLoaded(isAvatarSourceWarm(preferredSource));
+    } else if (!preferredSource && lastSuccessfulSourceRef.current) {
+      setCurrentSource(lastSuccessfulSourceRef.current);
+      setImageLoaded(isAvatarSourceWarm(lastSuccessfulSourceRef.current));
+    }
+
     setHasFallbackToRemote(false);
     setHasFallbackToDirect(false);
     setHasFallbackToGlobalProxy(false);
     setError(false);
-  }, [uri, localUri, proxiedUri]);
+  }, [preferredSource, currentSource]);
+
+  useEffect(() => {
+    if (!preferredSource || !preferredSource.startsWith('http')) return;
+    void warmAvatarSource(preferredSource);
+  }, [preferredSource]);
 
   const avatarShellStyle = {
     width: size,
@@ -80,31 +105,51 @@ export const SoulAvatar = forwardRef<View, SoulAvatarProps>(({
   };
 
   const handleImageError = () => {
-    if (localUri && currentSource === localUri && proxiedUri && !hasFallbackToRemote) {
+    setImageLoaded(false);
+    if (normalizedLocalUri && currentSource === normalizedLocalUri && proxiedUri && !hasFallbackToRemote) {
       // 1. Local failed, try proxied remote
-      console.log(`[SoulAvatar] Local URI failed: ${localUri}. Trying proxy: ${proxiedUri}`);
+      console.log(`[SoulAvatar] Local URI failed: ${normalizedLocalUri}. Trying proxy: ${proxiedUri}`);
       setCurrentSource(proxiedUri);
+      setImageLoaded(isAvatarSourceWarm(proxiedUri));
       setHasFallbackToRemote(true);
-    } else if (currentSource === proxiedUri && uri && proxiedUri !== uri && !hasFallbackToDirect) {
+    } else if (currentSource === proxiedUri && normalizedUri && proxiedUri !== normalizedUri && !hasFallbackToDirect) {
       // 2. Proxied failed, try direct Supabase URL
-      console.log(`[SoulAvatar] Proxy failed: ${proxiedUri}. Trying direct: ${uri}`);
-      setCurrentSource(uri);
+      console.log(`[SoulAvatar] Proxy failed: ${proxiedUri}. Trying direct: ${normalizedUri}`);
+      setCurrentSource(normalizedUri);
+      setImageLoaded(isAvatarSourceWarm(normalizedUri));
       setHasFallbackToDirect(true);
-    } else if (currentSource === uri && uri && uri.startsWith('http') && !hasFallbackToGlobalProxy) {
+    } else if (currentSource === normalizedUri && normalizedUri && normalizedUri.startsWith('http') && !hasFallbackToGlobalProxy) {
       // 3. Direct failed, try Glogal Image Proxy (Weserv)
       // wsrv.nl is a high-reputation CDN proxy that often bypasses carrier blocks
-      const globalProxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(uri)}&default=${encodeURIComponent(uri)}`;
-      console.log(`[SoulAvatar] Direct failed: ${uri}. Trying global proxy: ${globalProxyUrl}`);
+      const globalProxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(normalizedUri)}&default=${encodeURIComponent(normalizedUri)}`;
+      console.log(`[SoulAvatar] Direct failed: ${normalizedUri}. Trying global proxy: ${globalProxyUrl}`);
       setCurrentSource(globalProxyUrl);
+      setImageLoaded(isAvatarSourceWarm(globalProxyUrl));
       setHasFallbackToGlobalProxy(true);
     } else {
       // 4. All attempts failed
-      console.warn(`[SoulAvatar] All image sources failed for URI: ${uri}`);
+      console.warn(`[SoulAvatar] All image sources failed for URI: ${normalizedUri}`);
       setError(true);
     }
   };
 
   const hasAvatar = !!currentSource && currentSource !== '' && !error;
+  const placeholderContent = (
+    <View
+      style={{
+        width: '100%',
+        height: '100%',
+        justifyContent: 'center',
+        alignItems: 'center',
+      }}
+    >
+      <MaterialIcons
+        name="person"
+        size={iconSize || size * 0.7}
+        color="rgba(255,255,255,0.7)"
+      />
+    </View>
+  );
 
   const renderAvatarContent = () => {
     // Handling Teddy/Memoji types
@@ -120,51 +165,67 @@ export const SoulAvatar = forwardRef<View, SoulAvatarProps>(({
           else variant = avatarType === 'teddy' ? 'boy' : 'girl'; // legacy defaults
         }
 
-        const fallbackId = uri || 'default';
-        const avatarUrl = variant === 'boy'
-            ? `https://avatar.iran.liara.run/public/boy?username=${fallbackId}`
-            : `https://avatar.iran.liara.run/public/girl?username=${fallbackId}`;
+        const avatarUrl = resolveAvatarImageUri({
+          uri,
+          avatarType,
+          teddyVariant: variant,
+          fallbackId: uri || 'default',
+        });
 
         return (
-            <Image
-                source={{ uri: avatarUrl }}
-                style={{ width: '100%', height: '100%' }}
-                contentFit="cover"
-                onError={() => setError(true)}
-            />
+            <>
+              {!imageLoaded && placeholderContent}
+              <Image
+                  source={{ uri: avatarUrl }}
+                  style={{ width: '100%', height: '100%', position: 'absolute', opacity: imageLoaded ? 1 : 0 }}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                  transition={0}
+                  onLoad={() => {
+                    markAvatarSourceWarm(avatarUrl);
+                    lastSuccessfulSourceRef.current = avatarUrl;
+                    setImageLoaded(true);
+                  }}
+                  onDisplay={() => {
+                    markAvatarSourceWarm(avatarUrl);
+                    lastSuccessfulSourceRef.current = avatarUrl;
+                    setImageLoaded(true);
+                  }}
+                  onError={() => setError(true)}
+              />
+            </>
         );
     }
 
     // Show user photo if available
     if (hasAvatar) {
       return (
-        <Image
-          source={{ uri: currentSource }}
-          style={{ width: '100%', height: '100%' }}
-          contentFit="cover"
-          transition={200}
-          onError={handleImageError}
-        />
+        <>
+          {!imageLoaded && placeholderContent}
+          <Image
+            source={{ uri: currentSource }}
+            style={{ width: '100%', height: '100%', position: 'absolute', opacity: imageLoaded ? 1 : 0 }}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            transition={0}
+            onLoad={() => {
+              markAvatarSourceWarm(currentSource);
+              lastSuccessfulSourceRef.current = currentSource;
+              setImageLoaded(true);
+            }}
+            onDisplay={() => {
+              markAvatarSourceWarm(currentSource);
+              lastSuccessfulSourceRef.current = currentSource;
+              setImageLoaded(true);
+            }}
+            onError={handleImageError}
+          />
+        </>
       );
     }
 
     // Default: WhatsApp-style person icon placeholder
-    return (
-      <View
-        style={{
-          width: '100%',
-          height: '100%',
-          justifyContent: 'center',
-          alignItems: 'center',
-        }}
-      >
-        <MaterialIcons
-          name="person"
-          size={iconSize || size * 0.7}
-          color="rgba(255,255,255,0.7)"
-        />
-      </View>
-    );
+    return placeholderContent;
   };
 
   return (

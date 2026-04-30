@@ -5,7 +5,7 @@ import {
     View, Text, TextInput, Pressable, AppState,
     StyleSheet, StatusBar, Platform,
     Modal, Animated as RNAnimated, Dimensions, Keyboard, KeyboardEvent, Alert, InteractionManager, ScrollView, FlatList,
-    Image as RNImage, KeyboardAvoidingView, TouchableWithoutFeedback
+    Image as RNImage, KeyboardAvoidingView
 } from 'react-native';
 import { SoulLoader } from '../../components/ui/SoulLoader';
 import { Image } from 'expo-image';
@@ -16,6 +16,7 @@ import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaskedView from '@react-native-masked-view/masked-view';
 import GlassView from '../../components/ui/GlassView';
+import { PressableFlash } from '../../components/ui/IOS26Primitives';
 import ConnectionBanner from '../../components/ConnectionBanner';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -76,6 +77,7 @@ import { usePresence } from '../../context/PresenceContext';
 import { supabase, LEGACY_TO_UUID } from '../../config/supabase';
 import { normalizeId } from '../../utils/idNormalization';
 import { SoulAvatar } from '../../components/SoulAvatar';
+import { resolveAvatarImageUri, warmAvatarSource } from '../../utils/avatarSource';
 import { chatService } from '../../services/ChatService';
 import { chatTransitionState } from '../../services/chatTransitionState';
 import { profileAvatarTransitionState } from '../../services/profileAvatarTransitionState';
@@ -854,6 +856,23 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
         const transitionId = normalizeId(contact?.id || String(id || ''));
         return transitionId ? getProfileAvatarTransitionTag(transitionId) : undefined;
     }, [contact?.id, id]);
+    const profilePreviewAvatarSource = useMemo(() => resolveAvatarImageUri({
+        uri: (remoteHasBetterAvatar ? remoteContact?.avatar : contact?.avatar) || contact?.avatar,
+        localUri: contact?.localAvatarUri || remoteContact?.localAvatarUri,
+        avatarType: ((contact?.avatarType || remoteContact?.avatarType) as any) || 'default',
+        teddyVariant: ((contact as any)?.teddyVariant || (remoteContact as any)?.teddyVariant) as any,
+        fallbackId: contact?.id || String(id || 'default'),
+    }), [
+        contact?.avatar,
+        contact?.avatarType,
+        contact?.id,
+        contact?.localAvatarUri,
+        id,
+        remoteContact?.avatar,
+        remoteContact?.avatarType,
+        remoteContact?.localAvatarUri,
+        remoteHasBetterAvatar,
+    ]);
     const isGroup = contact?.isGroup || false;
     const targetProfileId = String(contact?.id || id || '');
     const normalizedTargetProfileId = useMemo(() => normalizeId(targetProfileId), [targetProfileId]);
@@ -870,11 +889,24 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
         return unsubscribe;
     }, []);
 
+    useEffect(() => {
+        if (isGroup || !profilePreviewAvatarSource) {
+            return;
+        }
+        void warmAvatarSource(profilePreviewAvatarSource);
+    }, [isGroup, profilePreviewAvatarSource]);
+
     const openProfileWithMorph = useCallback(() => {
         try {
             console.log('[ChatScreen] Opening profile for:', targetProfileId);
-            const pushProfile = (origin?: { x: number; y: number; width: number; height: number }) => {
+            const pushProfile = async (origin?: { x: number; y: number; width: number; height: number }) => {
                 try {
+                    if (!isGroup && profilePreviewAvatarSource) {
+                        await Promise.race([
+                            warmAvatarSource(profilePreviewAvatarSource),
+                            new Promise((resolve) => setTimeout(resolve, 120)),
+                        ]);
+                    }
                     if (normalizedTargetProfileId) {
                         profileAvatarTransitionState.show(normalizedTargetProfileId);
                     }
@@ -884,6 +916,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                             ? {
                                 id: String(targetProfileId),
                                 avatarTransition: '1',
+                                avatarSource: profilePreviewAvatarSource || undefined,
                             }
                             : origin
                                 ? {
@@ -892,9 +925,11 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                     avatarY: Math.round(origin.y).toString(),
                                     avatarW: Math.round(origin.width).toString(),
                                     avatarH: Math.round(origin.height).toString(),
+                                    avatarSource: !isGroup ? (profilePreviewAvatarSource || undefined) : undefined,
                                 }
                                 : {
                                     id: String(targetProfileId),
+                                    avatarSource: !isGroup ? (profilePreviewAvatarSource || undefined) : undefined,
                                 },
                     });
                 } catch (pushErr) {
@@ -904,7 +939,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             };
 
             if (!isGroup && ENABLE_PROFILE_AVATAR_SHARED_TRANSITION && profileAvatarTransitionTag) {
-                pushProfile();
+                void pushProfile();
                 return;
             }
 
@@ -915,25 +950,25 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             if (node && typeof (node as any).measureInWindow === 'function') {
                 (node as any).measureInWindow((pageX: number, pageY: number, w: number, h: number) => {
                     if (!Number.isFinite(pageX) || !Number.isFinite(pageY) || !w || !h) {
-                        pushProfile({ x: MAIN_PILL_LEFT + 8, y: HEADER_PILL_TOP + (HEADER_PILL_HEIGHT - 46) / 2, width: 46, height: 46 });
+                        void pushProfile({ x: MAIN_PILL_LEFT + 8, y: HEADER_PILL_TOP + (HEADER_PILL_HEIGHT - 46) / 2, width: 46, height: 46 });
                         return;
                     }
-                    pushProfile({ x: pageX, y: pageY, width: w, height: h });
+                    void pushProfile({ x: pageX, y: pageY, width: w, height: h });
                 });
                 return;
             }
             if (node && typeof (node as any).measure === 'function') {
                 (node as any).measure((_x: number, _y: number, w: number, h: number, pageX: number, pageY: number) => {
                     if (!Number.isFinite(pageX) || !Number.isFinite(pageY) || !w || !h) {
-                        pushProfile({ x: MAIN_PILL_LEFT + 8, y: HEADER_PILL_TOP + (HEADER_PILL_HEIGHT - 46) / 2, width: 46, height: 46 });
+                        void pushProfile({ x: MAIN_PILL_LEFT + 8, y: HEADER_PILL_TOP + (HEADER_PILL_HEIGHT - 46) / 2, width: 46, height: 46 });
                         return;
                     }
-                    pushProfile({ x: pageX, y: pageY, width: w, height: h });
+                    void pushProfile({ x: pageX, y: pageY, width: w, height: h });
                 });
                 return;
             }
 
-            pushProfile({
+            void pushProfile({
                 x: MAIN_PILL_LEFT + 8,
                 y: HEADER_PILL_TOP + (HEADER_PILL_HEIGHT - 46) / 2,
                 width: 46,
@@ -946,7 +981,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             }
             router.push((isGroup ? `/group-info/${targetProfileId}` : `/profile/${targetProfileId}`) as any);
         }
-    }, [isGroup, normalizedTargetProfileId, profileAvatarTransitionTag, router, targetProfileId]);
+    }, [isGroup, normalizedTargetProfileId, profileAvatarTransitionTag, profilePreviewAvatarSource, router, targetProfileId]);
 
     // FIX: Use contact.id (UUID) for message lookup, not the raw id param
     const messageKey = contact?.id || id || '';
@@ -2109,7 +2144,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                     top: HEADER_PILL_TOP,
                                     left: MAIN_PILL_LEFT,
                                     right: 24,
-                                    backgroundColor: '#0a0a0c', // Solid background for shadow efficiency
+                                    backgroundColor: 'transparent', // Remove solid background to allow GlassView blur to show through
                                     borderRadius: HEADER_PILL_RADIUS,
                                     zIndex: 10,
                                     borderWidth: 1,
@@ -2120,13 +2155,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                             pointerEvents="box-none"
                         >
                             <View style={StyleSheet.absoluteFill} pointerEvents="none">
-                                {animationFinished ? (
-                                    <Animated.View entering={FadeInDown.duration(400)} style={StyleSheet.absoluteFill}>
-                                        <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
-                                    </Animated.View>
-                                ) : (
-                                    <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(15, 15, 20, 0.4)' }]} />
-                                )}
+                                <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
                             </View>
 
                                                        {musicState?.currentSong && musicProgress > 0 && (
@@ -2187,12 +2216,22 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                         </Text>
                                     </View>
                                     <View style={{ flexDirection: 'row', marginLeft: 'auto', marginRight: 0 }}>
-                                        <Pressable style={[styles.headerButton, { marginRight: 6 }]} onPress={() => setShowMusicPlayer(true)}>
+                                        <PressableFlash
+                                            style={[styles.headerButton, { marginRight: 6 }]}
+                                            borderRadius={22}
+                                            flashColor={activeTheme.primary}
+                                            onPress={() => setShowMusicPlayer(true)}
+                                        >
                                             <MaterialIcons name="music-note" size={20} color="#ffffff" style={{ marginLeft: -2.5 }} />
-                                        </Pressable>
-                                        <Pressable style={styles.headerButton} onPress={openCallModal}>
+                                        </PressableFlash>
+                                        <PressableFlash
+                                            style={styles.headerButton}
+                                            borderRadius={22}
+                                            flashColor={activeTheme.primary}
+                                            onPress={openCallModal}
+                                        >
                                             <MaterialIcons name="call" size={20} color="#ffffff" />
-                                        </Pressable>
+                                        </PressableFlash>
                                     </View>
                                 </View>
                             </View>
@@ -2211,10 +2250,21 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                     zIndex: 20 
                                 }
                             ]}>
-                                <Pressable onPress={handleBack} style={{ flex: 1, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderRadius: BACK_BTN_SIZE / 2 }}>
+                                <PressableFlash
+                                    onPress={handleBack}
+                                    borderRadius={BACK_BTN_SIZE / 2}
+                                    flashColor={activeTheme.primary}
+                                    style={{
+                                        width: BACK_BTN_SIZE,
+                                        height: BACK_BTN_SIZE,
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        borderRadius: BACK_BTN_SIZE / 2,
+                                    }}
+                                >
                                     <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
                                     <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
-                                </Pressable>
+                                </PressableFlash>
                             </Animated.View>
                         )}
                     </View>
@@ -2227,7 +2277,10 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                 style={{ flex: 1 }}
             >
                 {/* Content Wrapper */}
-                <Animated.View style={[StyleSheet.absoluteFill, { zIndex: 1, backgroundColor: 'transparent' }, backgroundMorphAnimatedStyle as any]}>
+                <Animated.View 
+                    style={[StyleSheet.absoluteFill, { backgroundColor: 'transparent' }, backgroundMorphAnimatedStyle as any]}
+                    pointerEvents="box-none"
+                >
                     <View style={StyleSheet.absoluteFill}>
                         {/* In overlay mode, let taps on the transparent upper region dismiss the keyboard
                             (the call's remote video sits behind this and stays visible through the transparency). */}
@@ -2302,32 +2355,30 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                         )}
                                     </View>
                                 ) : (
-                                    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-                                        <View style={{ flex: 1 }}>
-                                            {isReady && (
-                                                <Animated.FlatList
-                                                    ref={flatListRef as any}
-                                                    data={reversedMessages}
-                                                    keyExtractor={keyExtractor}
-                                                    inverted={true}
-                                                    renderItem={renderMessage}
-                                                    style={styles.messagesList}
-                                                    contentContainerStyle={styles.messagesContent}
-                                                    showsVerticalScrollIndicator={false}
-                                                    maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-                                                    scrollEventThrottle={16}
-                                                    keyboardShouldPersistTaps="handled"
-                                                    keyboardDismissMode="on-drag"
-                                                    ListEmptyComponent={
-                                                        <View style={styles.emptyChat}>
-                                                            <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.1)" />
-                                                            <Text style={styles.emptyChatText}>No messages yet</Text>
-                                                        </View>
-                                                    }
-                                                />
-                                            )}
-                                        </View>
-                                    </TouchableWithoutFeedback>
+                                    <View style={{ flex: 1 }}>
+                                        {isReady && (
+                                            <Animated.FlatList
+                                                ref={flatListRef as any}
+                                                data={reversedMessages}
+                                                keyExtractor={keyExtractor}
+                                                inverted={true}
+                                                renderItem={renderMessage}
+                                                style={styles.messagesList}
+                                                contentContainerStyle={styles.messagesContent}
+                                                showsVerticalScrollIndicator={false}
+                                                maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+                                                scrollEventThrottle={16}
+                                                keyboardShouldPersistTaps="handled"
+                                                keyboardDismissMode="on-drag"
+                                                ListEmptyComponent={
+                                                    <View style={styles.emptyChat}>
+                                                        <MaterialIcons name="chat-bubble-outline" size={60} color="rgba(255,255,255,0.1)" />
+                                                        <Text style={styles.emptyChatText}>No messages yet</Text>
+                                                    </View>
+                                                }
+                                            />
+                                        )}
+                                    </View>
                                 )}
 
                             {!isOverlay && (
@@ -2423,12 +2474,17 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                             </Animated.View>
 
                             <View style={styles.inputAreaRow}>
-                                <Pressable style={[styles.attachButton, isRecording && { opacity: 0 }]} onPress={toggleOptions}>
+                                <PressableFlash
+                                    style={[styles.attachButton, isRecording && { opacity: 0 }]}
+                                    borderRadius={22}
+                                    flashColor={activeTheme.primary}
+                                    onPress={toggleOptions}
+                                >
                                     <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
                                     <Animated.View style={animatedPlusStyle}>
                                         <MaterialIcons name="add" size={24} color="rgba(255,255,255,0.7)" />
                                     </Animated.View>
-                                </Pressable>
+                                </PressableFlash>
 
                                 <View style={[styles.unifiedPillContainer, isRecording && { opacity: 0 }]}>
                                     <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
@@ -2443,10 +2499,15 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                 </View>
 
                                 {inputText.trim() ? (
-                                    <Pressable style={styles.sendButton} onPress={handleSend}>
+                                    <PressableFlash
+                                        style={styles.sendButton}
+                                        borderRadius={22}
+                                        flashColor={activeTheme.primary}
+                                        onPress={handleSend}
+                                    >
                                         <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
                                         <MaterialIcons name="arrow-upward" size={22} color="#fff" />
-                                    </Pressable>
+                                    </PressableFlash>
                                 ) : (
                                     <View
                                         onTouchStart={handleMicTouchStart}

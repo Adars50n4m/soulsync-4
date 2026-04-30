@@ -23,6 +23,7 @@ import { SoulLoader } from '../components/ui/SoulLoader';
 import { proxySupabaseUrl, SERVER_URL, safeFetchJson } from '../config/api';
 import { supabase } from '../config/supabase';
 import { Contact } from '../types';
+import { LEGACY_TO_UUID } from '../utils/idNormalization';
 import { hapticService } from '../services/HapticService';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
@@ -191,16 +192,17 @@ export default function CreateGroupScreen() {
             if (groupError) throw groupError;
             if (!groupData) throw new Error("No data returned after group creation");
 
+            const normalizedCreatorId = LEGACY_TO_UUID[currentUser.id] || currentUser.id;
             const memberRows = [
                 { 
                     group_id: groupData.id, 
-                    user_id: currentUser.id, 
+                    user_id: normalizedCreatorId, 
                     role: 'admin',
                     joined_at: new Date().toISOString()
                 },
                 ...selectedIds.map(id => ({ 
                     group_id: groupData.id, 
-                    user_id: id, 
+                    user_id: LEGACY_TO_UUID[id] || id, 
                     role: 'member',
                     joined_at: new Date().toISOString()
                 }))

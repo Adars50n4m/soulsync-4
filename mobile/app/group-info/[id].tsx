@@ -129,6 +129,41 @@ export default function GroupInfoScreen() {
         };
     });
 
+    const contentRevealStyle = useRNAnimatedStyle(() => {
+        'worklet';
+        const revealProgress = hasAvatarMorph
+            ? rnInterpolate(heroMorphProgress.value, [0, 0.78, 1], [0, 0, 1], RNExtrapolation.CLAMP)
+            : 1;
+
+        return {
+            opacity: chromeOpacity.value * revealProgress,
+            transform: [
+                { translateY: rnInterpolate(revealProgress, [0, 1], [24, 0], RNExtrapolation.CLAMP) }
+            ] as any,
+        };
+    });
+
+    const groupMetaAnimatedStyle = useRNAnimatedStyle(() => {
+        'worklet';
+        const revealProgress = hasAvatarMorph
+            ? rnInterpolate(heroMorphProgress.value, [0, 0.78, 1], [0, 0, 1], RNExtrapolation.CLAMP)
+            : 1;
+        const heroProgress = rnInterpolate(heroMorphProgress.value, [0, 1], [0, 1], RNExtrapolation.CLAMP);
+        const scrollParallax = rnInterpolate(
+            scrollY.value,
+            [-SCREEN_HEIGHT, 0, SCREEN_HEIGHT * 0.45],
+            [SCREEN_HEIGHT / 2, 0, -SCREEN_HEIGHT * 0.45 * 0.8],
+            RNExtrapolation.CLAMP
+        );
+
+        return {
+            opacity: chromeOpacity.value * revealProgress,
+            transform: [
+                { translateY: (scrollParallax * heroProgress) + rnInterpolate(revealProgress, [0, 1], [24, 0], RNExtrapolation.CLAMP) }
+            ] as any,
+        };
+    });
+
     const heroAnimatedStyle = useRNAnimatedStyle(() => {
         'worklet';
         const heroProgress = rnInterpolate(heroMorphProgress.value, [0, 1], [0, 1], RNExtrapolation.CLAMP);
@@ -927,8 +962,19 @@ export default function GroupInfoScreen() {
                             </LinearGradient>
                         </View>
                     )}
+                    {/* Bottom fade lives INSIDE the hero so it parallaxes
+                        with the image — otherwise scroll detaches them and
+                        leaves a hard black edge. */}
+                    <ProgressiveBlur position="bottom" height={200} intensity={60} tint="dark" />
                 </Reanimated.View>
-                <ProgressiveBlur position="bottom" height={200} intensity={60} tint="dark" />
+
+                <Reanimated.View
+                    pointerEvents="none"
+                    style={[styles.groupMeta, groupMetaAnimatedStyle]}
+                >
+                    <Text style={styles.groupName}>{group?.name || '...'}</Text>
+                    <Text style={styles.groupSubTitle}>{members.length} members</Text>
+                </Reanimated.View>
             </View>
 
             {/* Center "Change Photo" sits OUTSIDE the hero so its Pressable lands above
@@ -995,16 +1041,12 @@ export default function GroupInfoScreen() {
             </Reanimated.View>
 
             <Reanimated.ScrollView 
-                style={[styles.scrollView, heroChromeStyle]} 
+                style={[styles.scrollView, contentRevealStyle]} 
                 showsVerticalScrollIndicator={false}
                 onScroll={onScroll}
                 scrollEventThrottle={16}
             >
                 <View style={styles.headerSpacer} />
-                <View style={styles.groupMeta}>
-                    <Text style={styles.groupName}>{group?.name || '...'}</Text>
-                    <Text style={styles.groupSubTitle}>{members.length} members</Text>
-                </View>
 
                 <View style={styles.content}>
                     {/* Basic Info */}
@@ -1205,6 +1247,11 @@ const styles = StyleSheet.create({
         right: 0,
         height: SCREEN_HEIGHT * 0.45,
         zIndex: 0,
+        // CRITICAL: clip the parallaxed/scaled hero so it never bleeds
+        // below the container during overscroll-down. Without this the
+        // scaled image renders past the hero bounds and visually appears
+        // as a duplicated band inside the scroll content.
+        overflow: 'hidden',
     },
     heroSection: { 
         height: SCREEN_HEIGHT * 0.45, 
@@ -1224,12 +1271,15 @@ const styles = StyleSheet.create({
     headerButton: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden' },
     headerIconGlass: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     groupMeta: {
-        paddingHorizontal: 20,
-        marginBottom: 20,
+        position: 'absolute',
+        left: 20,
+        right: 20,
+        bottom: 56,
+        zIndex: 5,
     },
     groupName: { color: '#fff', fontSize: 32, fontWeight: '800', letterSpacing: -0.5 },
     groupSubTitle: { color: 'rgba(255,255,255,0.6)', fontSize: 16, marginTop: 4, fontWeight: '600' },
-    headerSpacer: { height: SCREEN_HEIGHT * 0.35 },
+    headerSpacer: { height: SCREEN_HEIGHT * 0.45 + 12 },
     scrollView: { flex: 1 },
     content: { padding: 20, paddingTop: 40 },
     editAvatarOverlay: {
