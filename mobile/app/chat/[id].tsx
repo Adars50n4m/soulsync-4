@@ -1062,14 +1062,18 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
 
         const springConfig = {
             damping: 15,
-            stiffness: 140,
-            mass: 0.8,
+            stiffness: 150,
+            mass: 0.5,
         };
 
-        plusRotation.value = withSpring(nextExpanded ? 45 : 0, { damping: 12, stiffness: 150 });
-        optionsOpacity.value = withSpring(nextExpanded ? 1 : 0, { damping: 20 });
-        optionsTranslateY.value = withSpring(nextExpanded ? 0 : 20, springConfig);
-        optionsScale.value = withSpring(nextExpanded ? 1 : 0.9, springConfig);
+        plusRotation.value = withSpring(nextExpanded ? 45 : 0, { damping: 15, stiffness: 200 });
+        optionsOpacity.value = withTiming(nextExpanded ? 1 : 0, { duration: 100 });
+        optionsTranslateY.value = withSpring(nextExpanded ? 0 : 50, springConfig);
+        optionsScale.value = withSpring(nextExpanded ? 1 : 0.01, springConfig);
+
+        if (nextExpanded) {
+            hapticService.impact(Haptics.ImpactFeedbackStyle.Medium);
+        }
     };
 
     // Close options when typing
@@ -1091,13 +1095,25 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
         ] as any
     }));
 
-    const animatedOptionsStyle = useAnimatedStyle(() => ({
-        opacity: optionsOpacity.value,
+    const animatedMorphStyle = useAnimatedStyle(() => {
+        const progress = optionsScale.value; // 0 to 1
+        return {
+            width: interpolate(progress, [0, 1], [44, 200]),
+            height: interpolate(progress, [0, 1], [44, 280]),
+            borderRadius: interpolate(progress, [0, 1], [22, 28]),
+        };
+    });
+
+    const animatedContentOpacity = useAnimatedStyle(() => ({
+        opacity: interpolate(optionsScale.value, [0.3, 1], [0, 1]),
+        transform: [{ translateY: interpolate(optionsScale.value, [0, 1], [40, 0]) }]
+    }));
+
+    const animatedIconRotation = useAnimatedStyle(() => ({
         transform: [
-            { translateY: optionsTranslateY.value },
-            { scale: optionsScale.value }
-        ] as any,
-        pointerEvents: isExpanded ? 'auto' : 'none' as any,
+            { rotate: `${plusRotation.value}deg` },
+            { scale: interpolate(optionsScale.value, [0, 1], [1, 1.1]) }
+        ] as any
     }));
 
     const callButtonRef = useRef<View>(null);
@@ -2437,54 +2453,10 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                             )}
 
                             {/* Floating Options Menu — FULL RESTORATION */}
-                            <Animated.View 
-                                style={[
-                                    styles.optionsMenu, 
-                                    animatedOptionsStyle as any,
-                                    {
-                                        position: 'absolute',
-                                        bottom: 70,
-                                        left: 16,
-                                        right: 16,
-                                        height: 80,
-                                        borderRadius: 24,
-                                        zIndex: 70,
-                                        backgroundColor: 'rgba(25, 25, 30, 0.4)',
-                                        flexDirection: 'row',
-                                        alignItems: 'center',
-                                        justifyContent: 'space-around',
-                                        paddingHorizontal: 12,
-                                    }
-                                ]}
-                            >
-                                <GlassView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
-                                {[
-                                    { name: 'photo-camera', label: 'Camera', color: '#f43f5e', action: handleSelectCamera },
-                                    { name: 'photo-library', label: 'Gallery', color: '#60a5fa', action: handleSelectGallery },
-                                    { name: 'insert-drive-file', label: 'Document', color: '#4ade80', action: handleSelectDocument },
-                                    { name: 'person-outline', label: 'Contact', color: 'rgba(255,255,255,0.8)', action: handleSelectContact },
-                                ].map((opt) => (
-                                    <Pressable key={opt.label} style={{ alignItems: 'center' }} onPress={() => { opt.action(); toggleOptions(); }}>
-                                        <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.05)', alignItems: 'center', justifyContent: 'center' }}>
-                                            <MaterialIcons name={opt.name as any} size={24} color={opt.color} />
-                                        </View>
-                                        <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10 }}>{opt.label}</Text>
-                                    </Pressable>
-                                ))}
-                            </Animated.View>
-
                             <View style={styles.inputAreaRow}>
-                                <PressableFlash
-                                    style={[styles.attachButton, isRecording && { opacity: 0 }]}
-                                    borderRadius={22}
-                                    flashColor={activeTheme.primary}
-                                    onPress={toggleOptions}
-                                >
-                                    <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
-                                    <Animated.View style={animatedPlusStyle}>
-                                        <MaterialIcons name="add" size={24} color="rgba(255,255,255,0.7)" />
-                                    </Animated.View>
-                                </PressableFlash>
+                                <View style={{ width: 44, height: 44, marginRight: 6 }}>
+                                    {/* Placeholder for the morphing menu to reserve space */}
+                                </View>
 
                                 <View style={[styles.unifiedPillContainer, isRecording && { opacity: 0 }]}>
                                     <GlassView intensity={35} tint="dark" style={StyleSheet.absoluteFill} />
@@ -2493,10 +2465,71 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                             style={styles.input}
                                             value={inputText}
                                             onChangeText={setInputText}
+                                            placeholder="Message"
+                                            placeholderTextColor="rgba(255,255,255,0.3)"
                                             multiline
+                                            onFocus={handleFocus}
                                         />
                                     </View>
                                 </View>
+
+                                {/* Morphing Menu Container — Elevated to top layer */}
+                                <Animated.View 
+                                    style={[
+                                        styles.morphingMenuContainer,
+                                        animatedMorphStyle,
+                                        { zIndex: 9999 } // Ensure it's above everything
+                                    ]}
+                                >
+                                    <PressableFlash
+                                        style={StyleSheet.absoluteFill}
+                                        borderRadius={22}
+                                        flashColor={activeTheme.primary}
+                                        onPress={toggleOptions}
+                                    >
+                                        <GlassView intensity={65} tint="dark" style={StyleSheet.absoluteFill} />
+                                        
+                                        <View style={styles.morphingInnerContent}>
+                                            {/* The Toggle Button (Always at bottom) */}
+                                            <View style={styles.persistentToggleArea}>
+                                                <Animated.View style={animatedIconRotation}>
+                                                    <MaterialIcons 
+                                                        name={isExpanded ? "close" : "add"} 
+                                                        size={26} 
+                                                        color={isExpanded ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.8)"} 
+                                                    />
+                                                </Animated.View>
+                                            </View>
+
+                                            {/* The Menu Content (Expands upwards) */}
+                                            <Animated.View style={[styles.menuItemsList, animatedContentOpacity]} pointerEvents={isExpanded ? 'auto' : 'none'}>
+                                                {[
+                                                    { name: 'photo-camera', label: 'Camera', color: '#f43f5e', bg: 'rgba(244, 63, 94, 0.12)', action: handleSelectCamera },
+                                                    { name: 'photo-library', label: 'Gallery', color: '#60a5fa', bg: 'rgba(96, 165, 250, 0.12)', action: handleSelectGallery },
+                                                    { name: 'insert-drive-file', label: 'Document', color: '#4ade80', bg: 'rgba(74, 222, 128, 0.12)', action: handleSelectDocument },
+                                                    { name: 'person-outline', label: 'Contact', color: 'rgba(255,255,255,0.85)', bg: 'rgba(255,255,255,0.06)', action: handleSelectContact },
+                                                ].map((opt, idx, arr) => (
+                                                    <React.Fragment key={opt.label}>
+                                                        <Pressable 
+                                                            style={styles.optionItem} 
+                                                            onPress={(e) => { 
+                                                                e.stopPropagation();
+                                                                opt.action(); 
+                                                                toggleOptions(); 
+                                                            }}
+                                                        >
+                                                            <View style={[styles.optionIcon, { backgroundColor: opt.bg }]}>
+                                                                <MaterialIcons name={opt.name as any} size={22} color={opt.color} />
+                                                            </View>
+                                                            <Text style={styles.optionText}>{opt.label}</Text>
+                                                        </Pressable>
+                                                        {idx < arr.length - 1 && <View style={styles.optionDivider} />}
+                                                    </React.Fragment>
+                                                ))}
+                                            </Animated.View>
+                                        </View>
+                                    </PressableFlash>
+                                </Animated.View>
 
                                 {inputText.trim() ? (
                                     <PressableFlash
@@ -3281,35 +3314,55 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         // gap: 4,
     },
-    optionsMenu: {
+    morphingMenuContainer: {
         position: 'absolute',
-        width: SCREEN_WIDTH - 32,
-        flexDirection: 'row',
-        flexWrap: 'nowrap',
-        justifyContent: 'space-around',
-        overflow: 'hidden',
+        bottom: 0,
+        left: 0,
         backgroundColor: 'transparent',
         borderWidth: 1.2,
-        borderColor: 'rgba(255, 255, 255, 0.18)',
-        paddingHorizontal: 8,
+        borderColor: 'rgba(255, 255, 255, 0.15)',
+        overflow: 'hidden',
     },
-    optionItem: {
-        alignItems: 'center',
-        margin: 10,
-        width: 60,
+    morphingInnerContent: {
+        flex: 1,
+        flexDirection: 'column-reverse',
     },
-    optionIcon: {
+    persistentToggleArea: {
         width: 44,
         height: 44,
-        borderRadius: 22,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    menuItemsList: {
+        padding: 6,
+        paddingBottom: 4,
+        flex: 1,
+    },
+    optionItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+    },
+    optionIcon: {
+        width: 34,
+        height: 34,
+        borderRadius: 17,
         justifyContent: 'center',
         alignItems: 'center',
-        marginBottom: 6,
+        marginRight: 14,
     },
     optionText: {
-        color: 'rgba(255,255,255,0.7)',
-        fontSize: 11,
+        color: '#ffffff',
+        fontSize: 16,
         fontWeight: '500',
+        letterSpacing: -0.2,
+    },
+    optionDivider: {
+        height: 1,
+        backgroundColor: 'rgba(255, 255, 255, 0.08)',
+        marginLeft: 56,
+        marginRight: 10,
     },
     inputWrapperHidden: {
         opacity: 0,
