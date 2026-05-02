@@ -145,10 +145,24 @@ interface ChatListItemProps {
   isMuted: boolean;
   isClone?: boolean;
   isSelected?: boolean;
+  onAvatarPress?: (contact: Contact) => void;
 }
 
-const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, isTyping, getPresence, connectivity, homeMorphProgress, selectedPillId, unreadCount, isPinned, isMuted, isClone, isSelected }: ChatListItemProps) => {
+const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, isTyping, getPresence, connectivity, homeMorphProgress, selectedPillId, unreadCount, isPinned, isMuted, isClone, isSelected, onAvatarPress }: ChatListItemProps) => {
   const { activeTheme } = useApp();
+  // Helper to resolve colors
+  const withAlpha = (color: string, alpha: number): string => {
+    if (color.startsWith('#')) {
+      const hex = color.slice(1);
+      const normalized = hex.length === 3 ? hex.split('').map((char) => char + char).join('') : hex;
+      if (normalized.length === 6) {
+        return `rgba(${parseInt(normalized.slice(0, 2), 16)}, ${parseInt(normalized.slice(2, 4), 16)}, ${parseInt(normalized.slice(4, 6), 16)}, ${alpha})`;
+      }
+    }
+    if (color.startsWith('rgb(')) return color.replace('rgb(', 'rgba(').replace(')', `, ${alpha})`);
+    if (color.startsWith('rgba(')) return color.replace(/rgba\(([^,]+),([^,]+),([^,]+),[^)]+\)/, `rgba($1,$2,$3,${alpha})`);
+    return color;
+  };
   const scaleAnim = useSharedValue(1);
   const opacityAnim = useSharedValue(1);
   const itemRef = useRef<View>(null);
@@ -223,57 +237,91 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
           </View>
         )}
         <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
-          <GlassPillSurface
-            radius={32}
-            intensity={35}
-            selected={isSelected}
-            selectedColor="#ff4444"
-            pressed={pressed}
-            pressColor={activeTheme.primary}
-            style={styles.chatPillSurface}
-            contentStyle={styles.pillContent}
-          >
-            <View style={styles.avatarContainer}>
-              <SoulAvatar
-                uri={proxySupabaseUrl(item.avatar) || DEFAULT_AVATAR}
-                localUri={item.localAvatarUri}
-                size={46}
-                avatarType={item.avatarType}
-                teddyVariant={item.teddyVariant}
-                isOnline={getPresence(item.id).isOnline}
-                style={[
-                  item.stories && item.stories.length > 0 && {
-                    borderWidth: 2,
-                    borderColor: item.stories.some((s) => !s.seen) ? '#3b82f6' : 'rgba(255,255,255,0.4)',
-                    padding: 2,
-                    overflow: 'hidden'
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+            {/* Avatar Pill - Separate circular glass surface with Story Logic */}
+            <View style={[
+              item.stories && item.stories.length > 0 && item.stories.some((s) => !s.seen) && {
+                shadowColor: activeTheme.primary,
+                shadowOffset: { width: 0, height: 0 },
+                shadowOpacity: 0.8,
+                shadowRadius: 10,
+                elevation: 10,
+                borderRadius: 28,
+              }
+            ]}>
+              <Pressable
+                onPress={() => {
+                  if (item.stories && item.stories.length > 0 && onAvatarPress) {
+                    onAvatarPress(item);
+                  } else {
+                    handlePress();
                   }
-                ]}
-              />
-            </View>
-
-            <View style={styles.chatContent}>
-              <Text style={styles.contactName}>
-                {item.name}
-              </Text>
-              <Text numberOfLines={1} style={isTyping ? [styles.lastMessage, typingStyle] : styles.lastMessage}>
-                {isTyping ? 'Typing...' : (lastMsg.text || 'Start a conversation')}
-              </Text>
-            </View>
-
-            <View style={styles.rightSide}>
-              {lastMsg.timestamp && <Text style={styles.timestamp}>{formatTime(lastMsg.timestamp)}</Text>}
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                {isMuted && <MaterialIcons name="volume-off" size={12} color="rgba(255,255,255,0.45)" />}
-                {isPinned && <MaterialIcons name="push-pin" size={12} color="#facc15" />}
-                {unreadCount > 0 && (
-                  <View style={styles.unreadBadge}>
-                    <Text style={styles.unreadBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+                }}
+              >
+                <GlassPillSurface
+                  radius={28}
+                  intensity={35}
+                  selected={isSelected}
+                  selectedColor="#ff4444"
+                  pressed={pressed}
+                  pressColor={activeTheme.primary}
+                  borderColor={
+                    item.stories && item.stories.length > 0
+                      ? (item.stories.some(s => !s.seen) ? activeTheme.primary : withAlpha(activeTheme.primary, 0.4))
+                      : 'rgba(255,255,255,0.14)'
+                  }
+                  style={{ width: 56, height: 56 }}
+                  contentStyle={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <View style={styles.avatarContainer}>
+                    <SoulAvatar
+                      uri={proxySupabaseUrl(item.avatar) || DEFAULT_AVATAR}
+                      localUri={item.localAvatarUri}
+                      size={46}
+                      avatarType={item.avatarType}
+                      teddyVariant={item.teddyVariant}
+                      isOnline={getPresence(item.id).isOnline}
+                      // Removing border from SoulAvatar so it doesn't double up with GlassPillSurface border
+                    />
                   </View>
-                )}
-              </View>
+                </GlassPillSurface>
+              </Pressable>
             </View>
-          </GlassPillSurface>
+
+            {/* Message Content Pill - Separate elongated glass surface */}
+            <GlassPillSurface
+              radius={28}
+              intensity={35}
+              selected={isSelected}
+              selectedColor="#ff4444"
+              pressed={pressed}
+              pressColor={activeTheme.primary}
+              style={{ flex: 1, height: 56 }}
+              contentStyle={[styles.pillContent, { paddingLeft: 16 }]}
+            >
+              <View style={styles.chatContent}>
+                <Text style={styles.contactName}>
+                  {item.name}
+                </Text>
+                <Text numberOfLines={1} style={isTyping ? [styles.lastMessage, typingStyle] : styles.lastMessage}>
+                  {isTyping ? 'Typing...' : (lastMsg.text || 'Start a conversation')}
+                </Text>
+              </View>
+
+              <View style={styles.rightSide}>
+                {lastMsg.timestamp && <Text style={styles.timestamp}>{formatTime(lastMsg.timestamp)}</Text>}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  {isMuted && <MaterialIcons name="volume-off" size={12} color="rgba(255,255,255,0.45)" />}
+                  {isPinned && <MaterialIcons name="push-pin" size={12} color="#facc15" />}
+                  {unreadCount > 0 && (
+                    <View style={styles.unreadBadge}>
+                      <Text style={styles.unreadBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            </GlassPillSurface>
+          </View>
         </Animated.View>
       </View>
     </Pressable>
@@ -1383,6 +1431,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
             onSelect={handleUserSelect}
             homeMorphProgress={homeMorphProgress}
             selectedPillId={selectedPillId}
+            onAvatarPress={handleStatusPress}
         />
       </SwipeableRow>
     );
@@ -1680,6 +1729,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
                         connectivity={connectivity}
                         homeMorphProgress={homeMorphProgress}
                         selectedPillId={selectedPillId}
+                        onAvatarPress={handleStatusPress}
                         isClone
                     />
                 </View>
@@ -1856,7 +1906,7 @@ const styles = StyleSheet.create({
   // past COLLAPSE_SCROLL (~90px) — drives the status-rail morph even when
   // the user has only a handful of chats.
   listContent: { paddingBottom: 600, paddingHorizontal: 4 },
-  chatItem: { marginBottom: 5, marginHorizontal: 8, borderRadius: 32, height: 64 },
+  chatItem: { marginBottom: 5, marginHorizontal: 8, borderRadius: 28, height: 56 },
   notePositioner: {
       position: 'absolute',
       top: -34,
@@ -1876,7 +1926,7 @@ const styles = StyleSheet.create({
 
   pillBackground: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0, 0, 0, 0.15)', opacity: 0.95 },
   pillBlur: { ...StyleSheet.absoluteFillObject },
-  pillContent: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingLeft: 9, paddingRight: 16, gap: 12 },
+  pillContent: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingRight: 16, gap: 12 },
   avatarContainer: { position: 'relative' },
   avatar: { width: 46, height: 46, borderRadius: 23 },
   onlineIndicator: { position: 'absolute', bottom: 0, right: 0, width: 14, height: 14, borderRadius: 7, backgroundColor: '#22c55e', borderWidth: 2, borderColor: '#151515' },
