@@ -15,8 +15,19 @@ import Animated, {
     runOnJS, 
     cancelAnimation, 
     Easing,
-    withSpring
+    withSpring,
+    SharedTransition
 } from 'react-native-reanimated';
+
+const statusTransition = SharedTransition.custom((values) => {
+  'worklet';
+  return {
+    height: withSpring(values.targetHeight, { damping: 20, stiffness: 120 }),
+    width: withSpring(values.targetWidth, { damping: 20, stiffness: 120 }),
+    originX: withSpring(values.targetOriginX, { damping: 20, stiffness: 120 }),
+    originY: withSpring(values.targetOriginY, { damping: 20, stiffness: 120 }),
+  };
+});
 import { Video, ResizeMode } from 'expo-av';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -46,7 +57,21 @@ const StatusProgressBar = ({ idx, currentIndex, progress }: any) => {
 export default function ViewStatusScreen() {
     const { width, height } = useWindowDimensions();
     const insets = useSafeAreaInsets();
-    const { id } = useLocalSearchParams<{ id: string }>();
+    const {
+        id,
+        sharedTag,
+        statusId: initialStatusIdParam,
+        mediaKey: initialMediaKeyParam,
+        uriHint: initialUriHintParam,
+        mediaType: initialMediaTypeParam,
+    } = useLocalSearchParams<{
+        id: string;
+        sharedTag?: string;
+        statusId?: string;
+        mediaKey?: string;
+        uriHint?: string;
+        mediaType?: string;
+    }>();
     const router = useRouter();
     const { currentUser, sendChatMessage, activeTheme } = useApp();
     const themeAccent = activeTheme.primary;
@@ -54,8 +79,27 @@ export default function ViewStatusScreen() {
     
     const [statusGroup, setStatusGroup] = useState<UserStatusGroup | null>(null);
     const [currentIndex, setCurrentIndex] = useState(0);
-    const [mediaSource, setMediaSource] = useState<{uri: string, isLocal: boolean} | null>(null);
-    const [loading, setLoading] = useState(true);
+    const initialSharedTag = typeof sharedTag === 'string' && sharedTag.length > 0
+        ? sharedTag
+        : `status-hero-${id}`;
+    const initialStatusId = typeof initialStatusIdParam === 'string' ? initialStatusIdParam : '';
+    const initialMediaKey = typeof initialMediaKeyParam === 'string' ? initialMediaKeyParam : '';
+    const initialUriHint = typeof initialUriHintParam === 'string' ? initialUriHintParam : '';
+    const initialMediaType = typeof initialMediaTypeParam === 'string' ? initialMediaTypeParam : '';
+    const buildImmediateMediaSource = useCallback((uriHint?: string, mediaKey?: string) => {
+        const candidate = uriHint || mediaKey || '';
+        if (!candidate) return null;
+        if (candidate.startsWith('file://') || candidate.startsWith('content://')) {
+            return { uri: candidate, isLocal: true };
+        }
+        if (candidate.startsWith('http://') || candidate.startsWith('https://')) {
+            return { uri: candidate, isLocal: false };
+        }
+        return null;
+    }, []);
+    const initialImmediateSource = buildImmediateMediaSource(initialUriHint, initialMediaKey);
+    const [mediaSource, setMediaSource] = useState<{uri: string, isLocal: boolean} | null>(initialImmediateSource);
+    const [loading, setLoading] = useState(initialMediaType === 'video' && !!initialImmediateSource);
     const [isPaused, setIsPaused] = useState(false);
     const [replyText, setReplyText] = useState('');
     const [isReplyComposerActive, setIsReplyComposerActive] = useState(false);
@@ -76,6 +120,13 @@ export default function ViewStatusScreen() {
             const group = feed.find(g => g.user.id === id);
             if (group) {
                 setStatusGroup(group);
+                if (initialStatusId) {
+                    const initialIndex = group.statuses.findIndex(s => s.id === initialStatusId);
+                    if (initialIndex !== -1) {
+                        setCurrentIndex(initialIndex);
+                        return;
+                    }
+                }
                 // Start from first unviewed if not self
                 if (!group.isMine) {
                     const firstUnviewed = group.statuses.findIndex(s => !s.isViewed);
@@ -96,9 +147,18 @@ export default function ViewStatusScreen() {
         if (!currentStatus) return;
 
         const loadMedia = async () => {
-            setLoading(true);
             setIsPaused(false);
             progress.value = 0;
+            const immediateSource = buildImmediateMediaSource(
+                currentStatus.mediaLocalPath || currentStatus.mediaUrl || '',
+                (currentStatus as any).mediaKey || ''
+            );
+            if (immediateSource) {
+                setMediaSource(immediateSource);
+                setLoading(currentStatus.mediaType === 'video');
+            } else {
+                setLoading(true);
+            }
             
             // We need media_key. Since it's not in SQLite (my mistake earlier), 
             // I'll assume we have it or I'll fix the service to include it.
@@ -109,7 +169,7 @@ export default function ViewStatusScreen() {
             const source = await statusService.getMediaSource(currentStatus.id, (currentStatus as any).mediaKey);
             if (!source) {
                 console.warn(`[ViewStatus] Unable to resolve media for status ${currentStatus.id}`);
-                setMediaSource(null);
+                setMediaSource(immediateSource);
                 setLoading(false);
                 return;
             }
@@ -157,7 +217,7 @@ export default function ViewStatusScreen() {
         // the heartbeat loader) every few seconds even when the status hadn't
         // actually changed.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [currentIndex, currentUserId, statusGroup]);
+    }, [buildImmediateMediaSource, currentIndex, currentUserId, statusGroup]);
 
     const handleNext = useCallback(() => {
         if (statusGroup && currentIndex < statusGroup.statuses.length - 1) {
@@ -362,7 +422,11 @@ export default function ViewStatusScreen() {
 
     return (
         <GestureHandlerRootView style={styles.black}>
-            <Animated.View style={[styles.container, animatedStyle]}>
+            <Animated.View 
+                style={[styles.container, animatedStyle]}
+                sharedTransitionTag={initialSharedTag}
+                sharedTransitionStyle={statusTransition}
+            >
                 <StatusBar hidden />
                 
                 {/* Background Blur */}
@@ -413,7 +477,8 @@ export default function ViewStatusScreen() {
                                     <Image 
                                         source={{ uri: mediaSource.uri }} 
                                         style={StyleSheet.absoluteFill} 
-                                        resizeMode="contain" 
+                                        resizeMode="contain"
+                                        onLoadEnd={() => setLoading(false)}
                                     />
                                 )
                             ) : null}

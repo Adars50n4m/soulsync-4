@@ -3,11 +3,13 @@ import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useContext, Component, ReactNode, useState, useRef, useCallback } from 'react';
-import { View, Platform, AppState, Text, Pressable, StyleSheet as ViewStyle } from 'react-native';
+import { View, Platform, AppState, Text, Pressable, StyleSheet as ViewStyle, StyleSheet } from 'react-native';
 
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
+import Animated, { FadeOut, useSharedValue, withTiming, useAnimatedStyle, runOnJS } from 'react-native-reanimated';
+import { Video, ResizeMode } from 'expo-av';
 import { useFonts, DancingScript_700Bold } from '@expo-google-fonts/dancing-script';
 import { AppContext, AppProvider } from '../context/AppContext';
 import { PresenceProvider } from '../context/PresenceContext';
@@ -71,22 +73,44 @@ function RootContent() {
   const router = useRouter();
   const segments = useSegments();
 
-  // Handle Splash Screen hiding separately to keep it outside the context switch if possible,
-  // but since we need isReady, we must handle it carefully.
   const { activeCall, currentUser, isReady, activeTheme } = context || { activeCall: null, currentUser: null, isReady: false, activeTheme: null };
   const themeAccent = activeTheme?.primary || '#BC002A';
   const [showSkip, setShowSkip] = useState(false);
   const [isNavSettled, setIsNavSettled] = useState(false);
   const splashHiddenRef = useRef(false);
+
+  // --- VIDEO SPLASH STATE ---
+  const [isVideoLoaded, setIsVideoLoaded] = useState(false);
+  const [isVideoFinished, setIsVideoFinished] = useState(false);
+  const [unmountVideo, setUnmountVideo] = useState(false);
+  const videoOpacity = useSharedValue(1);
   
   const hideSplashSafely = useCallback((reason: string) => {
     if (splashHiddenRef.current) return;
     splashHiddenRef.current = true;
-    console.log(`[RootContent] Hiding splash screen (${reason})...`);
+    console.log(`[RootContent] Hiding native splash screen (${reason})...`);
     SplashScreen.hideAsync().catch((err) => {
-      console.warn('[RootContent] Error hiding splash screen:', err);
+      console.warn('[RootContent] Error hiding native splash screen:', err);
     });
   }, []);
+
+  const onVideoStatusUpdate = useCallback((status: any) => {
+      if (status.isLoaded) {
+          if (!isVideoLoaded) {
+              console.log('[RootContent] Video splash loaded, hiding native splash.');
+              setIsVideoLoaded(true);
+              hideSplashSafely('video-ready');
+          }
+          if (status.didJustFinish) {
+              console.log('[RootContent] Video splash finished playback.');
+              setIsVideoFinished(true);
+          }
+      } else if (status.error) {
+          console.error('[RootContent] Video splash error:', status.error);
+          setIsVideoFinished(true);
+          hideSplashSafely('video-error');
+      }
+  }, [hideSplashSafely, isVideoLoaded]);
 
   // Handle Background Service registration (DEFERRED)
   useEffect(() => {
@@ -113,9 +137,10 @@ function RootContent() {
       if (!splashHiddenRef.current) {
         console.warn(`[RootLayout] Splash failsafe fired after ${SPLASH_FAILSAFE_MS}ms`);
         hideSplashSafely('failsafe-timeout');
-        setShowSkip(true);
       }
-    }, SPLASH_FAILSAFE_MS);
+      setIsVideoFinished(true); // Unlock app even if video is stuck
+      setShowSkip(true);
+    }, SPLASH_FAILSAFE_MS + 2000); // Give video slightly more time than standard failsafe
 
     return () => clearTimeout(splashFailsafe);
   }, [hideSplashSafely]);
@@ -167,13 +192,12 @@ function RootContent() {
         }
 
         // ✅ Navigation Settlement
-        // We only settle if we are on the screen that matches our current auth state.
         const matchesAuth = (currentUser && !inAuthGroup) || (!currentUser && inAuthGroup);
 
         if (matchesAuth && !isNavSettled) {
             console.log('[RootLayout] ✅ Navigation settled on target:', segments[0]);
             setIsNavSettled(true);
-            hideSplashSafely('auth-resolved');
+            // Native splash is now hidden by the video component's onLoad event
         }
     }, [currentUser, isReady, segments, router, !!activeCall, activeCall?.isAccepted, hideSplashSafely, isNavSettled]);
 
@@ -205,6 +229,21 @@ function RootContent() {
         });
         return () => subscription.remove();
     }, [activeCall?.isAccepted, activeCall?.isIncoming, activeCall?.isMinimized, segments, isReady, !!context]);
+
+  // --- ORCHESTRATE SPLASH UNMOUNT ---
+  const isAppFullyReady = isNavSettled && isVideoFinished;
+
+  useEffect(() => {
+      if (isAppFullyReady) {
+          videoOpacity.value = withTiming(0, { duration: 400 }, (finished) => {
+              if (finished) runOnJS(setUnmountVideo)(true);
+          });
+      }
+  }, [isAppFullyReady]);
+
+  const videoAnimatedStyle = useAnimatedStyle(() => ({
+      opacity: videoOpacity.value,
+  }));
 
   // Note: We always render the Stack navigator below to satisfy Expo Router's requirement.
   // We use absolute-positioned overlays for loading/stuck states.
@@ -297,6 +336,18 @@ function RootContent() {
           animation: 'fade',
           headerShown: false,
         }} />
+        <Stack.Screen name="my-status" options={{
+          animation: 'none',
+          headerShown: false,
+          presentation: 'transparentModal',
+          contentStyle: { backgroundColor: 'transparent' },
+        }} />
+        <Stack.Screen name="view-status" options={{
+          animation: 'none',
+          headerShown: false,
+          presentation: 'transparentModal',
+          contentStyle: { backgroundColor: 'transparent' },
+        }} />
       </Stack>
 
       {/* Persistence / Loading Overlay: Always sits on top until isReady AND isNavSettled are true */}
@@ -363,6 +414,23 @@ function RootContent() {
           <PipOverlay />
           <SecurityLockOverlay />
         </>
+      )}
+
+      {/* VIDEO SPLASH SCREEN */}
+      {!unmountVideo && (
+        <Animated.View 
+          style={[{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999999, backgroundColor: '#000' }, videoAnimatedStyle]} 
+          pointerEvents="none"
+        >
+          <Video
+            source={require('../assets/splash.mp4')}
+            style={{ flex: 1 }}
+            resizeMode={ResizeMode.COVER}
+            shouldPlay={true}
+            isMuted={true}
+            onPlaybackStatusUpdate={onVideoStatusUpdate}
+          />
+        </Animated.View>
       )}
     </View>
   );

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { supabase } from '../config/supabase';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { statusService } from '../services/StatusService';
 import { CachedStatus } from '../types';
@@ -24,6 +24,17 @@ import { StatusThumbnail } from '../components/StatusThumbnail';
 import { useApp } from '../context/AppContext';
 import { MediaPickerSheet } from '../components/MediaPickerSheet';
 import { SoulLoader } from '../components/ui/SoulLoader';
+import Animated, { SharedTransition, withSpring } from 'react-native-reanimated';
+
+const statusTransition = SharedTransition.custom((values) => {
+  'worklet';
+  return {
+    height: withSpring(values.targetHeight, { damping: 20, stiffness: 120 }),
+    width: withSpring(values.targetWidth, { damping: 20, stiffness: 120 }),
+    originX: withSpring(values.targetOriginX, { damping: 20, stiffness: 120 }),
+    originY: withSpring(values.targetOriginY, { damping: 20, stiffness: 120 }),
+  };
+});
 
 interface StatusWithViewers extends CachedStatus {
   viewers: any[];
@@ -42,16 +53,35 @@ const getRelativeTime = (timestamp: number) => {
 
 export default function MyStatusScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{
+    sharedTag?: string;
+  }>();
   const insets = useSafeAreaInsets();
-  const { currentUser, activeTheme } = useApp();
-  const [myStatuses, setMyStatuses] = useState<StatusWithViewers[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { currentUser, activeTheme, myStatuses: cachedMyStatuses } = useApp();
+  const sharedTag = typeof params.sharedTag === 'string' && params.sharedTag.length > 0
+    ? params.sharedTag
+    : 'status-hero-card';
+  const seedStatuses = useMemo(
+    () => cachedMyStatuses.map((status) => ({ ...status, viewers: [] })),
+    [cachedMyStatuses]
+  );
+  const [myStatuses, setMyStatuses] = useState<StatusWithViewers[]>(seedStatuses);
   const [refreshing, setRefreshing] = useState(false);
   const [isMediaPickerVisible, setIsMediaPickerVisible] = useState(false);
   const [isActionBusy, setIsActionBusy] = useState(false);
   const [isCaptionModalVisible, setIsCaptionModalVisible] = useState(false);
   const [statusToEdit, setStatusToEdit] = useState<StatusWithViewers | null>(null);
   const [editedCaption, setEditedCaption] = useState('');
+
+  useEffect(() => {
+    setMyStatuses((prev) => {
+      const viewersById = new Map(prev.map((status) => [status.id, status.viewers || []]));
+      return cachedMyStatuses.map((status) => ({
+        ...status,
+        viewers: viewersById.get(status.id) || [],
+      }));
+    });
+  }, [cachedMyStatuses]);
 
   const loadData = useCallback(async () => {
     try {
@@ -66,7 +96,6 @@ export default function MyStatusScreen() {
     } catch (e) {
       console.error(e);
     } finally {
-      setLoading(false);
       setRefreshing(false);
     }
   }, []);
@@ -83,6 +112,7 @@ export default function MyStatusScreen() {
         () => {
           // Whenever ANY status is viewed, we refresh our local list to get updated counts
           // In a high-traffic app, we would filter by our own status IDs first.
+          // Note: We DON'T set loading(true) here to avoid the heartbeat flickering.
           loadData();
         }
       )
@@ -91,7 +121,7 @@ export default function MyStatusScreen() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadData]);
+  }, [currentUser?.id]); // Only re-run if the logged-in user actually changes
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -101,13 +131,10 @@ export default function MyStatusScreen() {
   const createStatus = async (asset: any) => {
     setIsMediaPickerVisible(false);
     try {
-      setLoading(true);
       await statusService.uploadStory(asset.uri, asset.type === 'video' ? 'video' : 'image', '');
       setTimeout(() => loadData(), 500);
     } catch (e) {
       console.error(e);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -216,16 +243,31 @@ export default function MyStatusScreen() {
         <View style={styles.statusItem}>
           <Pressable 
             style={styles.itemMain}
-            onPress={() => router.push({ pathname: '/view-status', params: { id: currentUser?.id } })}
+            onPress={() => router.push({
+              pathname: '/view-status',
+              params: {
+                id: currentUser?.id,
+                sharedTag: `status-hero-status-${item.id}`,
+                statusId: item.id,
+                mediaKey: item.mediaKey || '',
+                uriHint: item.mediaLocalPath || item.mediaUrl || '',
+                mediaType: item.mediaType || '',
+              },
+            })}
           >
             <View style={styles.avatarContainer}>
-              <View style={styles.statusThumbShell}>
+              <Animated.View
+                style={styles.statusThumbShell}
+                sharedTransitionTag={`status-hero-status-${item.id}`}
+                sharedTransitionStyle={statusTransition}
+              >
                 <StatusThumbnail
                   statusId={item.id}
                   mediaKey={item.mediaKey}
                   uriHint={item.mediaLocalPath || item.mediaUrl}
                   mediaType={item.mediaType}
                   style={styles.statusThumb}
+                  showLoader={false}
                   fallback={(
                     <SoulAvatar
                       uri={currentUser?.avatar}
@@ -235,7 +277,7 @@ export default function MyStatusScreen() {
                     />
                   )}
                 />
-              </View>
+              </Animated.View>
             </View>
             <View style={styles.itemInfo}>
               <Text style={styles.viewText}>
@@ -274,13 +316,13 @@ export default function MyStatusScreen() {
         </Pressable>
       </View>
 
-      {loading && !refreshing ? (
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <SoulLoader size={200} />
-        </View>
-      ) : (
-        <View style={styles.content}>
-          <View style={styles.card}>
+      {/* Main Content - Always render to allow Shared Transition to find the tag */}
+      <View style={styles.content}>
+          <Animated.View 
+            style={styles.card} 
+            sharedTransitionTag={sharedTag}
+            sharedTransitionStyle={statusTransition}
+          >
             <FlatList
               data={myStatuses}
               renderItem={renderItem}
@@ -304,7 +346,7 @@ export default function MyStatusScreen() {
               </View>
               <Text style={styles.addStatusText}>Add status</Text>
             </Pressable>
-          </View>
+          </Animated.View>
 
           {/* Footer */}
           <View style={styles.footer}>
@@ -314,9 +356,8 @@ export default function MyStatusScreen() {
                 Your status updates are <Text style={[styles.encryptedText, { color: activeTheme.primary }]}>end-to-end encrypted</Text>. They will disappear after 24 hours.
               </Text>
             </View>
-          </View>
         </View>
-      )}
+      </View>
 
       <MediaPickerSheet
         visible={isMediaPickerVisible}

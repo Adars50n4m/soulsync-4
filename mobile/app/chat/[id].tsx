@@ -655,8 +655,8 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
     // Animation Values
     const plusRotation = useSharedValue(0);
     const optionsOpacity = useSharedValue(0);
-    const optionsTranslateY = useSharedValue(20); // Starts slightly down
-    const optionsScale = useSharedValue(0.9);
+    const optionsTranslateY = useSharedValue(50); // Starts fully down
+    const optionsScale = useSharedValue(0.01);    // Starts fully collapsed
     const modalAnim = useRef(new RNAnimated.Value(0)).current;
 
     // Refs
@@ -1098,23 +1098,33 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
     const animatedMorphStyle = useAnimatedStyle(() => {
         const progress = optionsScale.value; // 0 to 1
         return {
-            width: interpolate(progress, [0, 1], [44, 200]),
-            height: interpolate(progress, [0, 1], [44, 280]),
-            borderRadius: interpolate(progress, [0, 1], [22, 28]),
+            width: interpolate(progress, [0, 1], [44, 200], Extrapolation.CLAMP),
+            height: interpolate(progress, [0, 1], [44, 280], Extrapolation.CLAMP),
+            borderRadius: interpolate(progress, [0, 1], [22, 28], Extrapolation.CLAMP),
         };
     });
 
     const animatedContentOpacity = useAnimatedStyle(() => ({
-        opacity: interpolate(optionsScale.value, [0.3, 1], [0, 1]),
-        transform: [{ translateY: interpolate(optionsScale.value, [0, 1], [40, 0]) }]
+        opacity: interpolate(optionsScale.value, [0.3, 1], [0, 1], Extrapolation.CLAMP),
+        transform: [{ translateY: interpolate(optionsScale.value, [0, 1], [40, 0], Extrapolation.CLAMP) }]
     }));
 
     const animatedIconRotation = useAnimatedStyle(() => ({
         transform: [
             { rotate: `${plusRotation.value}deg` },
-            { scale: interpolate(optionsScale.value, [0, 1], [1, 1.1]) }
+            { scale: interpolate(optionsScale.value, [0, 1], [1, 1.1], Extrapolation.CLAMP) }
         ] as any
     }));
+
+    // Force closed state on mount in case of stale shared values from fast refresh
+    useEffect(() => {
+        if (!isExpanded) {
+            plusRotation.value = 0;
+            optionsOpacity.value = 0;
+            optionsTranslateY.value = 50;
+            optionsScale.value = 0;
+        }
+    }, []);
 
     const callButtonRef = useRef<View>(null);
 
@@ -2255,7 +2265,6 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
 
                         {!selectionMode && (
                             <Animated.View style={[
-                                styles.headerButton, 
                                 { 
                                     position: 'absolute', 
                                     top: HEADER_PILL_TOP + (HEADER_PILL_HEIGHT - BACK_BTN_SIZE) / 2, 
@@ -2263,22 +2272,26 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                     width: BACK_BTN_SIZE, 
                                     height: BACK_BTN_SIZE, 
                                     borderRadius: BACK_BTN_SIZE / 2,
-                                    zIndex: 20 
+                                    zIndex: 20,
+                                    overflow: 'hidden',
+                                    borderWidth: 1,
+                                    borderColor: 'rgba(255, 255, 255, 0.22)',
+                                    backgroundColor: 'transparent'
                                 }
                             ]}>
+                                <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                                    <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
+                                </View>
                                 <PressableFlash
                                     onPress={handleBack}
                                     borderRadius={BACK_BTN_SIZE / 2}
                                     flashColor={activeTheme.primary}
                                     style={{
-                                        width: BACK_BTN_SIZE,
-                                        height: BACK_BTN_SIZE,
+                                        flex: 1,
                                         alignItems: 'center',
                                         justifyContent: 'center',
-                                        borderRadius: BACK_BTN_SIZE / 2,
                                     }}
                                 >
-                                    <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
                                     <MaterialIcons name="arrow-back" size={24} color="#ffffff" />
                                 </PressableFlash>
                             </Animated.View>

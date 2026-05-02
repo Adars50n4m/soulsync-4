@@ -221,9 +221,27 @@ export default function SearchScreen() {
         highlightOpacity.value = withTiming(1, { duration: 200 });
     }, [activeFilter]);
 
+    const glowProgress = useSharedValue(0);
+    const isFirstFilterSync = useRef(true);
+
     useEffect(() => {
         syncHighlight();
+        
+        if (isFirstFilterSync.current) {
+            isFirstFilterSync.current = false;
+        } else {
+            // Flash glow blob during shift
+            glowProgress.value = withTiming(1, { duration: 150 }, () => {
+                glowProgress.value = withTiming(0, { duration: 600 });
+            });
+        }
     }, [activeFilter, syncHighlight]);
+
+    const glowAnimatedStyle = useAnimatedStyle(() => {
+        return {
+            opacity: glowProgress.value,
+        };
+    });
 
     const highlightAnimatedStyle = useAnimatedStyle(() => {
         const left = highlightLeft.value;
@@ -1359,7 +1377,7 @@ export default function SearchScreen() {
                                 <View style={{ position: 'relative', flexDirection: 'row', alignItems: 'center' }}>
                                     {/* Liquid Highlight */}
                                     <Animated.View style={[
-                                        { position: 'absolute', height: 38, zIndex: 0 },
+                                        { position: 'absolute', height: 38, zIndex: 0, overflow: 'hidden', borderRadius: 19 },
                                         highlightAnimatedStyle
                                     ]}>
                                         <GlassPillSurface
@@ -1368,6 +1386,32 @@ export default function SearchScreen() {
                                             style={StyleSheet.absoluteFillObject}
                                             borderColor="rgba(255,255,255,0.15)"
                                             overlayOpacity={0.12}
+                                        />
+                                        {/* Constant Theme Gradients */}
+                                        <LinearGradient
+                                            colors={[`${activeTheme.primary}33`, 'transparent']}
+                                            start={{ x: 0, y: 0 }}
+                                            end={{ x: 0.7, y: 0.7 }}
+                                            style={StyleSheet.absoluteFill}
+                                        />
+                                        <LinearGradient
+                                            colors={['transparent', `${activeTheme.primary}22`]}
+                                            start={{ x: 0.3, y: 0.3 }}
+                                            end={{ x: 1, y: 1 }}
+                                            style={StyleSheet.absoluteFill}
+                                        />
+                                        {/* Tap flash blob glow */}
+                                        <Animated.View
+                                            style={[
+                                                StyleSheet.absoluteFillObject,
+                                                {
+                                                    backgroundColor: `${activeTheme.primary}66`,
+                                                    borderColor: `${activeTheme.primary}99`,
+                                                    borderWidth: 1,
+                                                    borderRadius: 19,
+                                                },
+                                                glowAnimatedStyle
+                                            ]}
                                         />
                                     </Animated.View>
 

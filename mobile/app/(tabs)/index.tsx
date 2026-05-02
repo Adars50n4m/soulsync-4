@@ -35,6 +35,7 @@ import Animated, {
   interpolate,
   Extrapolation,
   useDerivedValue,
+  SharedTransition,
 } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
@@ -68,6 +69,16 @@ import { NoteCreatorModal } from '../../components/NoteCreatorModal';
 import ChatListContextMenu from '../../components/chat/ChatListContextMenu';
 const DEFAULT_AVATAR = '';
 const HOME_MORPH_DURATION = 500;
+
+const statusTransition = SharedTransition.custom((values) => {
+  'worklet';
+  return {
+    height: withSpring(values.targetHeight, { damping: 20, stiffness: 120 }),
+    width: withSpring(values.targetWidth, { damping: 20, stiffness: 120 }),
+    originX: withSpring(values.targetOriginX, { damping: 20, stiffness: 120 }),
+    originY: withSpring(values.targetOriginY, { damping: 20, stiffness: 120 }),
+  };
+});
 
 const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promise<string> => {
   let resolvedUri = asset.uri;
@@ -871,11 +882,21 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
     return diff < 24 * 60 * 60 * 1000; // 24 hours
   };
 
-  const handleStatusPress = (contact: Contact) => {
-    router.push({ pathname: '/view-status', params: { id: contact.id } });
+  const handleStatusPress = (contact: Contact, latestStatus?: any) => {
+    router.push({
+      pathname: '/view-status',
+      params: {
+        id: contact.id,
+        sharedTag: `status-hero-${contact.id}`,
+        statusId: latestStatus?.id || '',
+        mediaKey: latestStatus?.mediaKey || '',
+        uriHint: latestStatus?.mediaLocalPath || latestStatus?.mediaUrl || '',
+        mediaType: latestStatus?.mediaType || '',
+      },
+    });
   };
 
-  const handleMyStatusPress = () => {
+  const handleMyStatusPress = (latestStatus?: any) => {
     if (!currentUser) return;
     
     // Auto-retry failures
@@ -884,7 +905,16 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
     }
 
     if (myStatuses.length > 0 || pendingStatusUploads.length > 0) {
-      router.push('/my-status');
+      router.push({
+        pathname: '/my-status',
+        params: {
+          sharedTag: 'status-hero-card',
+          statusId: latestStatus?.id || '',
+          mediaKey: latestStatus?.mediaKey || '',
+          uriHint: latestStatus?.mediaLocalPath || latestStatus?.mediaUrl || '',
+          mediaType: latestStatus?.mediaType || '',
+        },
+      });
     } else {
       setIsMediaPickerVisible(true);
     }
@@ -1008,10 +1038,12 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
   const StatusCardWrapper = useCallback(({
     children,
     index,
+    item,
     avatarOverlay,
   }: {
     children: React.ReactNode;
     index: number;
+    item: any;
     avatarOverlay?: React.ReactNode;
   }) => {
     const cardStyle = useAnimatedStyle(() => {
@@ -1052,7 +1084,11 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
     });
 
     return (
-      <Animated.View style={[styles.statusCard, cardStyle as any]}>
+      <Animated.View 
+        style={[styles.statusCard, cardStyle as any]}
+        sharedTransitionTag={item.id === 'my-status' ? 'status-hero-card' : `status-hero-${item.id}`}
+        sharedTransitionStyle={statusTransition}
+      >
         <Animated.View style={[StyleSheet.absoluteFill, chromeStyle]}>
           {children}
         </Animated.View>
@@ -1101,11 +1137,11 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
       );
 
       return (
-        <StatusCardWrapper index={index} avatarOverlay={myStatusOverlay}>
+        <StatusCardWrapper index={index} item={item} avatarOverlay={myStatusOverlay}>
         <Pressable
           ref={ref => statusRefs.current['my-status'] = ref}
           style={{ flex: 1 }}
-          onPress={() => handleMyStatusPress()}
+          onPress={() => handleMyStatusPress(latestMyStatus)}
         >
           <View style={styles.statusCardSurface}>
             <View style={[styles.myStatusBackground, (hasStatus || hasPendingUploads) && { justifyContent: 'center', alignItems: 'center' }]}>
@@ -1150,6 +1186,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
                         uriHint={latestMyStatus.mediaLocalPath || latestMyStatus.mediaUrl}
                         mediaType={latestMyStatus.mediaType as any}
                         style={styles.myStatusPreviewBgFull}
+                        showLoader={false}
                       />
                       <LinearGradient
                         colors={['rgba(0,0,0,0.5)', 'transparent']}
@@ -1236,12 +1273,12 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
     );
 
     return (
-      <StatusCardWrapper index={index} avatarOverlay={contactOverlay}>
+      <StatusCardWrapper index={index} item={item} avatarOverlay={contactOverlay}>
       <Pressable
         key={contact.id}
         ref={ref => statusRefs.current[contact.id] = ref}
         style={{ flex: 1 }}
-        onPress={() => handleStatusPress(contact)}
+        onPress={() => handleStatusPress(contact, latestStatus)}
       >
         <View style={styles.statusCardSurface}>
           {hasStatus ? (
@@ -1251,6 +1288,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
               uriHint={latestStatus.mediaLocalPath || latestStatus.mediaUrl}
               mediaType={latestStatus.mediaType as any}
               style={styles.statusMediaBackground}
+              showLoader={false}
             />
           ) : (
             <View style={[styles.statusMediaBackground, styles.statusPlaceholder]} />

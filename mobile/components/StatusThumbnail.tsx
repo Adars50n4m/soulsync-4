@@ -17,6 +17,7 @@ interface StatusThumbnailProps {
   blurRadius?: number;
   resizeMode?: 'cover' | 'contain' | 'stretch' | 'center';
   fallback?: React.ReactNode;
+  showLoader?: boolean;
 }
 
 // ── Persistent resolved-URI cache ──────────────────────────────────────────
@@ -94,6 +95,7 @@ export const StatusThumbnail: React.FC<StatusThumbnailProps> = ({
   blurRadius = 0,
   resizeMode = 'cover',
   fallback,
+  showLoader = true,
 }) => {
   // Seed state from the module-level cache so a remount with a previously-
   // resolved statusId is instant (no loader flash, no re-fetch).
@@ -274,7 +276,7 @@ export const StatusThumbnail: React.FC<StatusThumbnailProps> = ({
         )
       )}
       
-      {loading && (
+      {loading && showLoader && (
         <View style={styles.loader}>
           <SoulLoader size={30} />
         </View>
