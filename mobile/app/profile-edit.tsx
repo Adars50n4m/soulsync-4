@@ -21,6 +21,7 @@ import { proxySupabaseUrl } from '../config/api';
 import { setProfileEditSourceHidden } from '../services/profileEditMorphState';
 import { CountryPicker } from '../components/CountryPicker';
 import { COUNTRIES, Country } from '../constants/Countries';
+import { getProfileAvatarTransitionTag, PROFILE_AVATAR_SHARED_TRANSITION } from '../constants/sharedTransitions';
 import Animated, {
     Easing,
     Extrapolation,
@@ -29,7 +30,10 @@ import Animated, {
     runOnJS,
     useAnimatedStyle,
     useSharedValue,
+    withDelay,
     withTiming,
+    withSpring,
+    FadeInDown,
 } from 'react-native-reanimated';
 
 const AnimatedImage = Animated.createAnimatedComponent(Image);
@@ -100,9 +104,13 @@ const profileBoundsTransition = SharedTransition.custom((values) => {
 }).duration(400);
 
 export default function ProfileEditScreen() {
-    const enableSharedMorph = SUPPORT_SHARED_TRANSITIONS;
+    const [isSaving, setIsSaving] = useState(false);
     const targetSize = 180;
     const targetRadius = 90;
+    // Mirror the source ProfileHeader card: 28px corners + a parallax image
+    // wrapper with top:-40 / height:140%. Matching these at p=0 makes the
+    // morphing shell pixel-identical to the pill it lifts off from.
+    const SOURCE_RADIUS = 28;
     const sourceImageBaseTop = -40;
     const sourceImageHeightMultiplier = 1.4;
 
@@ -111,6 +119,13 @@ export default function ProfileEditScreen() {
     const navigation = useNavigation();
     const params = useLocalSearchParams<{ heroX?: string; heroY?: string; heroW?: string; heroH?: string; heroScrollY?: string }>();
     const { currentUser, updateProfile, changeUsername, activeTheme } = useApp();
+
+    const profileAvatarTransitionTag = React.useMemo(() => {
+        const uid = currentUser?.id;
+        return uid ? getProfileAvatarTransitionTag(uid) : undefined;
+    }, [currentUser?.id]);
+
+    const enableSharedMorph = SUPPORT_SHARED_TRANSITIONS && !!profileAvatarTransitionTag;
     const heroOrigin = {
         x: Number(Array.isArray(params.heroX) ? params.heroX[0] : params.heroX),
         y: Number(Array.isArray(params.heroY) ? params.heroY[0] : params.heroY),
@@ -145,9 +160,16 @@ export default function ProfileEditScreen() {
     const [isEditing, setIsEditing] = useState<'name' | 'bio' | 'username' | null>(null);
     const [showDatePicker, setShowDatePicker] = useState(false);
     const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
-    const [isContentReady, setIsContentReady] = useState(!hasHeroMorph);
     const morphProgress = useSharedValue(hasHeroMorph ? 0 : 1);
+    // Independent opacity drivers for chrome / scroll content / backdrop /
+    // morphing-shell hand-off. Decoupling them from `morphProgress` lets the
+    // entry and dismiss use different timings — so the chrome can fade out
+    // smoothly during dismiss instead of holding to the very end and popping.
     const chromeOpacity = useSharedValue(hasHeroMorph ? 0 : 1);
+    const contentOpacity = useSharedValue(hasHeroMorph ? 0 : 1);
+    const backdropOpacity = useSharedValue(hasHeroMorph ? 0 : 1);
+    const morphShellOpacity = useSharedValue(1);
+    const avatarRevealOpacity = useSharedValue(hasHeroMorph ? 0 : 1);
     const isClosingRef = useRef(false);
     const allowNativePopRef = useRef(false);
     const entryHideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -189,40 +211,100 @@ export default function ProfileEditScreen() {
 
         if (!hasHeroMorph) {
             setProfileEditSourceHidden(false);
-            setIsContentReady(true);
             morphProgress.value = 1;
             chromeOpacity.value = 1;
+            contentOpacity.value = 1;
+            backdropOpacity.value = 1;
+            morphShellOpacity.value = 0;
+            avatarRevealOpacity.value = 1;
             return;
         }
 
         setProfileEditSourceHidden(false);
-        setIsContentReady(false);
+        // Reset opacities to their entry state. The morphing shell is fully
+        // opaque, the destination avatar/chrome/content are hidden, and the
+        // backdrop will fade in alongside the reshape.
+        morphShellOpacity.value = 1;
+        avatarRevealOpacity.value = 0;
+        chromeOpacity.value = 0;
+        contentOpacity.value = 0;
+        backdropOpacity.value = 0;
+
         entryHideTimeoutRef.current = setTimeout(() => {
             setProfileEditSourceHidden(true);
             entryHideTimeoutRef.current = null;
         }, 18);
-        morphProgress.value = withTiming(1, {
-            duration: 460,
-            easing: Easing.bezier(0.22, 1, 0.36, 1),
+
+        // Same spring the chat→profile hero uses: lands cleanly on the
+        // destination shape without bounce, fast enough to feel responsive
+        // but not so snappy that the reshape reads as instantaneous.
+        morphProgress.value = withSpring(1, {
+            damping: 28,
+            stiffness: 180,
+            mass: 0.9,
+            overshootClamping: true,
         }, (finished) => {
             if (finished) {
-                runOnJS(setIsContentReady)(true);
+                // Snap the morphing shell off once we know the destination
+                // avatar is fully opaque underneath — no fade gap, no jump.
+                morphShellOpacity.value = withTiming(0, { duration: 80 });
             }
         });
-        chromeOpacity.value = 1;
+
+        // Backdrop fades in alongside the reshape so the settings screen
+        // behind dims smoothly instead of being covered by an instant cut.
+        backdropOpacity.value = withTiming(1, {
+            duration: 300,
+            easing: Easing.out(Easing.cubic),
+        });
+        // Destination avatar crossfades in over the back half of the morph
+        // so it's already fully painted by the time the shell hands off.
+        avatarRevealOpacity.value = withDelay(
+            220,
+            withTiming(1, { duration: 220, easing: Easing.out(Easing.cubic) })
+        );
+        // Chrome + content stagger in just after the reshape settles —
+        // fast enough to feel connected to the morph, slow enough to read.
+        chromeOpacity.value = withDelay(
+            260,
+            withTiming(1, { duration: 260, easing: Easing.out(Easing.cubic) })
+        );
+        contentOpacity.value = withDelay(
+            320,
+            withTiming(1, { duration: 280, easing: Easing.out(Easing.cubic) })
+        );
 
         return () => {
             clearMorphTimers();
             setProfileEditSourceHidden(false);
         };
-    }, [chromeOpacity, clearMorphTimers, hasHeroMorph, morphProgress]);
+    }, [
+        avatarRevealOpacity,
+        backdropOpacity,
+        chromeOpacity,
+        clearMorphTimers,
+        contentOpacity,
+        hasHeroMorph,
+        morphProgress,
+        morphShellOpacity,
+    ]);
 
     const slideAnim = useRef(new RNAnimated.Value(0)).current;
+    const targetLeft = (width - targetSize) / 2;
+    // Header is paddingTop:54 + 40 content + paddingBottom:16 = 110, then the
+    // ScrollView's avatarSection adds paddingVertical:32 — so the natural
+    // y-position of the destination avatar's top edge is 142. Landing the
+    // morphing shell exactly there avoids the 24px jump-and-flicker that
+    // happens when the shell hands off to the in-list avatar.
+    const targetTop = 142;
+
+    // Single morphing shell — width/height/radius/translation all driven by
+    // the same `morphProgress` so the card reshapes in lockstep, the way the
+    // chat→profile hero does. No transform-scale on the outer (which would
+    // distort the inner image), and the source borderRadius starts at the
+    // ProfileHeader's actual 28px so we don't pop from a pill into a card.
     const heroMorphAnimatedStyle = useAnimatedStyle(() => {
         'worklet';
-        const targetLeft = (width - targetSize) / 2;
-        const targetTop = 118;
-
         if (!hasHeroMorph) {
             return {
                 left: targetLeft,
@@ -233,152 +315,97 @@ export default function ProfileEditScreen() {
             };
         }
 
-        const sourceCenterX = heroOrigin.x + (heroOrigin.width / 2);
-        const sourceCenterY = heroOrigin.y + (heroOrigin.height / 2);
-        const targetCenterX = targetLeft + (targetSize / 2);
-        const targetCenterY = targetTop + (targetSize / 2);
-
-        const initialScaleX = heroOrigin.width / targetSize;
-        const initialScaleY = heroOrigin.height / targetSize;
-
+        const p = morphProgress.value;
         return {
             left: targetLeft,
             top: targetTop,
-            width: targetSize,
-            height: targetSize,
-            borderRadius: interpolate(morphProgress.value, [0, 1], [28, targetRadius], Extrapolation.CLAMP),
-            opacity: interpolate(morphProgress.value, [0, 0.975, 1], [1, 1, 0], Extrapolation.CLAMP),
+            width: interpolate(p, [0, 1], [heroOrigin.width, targetSize], Extrapolation.CLAMP),
+            height: interpolate(p, [0, 1], [heroOrigin.height, targetSize], Extrapolation.CLAMP),
+            // Curve through ~60 at the midpoint so the corners round into a
+            // circle smoothly instead of linearly (which reads as "stiff").
+            borderRadius: interpolate(p, [0, 0.6, 1], [SOURCE_RADIUS, 60, targetRadius], Extrapolation.CLAMP),
+            // Opacity is owned by `morphShellHandoffStyle` now — driven by
+            // its own shared value so the hand-off can wait until the
+            // destination avatar is fully painted underneath.
             transform: [
-                {
-                    translateX: interpolate(
-                        morphProgress.value,
-                        [0, 1],
-                        [sourceCenterX - targetCenterX, 0],
-                        Extrapolation.CLAMP
-                    ),
-                },
-                {
-                    translateY: interpolate(
-                        morphProgress.value,
-                        [0, 1],
-                        [sourceCenterY - targetCenterY, 0],
-                        Extrapolation.CLAMP
-                    ),
-                },
-                {
-                    scaleX: interpolate(
-                        morphProgress.value,
-                        [0, 1],
-                        [initialScaleX, 1],
-                        Extrapolation.CLAMP
-                    ),
-                },
-                {
-                    scaleY: interpolate(
-                        morphProgress.value,
-                        [0, 1],
-                        [initialScaleY, 1],
-                        Extrapolation.CLAMP
-                    ),
-                },
+                { translateX: interpolate(p, [0, 1], [heroOrigin.x - targetLeft, 0], Extrapolation.CLAMP) },
+                { translateY: interpolate(p, [0, 1], [heroOrigin.y - targetTop, 0], Extrapolation.CLAMP) },
             ] as any,
         };
     });
 
+    // Inner parallax wrapper — at p=0 mirrors the source ProfileHeader's
+    // top:-40 / height:140% offset so the avatar sits where the user just
+    // tapped; at p=1 it fills the destination circle exactly. The wrapper's
+    // width is '100%' (set in styles), so it tracks the shell's interpolated
+    // width automatically — no manual scale compensation needed.
     const heroMorphImageAnimatedStyle = useAnimatedStyle(() => {
         'worklet';
         if (!hasHeroMorph) {
             return {
                 top: 0,
                 height: targetSize,
-                transform: [{ translateY: 0 }, { scale: 1 }] as any,
             };
         }
 
-        const outerScaleY = interpolate(
-            morphProgress.value,
-            [0, 1],
-            [heroOrigin.height / targetSize, 1],
-            Extrapolation.CLAMP
-        );
-
+        const p = morphProgress.value;
         return {
             top: interpolate(
-                morphProgress.value,
+                p,
                 [0, 1],
-                [sourceImageBaseTop / outerScaleY, 0],
+                [sourceImageBaseTop + sourceParallaxTranslateY, 0],
                 Extrapolation.CLAMP
             ),
             height: interpolate(
-                morphProgress.value,
+                p,
                 [0, 1],
-                [targetSize * sourceImageHeightMultiplier, targetSize],
+                [heroOrigin.height * sourceImageHeightMultiplier * sourceParallaxScale, targetSize],
                 Extrapolation.CLAMP
             ),
-            transform: [
-                {
-                    translateY: interpolate(
-                        morphProgress.value,
-                        [0, 1],
-                        [sourceParallaxTranslateY / outerScaleY, 0],
-                        Extrapolation.CLAMP
-                    ),
-                },
-                {
-                    scale: interpolate(
-                        morphProgress.value,
-                        [0, 1],
-                        [sourceParallaxScale, 1],
-                        Extrapolation.CLAMP
-                    ),
-                },
-            ] as any,
         };
     });
 
+    // All four chrome-layer styles read from their own dedicated shared
+    // values now (driven by the entry/dismiss effects) rather than from
+    // morphProgress directly. That decoupling is what fixes the dismiss
+    // pop: chrome/content/backdrop can fade out smoothly *during* the
+    // morph instead of holding 100% until the very end and then dropping.
     const backdropAnimatedStyle = useAnimatedStyle(() => {
         'worklet';
-        return {
-            opacity: hasHeroMorph
-                ? interpolate(morphProgress.value, [0, 0.2, 1], [0, 0.45, 1], Extrapolation.CLAMP)
-                : 1,
-        };
+        return { opacity: backdropOpacity.value };
     });
 
     const chromeAnimatedStyle = useAnimatedStyle(() => {
         'worklet';
         return {
-            opacity: hasHeroMorph
-                ? interpolate(morphProgress.value, [0, 0.5, 0.86, 1], [0, 0, 0.5, 1], Extrapolation.CLAMP)
-                : chromeOpacity.value,
-            transform: [{ translateY: interpolate(morphProgress.value, [0, 1], [18, 0], Extrapolation.CLAMP) }],
+            opacity: chromeOpacity.value,
+            transform: [{ translateY: interpolate(chromeOpacity.value, [0, 1], [18, 0], Extrapolation.CLAMP) }],
         };
     });
 
     const contentAnimatedStyle = useAnimatedStyle(() => {
         'worklet';
         return {
-            opacity: hasHeroMorph
-                ? interpolate(morphProgress.value, [0, 0.56, 0.9, 1], [0, 0, 0.45, 1], Extrapolation.CLAMP)
-                : chromeOpacity.value,
-            transform: [{ translateY: interpolate(morphProgress.value, [0, 1], [22, 0], Extrapolation.CLAMP) }],
+            opacity: contentOpacity.value,
+            transform: [{ translateY: interpolate(contentOpacity.value, [0, 1], [22, 0], Extrapolation.CLAMP) }],
         };
     });
 
+    // Destination avatar reveal — gated by its own opacity so it can crossfade
+    // in over the back half of the morph (see entry effect) and out at the
+    // start of the dismiss, well before the shell hands back to the source.
     const avatarRevealAnimatedStyle = useAnimatedStyle(() => {
         'worklet';
-        return {
-            opacity: hasHeroMorph
-                ? interpolate(morphProgress.value, [0, 0.96, 1], [0, 0, 1], Extrapolation.CLAMP)
-                : 1,
-            transform: [
-                {
-                    scale: hasHeroMorph
-                        ? interpolate(morphProgress.value, [0, 0.96, 1], [0.985, 0.985, 1], Extrapolation.CLAMP)
-                        : 1,
-                },
-            ] as any,
-        };
+        return { opacity: avatarRevealOpacity.value };
+    });
+
+    // Morphing shell hand-off opacity. Stays 1 for the entire entry morph so
+    // there's no gap between the shell and the destination avatar — once the
+    // destination is fully painted the shell fades out in 80ms (set in the
+    // entry effect's spring callback).
+    const morphShellHandoffStyle = useAnimatedStyle(() => {
+        'worklet';
+        return { opacity: morphShellOpacity.value };
     });
 
     const finishDismiss = React.useCallback((action?: any) => {
@@ -405,20 +432,75 @@ export default function ProfileEditScreen() {
             return;
         }
 
-        setIsContentReady(false);
-        morphProgress.value = withTiming(0, {
-            duration: 420,
-            easing: Easing.bezier(0.4, 0, 0.2, 1),
+        const DISMISS_DURATION = 320;
+        const dismissEasing = Easing.bezier(0.4, 0, 0.2, 1);
+
+        // Bring the morphing shell back so the destination avatar can hand
+        // off to it cleanly. The reveal opacity drops to 0 right away — the
+        // shell's image (same avatar URL) takes over the visual.
+        morphShellOpacity.value = withTiming(1, { duration: 60 });
+        avatarRevealOpacity.value = withTiming(0, {
+            duration: 120,
+            easing: Easing.out(Easing.cubic),
         });
+
+        // Chrome + content fade out *early* in the dismiss — they're done
+        // before the morph reshape gets past its midpoint, so the user sees
+        // a clean hero shrinking back to the source instead of headers/rows
+        // popping out at the very end.
+        chromeOpacity.value = withTiming(0, {
+            duration: 160,
+            easing: Easing.out(Easing.cubic),
+        });
+        contentOpacity.value = withTiming(0, {
+            duration: 180,
+            easing: Easing.out(Easing.cubic),
+        });
+
+        // Backdrop fades in lockstep with the morph itself, so the settings
+        // screen behind reveals progressively — not in a sudden burst at the
+        // tail like before (which is what made the @hari + options "pop in").
+        backdropOpacity.value = withTiming(0, {
+            duration: DISMISS_DURATION,
+            easing: dismissEasing,
+        });
+
+        // Reveal the source pill just before the morphing card lands so the
+        // viewer never sees an empty hole behind the shrinking shell.
         sourceRevealTimeoutRef.current = setTimeout(() => {
             setProfileEditSourceHidden(false);
             sourceRevealTimeoutRef.current = null;
-        }, 170);
+        }, DISMISS_DURATION - 90);
+
+        // Symmetric spring — matches the entry's organic feel, but gently
+        // overshoot-clamped so the close doesn't bounce in the source pill.
+        morphProgress.value = withSpring(0, {
+            damping: 32,
+            stiffness: 160,
+            mass: 1,
+            overshootClamping: true,
+        }, (finished) => {
+            'worklet';
+            if (finished) runOnJS(finishDismiss)(action);
+        });
+
+        // Safety net in case the worklet callback doesn't fire (e.g. the
+        // screen unmounts mid-spring).
         dismissFinishTimeoutRef.current = setTimeout(() => {
-            finishDismiss(action);
+            if (isClosingRef.current) finishDismiss(action);
             dismissFinishTimeoutRef.current = null;
-        }, 300);
-    }, [clearMorphTimers, finishDismiss, hasHeroMorph, morphProgress]);
+        }, DISMISS_DURATION + 60);
+    }, [
+        avatarRevealOpacity,
+        backdropOpacity,
+        chromeOpacity,
+        clearMorphTimers,
+        contentOpacity,
+        finishDismiss,
+        hasHeroMorph,
+        morphProgress,
+        morphShellOpacity,
+    ]);
 
     useEffect(() => {
         const unsubscribe = navigation.addListener('beforeRemove', (event: any) => {
@@ -681,17 +763,22 @@ export default function ProfileEditScreen() {
                 style={{ flex: 1 }}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             >
-                {isContentReady ? (
+                {/* Always render the ScrollView from the very first frame —
+                    the destination avatar then sits in place under the
+                    morphing shell, so the hand-off has no first-paint gap.
+                    Visibility is driven by `contentOpacity` instead. */}
                 <Animated.ScrollView
                     style={[styles.scrollView, contentAnimatedStyle]}
                     contentContainerStyle={styles.scrollContent}
                     showsVerticalScrollIndicator={false}
                 >
-                    {/* Profile Photo Section */}
-                    <Animated.View
-                        renderToHardwareTextureAndroid
-                        shouldRasterizeIOS
-                        style={[styles.avatarSection, chromeAnimatedStyle]}
+                    {/* Profile Photo Section — kept at its final layout
+                        position from the very first frame so the destination
+                        Image lines up with the morphing shell pixel-for-pixel.
+                        The Image + glass border fade in via avatarRevealAnimatedStyle;
+                        the surrounding section doesn't translate or fade with chrome. */}
+                    <View
+                        style={styles.avatarSection}
                         collapsable={false}
                     >
                         <View style={styles.avatarContainer}>
@@ -700,20 +787,28 @@ export default function ProfileEditScreen() {
                                 style={styles.avatarPressable}
                                 collapsable={false}
                             >
-                                {avatar ? (
-                                    <AnimatedImage
-                                        sharedTransitionTag={enableSharedMorph ? 'profile-image' : undefined}
-                                        sharedTransitionStyle={enableSharedMorph ? profileMorphTransition : undefined}
-                                        style={[styles.avatarImage, avatarRevealAnimatedStyle]}
-                                        source={{ uri: proxySupabaseUrl(avatar) }}
-                                        contentFit="cover"
-                                        transition={0}
-                                    />
-                                ) : (
-                                    <View style={[StyleSheet.absoluteFill, { backgroundColor: '#262626', justifyContent: 'center', alignItems: 'center' }]}>
-                                        <MaterialIcons name="person" size={100} color="rgba(255,255,255,0.2)" />
-                                    </View>
-                                )}
+                                <Animated.View
+                                    collapsable={false}
+                                    style={styles.avatarPressable}
+                                    {...(enableSharedMorph ? {
+                                        sharedTransitionTag: profileAvatarTransitionTag,
+                                        sharedTransition: PROFILE_AVATAR_SHARED_TRANSITION,
+                                    } : {})}
+                                >
+                                    {avatar ? (
+                                        <Image
+                                            key={avatar}
+                                            style={[styles.avatarImage, avatarRevealAnimatedStyle]}
+                                            source={{ uri: proxySupabaseUrl(avatar) }}
+                                            contentFit="cover"
+                                            transition={0}
+                                        />
+                                    ) : (
+                                        <View style={[StyleSheet.absoluteFill, { backgroundColor: '#262626', justifyContent: 'center', alignItems: 'center' }]}>
+                                            <MaterialIcons name="person" size={100} color="rgba(255,255,255,0.2)" />
+                                        </View>
+                                    )}
+                                </Animated.View>
                                 {isUploadingAvatar && (
                                     <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' }]}>
                                         <SoulLoader size={100} />
@@ -722,11 +817,14 @@ export default function ProfileEditScreen() {
                             </Pressable>
                             <Animated.View style={[styles.avatarGlassBorder, avatarRevealAnimatedStyle]} pointerEvents="none" />
                         </View>
-                    </Animated.View>
+                    </View>
 
                     {/* Settings Rows */}
-                    <Animated.View style={[styles.section, contentAnimatedStyle]}>
-                        <Text style={styles.sectionLabel}>About</Text>
+                    <Animated.View 
+                        entering={FadeInDown.springify().damping(22).stiffness(160).delay(350)}
+                    >
+                        <Animated.View style={[styles.section, contentAnimatedStyle]}>
+                            <Text style={styles.sectionLabel}>About</Text>
                         <View style={styles.settingsGroup}>
                             {isEditing === 'bio' ? (
                                 <View style={styles.editRow}>
@@ -757,10 +855,14 @@ export default function ProfileEditScreen() {
                                 />
                             )}
                         </View>
+                        </Animated.View>
                     </Animated.View>
 
-                    <Animated.View style={[styles.section, contentAnimatedStyle]}>
-                        <Text style={styles.sectionLabel}>Soul ID</Text>
+                    <Animated.View 
+                        entering={FadeInDown.springify().damping(22).stiffness(160).delay(420)}
+                    >
+                        <Animated.View style={[styles.section, contentAnimatedStyle]}>
+                            <Text style={styles.sectionLabel}>Soul ID</Text>
                         <View style={styles.settingsGroup}>
                             {isEditing === 'username' ? (
                                 <View style={styles.editRow}>
@@ -806,10 +908,14 @@ export default function ProfileEditScreen() {
                                 />
                             )}
                         </View>
+                        </Animated.View>
                     </Animated.View>
 
-                    <Animated.View style={[styles.section, contentAnimatedStyle]}>
-                        <Text style={styles.sectionLabel}>Name</Text>
+                    <Animated.View 
+                        entering={FadeInDown.springify().damping(22).stiffness(160).delay(490)}
+                    >
+                        <Animated.View style={[styles.section, contentAnimatedStyle]}>
+                            <Text style={styles.sectionLabel}>Name</Text>
                         <View style={styles.settingsGroup}>
                             {isEditing === 'name' ? (
                                 <View style={styles.editRow}>
@@ -839,10 +945,14 @@ export default function ProfileEditScreen() {
                                 />
                             )}
                         </View>
+                        </Animated.View>
                     </Animated.View>
 
-                    <Animated.View style={[styles.section, contentAnimatedStyle]}>
-                        <Text style={styles.sectionLabel}>Birthdate</Text>
+                    <Animated.View 
+                        entering={FadeInDown.springify().damping(22).stiffness(160).delay(560)}
+                    >
+                        <Animated.View style={[styles.section, contentAnimatedStyle]}>
+                            <Text style={styles.sectionLabel}>Birthdate</Text>
                         <View style={styles.settingsGroup}>
                             <SettingRow
                                 label=""
@@ -860,18 +970,23 @@ export default function ProfileEditScreen() {
                                 }}
                             />
                         </View>
+                        </Animated.View>
                     </Animated.View>
 
-                    <Animated.View style={[styles.section, contentAnimatedStyle]}>
-                        <Text style={styles.sectionLabel}>Country</Text>
-                        <View style={styles.settingsGroup}>
-                            <SettingRow
-                                label=""
-                                value={country ? `${country.flag} ${country.name}` : 'Not set'}
-                                icon="public"
-                                onPress={() => setCountryModal(true)}
-                            />
-                        </View>
+                    <Animated.View 
+                        entering={FadeInDown.springify().damping(22).stiffness(160).delay(630)}
+                    >
+                        <Animated.View style={[styles.section, contentAnimatedStyle]}>
+                            <Text style={styles.sectionLabel}>Country</Text>
+                            <View style={styles.settingsGroup}>
+                                <SettingRow
+                                    label=""
+                                    value={country ? `${country.flag} ${country.name}` : 'Not set'}
+                                    icon="public"
+                                    onPress={() => setCountryModal(true)}
+                                />
+                            </View>
+                        </Animated.View>
                     </Animated.View>
 
                     {/* Smart Birthday Picker Modal */}
@@ -922,9 +1037,6 @@ export default function ProfileEditScreen() {
                         </View>
                     </Modal>
                 </Animated.ScrollView>
-                ) : (
-                <Animated.View style={[styles.scrollView, styles.shellPlaceholder]} />
-                )}
             </KeyboardAvoidingView>
 
             {hasHeroMorph && avatar ? (
@@ -932,7 +1044,7 @@ export default function ProfileEditScreen() {
                     pointerEvents="none"
                     renderToHardwareTextureAndroid
                     shouldRasterizeIOS
-                    style={[styles.heroMorphShell, heroMorphAnimatedStyle]}
+                    style={[styles.heroMorphShell, heroMorphAnimatedStyle, morphShellHandoffStyle]}
                 >
                     <Animated.View style={[styles.heroMorphImageWrapper, heroMorphImageAnimatedStyle]}>
                         <Image
