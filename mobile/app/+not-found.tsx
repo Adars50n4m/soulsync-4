@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { View, Text, Pressable, StyleSheet, StatusBar } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, usePathname, useSegments, useGlobalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 
@@ -12,13 +12,32 @@ import { useApp } from '../context/AppContext';
 // fallback instead of a black screen full of error text.
 export default function NotFoundScreen() {
     const router = useRouter();
-    const { activeTheme } = useApp();
+    const pathname = usePathname();
+    const segments = useSegments();
+    const params = useGlobalSearchParams();
+    const { activeTheme, currentUser, isReady } = useApp();
+
+    // Log diagnostic info so we can see *why* we landed here. The logs make
+    // it obvious whether the navigation came from a stale push, a route
+    // mismatch, or an upstream crash that fell back to +not-found.
+    useEffect(() => {
+        console.warn('[+not-found] Rendered. Diagnostic:', {
+            pathname,
+            segments,
+            params,
+            currentUserId: currentUser?.id || null,
+            isReady,
+        });
+    }, [pathname, segments, params, currentUser?.id, isReady]);
 
     const goHome = () => {
-        if (router.canGoBack()) {
-            router.back();
-        } else {
+        // If we landed here because of a transient race during boot, the
+        // user is already authenticated — send them straight back to the
+        // home tab. Otherwise, let the root index.tsx redirect run again.
+        if (currentUser) {
             router.replace('/(tabs)' as any);
+        } else {
+            router.replace('/login' as any);
         }
     };
 
