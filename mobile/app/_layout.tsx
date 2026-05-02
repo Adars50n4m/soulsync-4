@@ -252,6 +252,10 @@ function RootContent() {
     <View style={{ flex: 1, backgroundColor: '#000' }}>
       <Stack screenOptions={{ headerShown: false, gestureEnabled: false, contentStyle: { backgroundColor: '#000' } }}>
         <Stack.Screen name="index" options={{ headerShown: false }} />
+        {/* Custom +not-found route — bypasses expo-router's built-in
+            Unmatched component, which crashes on `Linking.createURL('/')`
+            when the expo-constants manifest isn't readable at runtime. */}
+        <Stack.Screen name="+not-found" options={{ headerShown: false, animation: 'fade' }} />
         <Stack.Screen name="login" options={{ headerShown: false, animation: 'fade' }} />
         <Stack.Screen name="otp" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="username-setup" options={{ headerShown: false, animation: 'slide_from_right' }} />
