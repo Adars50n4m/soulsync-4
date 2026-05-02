@@ -161,6 +161,7 @@ export default function ProfileScreen() {
     const scrollY = useSharedValue(0);
     const heroMorphProgress = useSharedValue(hasAvatarMorph ? 0 : 1);
     const headerOpacity = useSharedValue(hasAvatarMorph || useSharedAvatarTransition ? 0 : 1);
+    const bgOpacity = useSharedValue(1); // Stays opaque during dismiss — screen pop handles reveal
     const isClosingRef = useRef(false);
     const allowNativePopRef = useRef(false);
 
@@ -201,6 +202,7 @@ export default function ProfileScreen() {
                 width,
                 height: 540,
                 borderRadius: 0,
+                right: 'auto',
             };
         }
 
@@ -213,6 +215,7 @@ export default function ProfileScreen() {
             borderRadius: useSharedAvatarTransition 
                 ? 0 
                 : interpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.width / 2, 0], Extrapolation.CLAMP),
+            right: 'auto', // Fixes width stretching when left is animated
         };
     });
 
@@ -251,9 +254,16 @@ export default function ProfileScreen() {
 
     const pageBackgroundStyle = useAnimatedStyle(() => {
         'worklet';
+        // Background stays fully opaque during dismiss — screen pop reveals home screen
         return {
-            // Delay the background "fog-in" until the avatar has expanded significantly
-            opacity: interpolate(heroMorphProgress.value, [0, 0.4, 1], [0, 1, 1], Extrapolation.CLAMP),
+            opacity: bgOpacity.value,
+        };
+    });
+
+    const heroBottomFadeAnimatedStyle = useAnimatedStyle(() => {
+        'worklet';
+        return {
+            opacity: headerOpacity.value,
         };
     });
 
@@ -438,6 +448,7 @@ export default function ProfileScreen() {
     }, [id, profileUser]);
 
     useEffect(() => {
+        bgOpacity.value = 1;
         if (useSharedAvatarTransition) {
             heroMorphProgress.value = 1;
             headerOpacity.value = withTiming(1, {
@@ -454,17 +465,25 @@ export default function ProfileScreen() {
         }
 
         heroMorphProgress.value = withSpring(1, {
-            damping: 26,
+            damping: 22,
             stiffness: 180,
-            mass: 1.1,
+            mass: 0.8,
+            overshootClamping: true,
+            restDisplacementThreshold: 0.01,
+            restSpeedThreshold: 0.01,
         });
-        headerOpacity.value = withTiming(1, {
+        headerOpacity.value = withDelay(180, withTiming(1, {
             duration: 250,
             easing: Easing.out(Easing.cubic),
-        });
+        }));
     }, [hasAvatarMorph, headerOpacity, heroMorphProgress, useSharedAvatarTransition]);
 
+    const dismissedRef = useRef(false);
+
     const finishDismiss = useCallback((action?: any) => {
+        if (dismissedRef.current) return; // Already dismissed, prevent double-fire
+        dismissedRef.current = true;
+        profileAvatarTransitionState.clear();
         allowNativePopRef.current = true;
         if (action) {
             navigation.dispatch(action);
@@ -491,6 +510,7 @@ export default function ProfileScreen() {
         }
 
         if (!hasAvatarMorph) {
+            bgOpacity.value = withTiming(0, { duration: 200 });
             headerOpacity.value = withTiming(0, { duration: 200 });
             setTimeout(() => finishDismiss(action), 200);
             return;
@@ -498,12 +518,40 @@ export default function ProfileScreen() {
 
         hapticService.selection();
 
-        headerOpacity.value = withTiming(0, { duration: 250 });
-        heroMorphProgress.value = withTiming(0, {
-            duration: PROFILE_AVATAR_MORPH_DURATION,
-            easing: PROFILE_AVATAR_MORPH_EASING,
+        const DISMISS_DURATION = 320;
+        // Symmetric ease-in-out so the close mirrors the open's spring feel
+        // without the bounciness springs can introduce on the way back.
+        const dismissEasing = Easing.bezier(0.4, 0, 0.2, 1);
+
+        // Chrome leaves first but smoothly — no abrupt drop.
+        headerOpacity.value = withTiming(0, {
+            duration: 180,
+            easing: Easing.out(Easing.cubic),
         });
-        setTimeout(() => finishDismiss(action), PROFILE_AVATAR_MORPH_DURATION);
+
+        // Page bg fades over the SAME duration as the morph, so the home
+        // screen is revealed exactly as the avatar settles into its origin.
+        // Previously bg dropped in 100ms while morph took 240ms → list items
+        // popped in mid-morph. Now they emerge in lockstep for a seamless feel.
+        bgOpacity.value = withTiming(0, {
+            duration: DISMISS_DURATION,
+            easing: dismissEasing,
+        });
+
+        heroMorphProgress.value = withTiming(0, {
+            duration: DISMISS_DURATION,
+            easing: dismissEasing,
+        }, (finished) => {
+            'worklet';
+            if (finished) {
+                runOnJS(finishDismiss)(action);
+            }
+        });
+
+        // Safety: pop screen even if callback doesn't fire
+        setTimeout(() => {
+            if (isClosingRef.current) finishDismiss(action);
+        }, DISMISS_DURATION + 40);
     }, [finishDismiss, hasAvatarMorph, headerOpacity, heroMorphProgress, id, useSharedAvatarTransition]);
 
     useEffect(() => {
@@ -644,19 +692,28 @@ export default function ProfileScreen() {
                     </Animated.View>
 
                     {/* Avatar→background blend: short fade at the top of this
-                        zone, then solid opaque black for the rest. No transparency
-                        at the bottom, no glass — just clean solid black. */}
-                    <LinearGradient
-                        colors={[
-                            'transparent',
-                            'rgba(0,0,0,0.5)',
-                            '#000',
-                            '#000',
-                        ]}
-                        locations={[0, 0.35, 0.6, 1]}
+                        zone, then solid opaque black for the rest. Wrapped in
+                        Animated.View so headerOpacity actually drives the fade —
+                        LinearGradient itself is not a Reanimated component, so
+                        applying the animated style directly was a no-op and the
+                        black rectangle stayed opaque during dismiss, hiding the
+                        home screen rows underneath. */}
+                    <Animated.View
                         pointerEvents="none"
-                        style={styles.heroBottomFade}
-                    />
+                        style={[styles.heroBottomFade, heroBottomFadeAnimatedStyle]}
+                    >
+                        <LinearGradient
+                            colors={[
+                                'transparent',
+                                'rgba(0,0,0,0.5)',
+                                '#000',
+                                '#000',
+                            ]}
+                            locations={[0, 0.35, 0.6, 1]}
+                            pointerEvents="none"
+                            style={StyleSheet.absoluteFill}
+                        />
+                    </Animated.View>
                 </View>
 
                 {/* Header - Transparent & Minimal */}
@@ -1319,12 +1376,6 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.05)',
         gap: 20,
-    },
-    listItemGlass: {
-        borderRadius: 20,
-        overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.08)',
     },
     infoRow: {
         flexDirection: 'row',

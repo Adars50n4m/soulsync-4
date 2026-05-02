@@ -50,6 +50,8 @@ import * as Haptics from 'expo-haptics'; // Keeping for type styles if needed, b
 import { proxySupabaseUrl } from '../../config/api';
 import { chatTransitionState } from '../../services/chatTransitionState';
 import SwipeableRow from '../../components/ui/SwipeableRow';
+import { profileAvatarTransitionState } from '../../services/profileAvatarTransitionState';
+import { resolveAvatarImageUri, warmAvatarSource } from '../../utils/avatarSource';
 
 import { useApp } from '../../context/AppContext';
 import { supabase } from '../../config/supabase';
@@ -57,6 +59,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePresence } from '../../context/PresenceContext';
 import { useScrollMotion } from '../../components/navigation/ScrollMotionProvider';
 import { normalizeId, getSuperuserName, LEGACY_TO_UUID, UUID_TO_LEGACY } from '../../utils/idNormalization';
+import {
+  getProfileAvatarTransitionTag,
+  PROFILE_AVATAR_SHARED_TRANSITION,
+  SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION,
+} from '../../constants/sharedTransitions';
 
 import LottieView from 'lottie-react-native';
 import { SoulAvatar } from '../../components/SoulAvatar';
@@ -69,6 +76,7 @@ import { NoteCreatorModal } from '../../components/NoteCreatorModal';
 import ChatListContextMenu from '../../components/chat/ChatListContextMenu';
 const DEFAULT_AVATAR = '';
 const HOME_MORPH_DURATION = 500;
+const ENABLE_PROFILE_AVATAR_SHARED_TRANSITION = SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION;
 
 const statusTransition = SharedTransition.custom((values) => {
   'worklet';
@@ -145,10 +153,12 @@ interface ChatListItemProps {
   isMuted: boolean;
   isClone?: boolean;
   isSelected?: boolean;
-  onAvatarPress?: (contact: Contact) => void;
+  onAvatarPress?: (contact: Contact, layout: { x: number, y: number, width: number, height: number }) => void;
+  isScreenFocused: boolean;
+  profileAvatarTransition: ReturnType<typeof profileAvatarTransitionState.getState>;
 }
 
-const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, isTyping, getPresence, connectivity, homeMorphProgress, selectedPillId, unreadCount, isPinned, isMuted, isClone, isSelected, onAvatarPress }: ChatListItemProps) => {
+const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, isTyping, getPresence, connectivity, homeMorphProgress, selectedPillId, unreadCount, isPinned, isMuted, isClone, isSelected, onAvatarPress, isScreenFocused, profileAvatarTransition }: ChatListItemProps) => {
   const { activeTheme } = useApp();
   // Helper to resolve colors
   const withAlpha = (color: string, alpha: number): string => {
@@ -166,6 +176,27 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
   const scaleAnim = useSharedValue(1);
   const opacityAnim = useSharedValue(1);
   const itemRef = useRef<View>(null);
+  const avatarShellRef = useRef<View>(null);
+  const normalizedProfileId = useMemo(() => normalizeId(item.id), [item.id]);
+  const profileAvatarTransitionTag = useMemo(
+    () => (normalizedProfileId ? getProfileAvatarTransitionTag(normalizedProfileId) : undefined),
+    [normalizedProfileId]
+  );
+  const profilePreviewAvatarSource = useMemo(() => resolveAvatarImageUri({
+    uri: item.avatar,
+    localUri: item.localAvatarUri,
+    avatarType: (item.avatarType as any) || 'default',
+    teddyVariant: (item.teddyVariant as any),
+    fallbackId: item.id || 'default',
+  }), [item.avatar, item.avatarType, item.id, item.localAvatarUri, item.teddyVariant]);
+  const shouldHideAvatarSource = !!normalizedProfileId
+    && profileAvatarTransition.phase === 'presented'
+    && normalizeId(profileAvatarTransition.profileId || '') === normalizedProfileId;
+
+  useEffect(() => {
+    if (!profilePreviewAvatarSource) return;
+    void warmAvatarSource(profilePreviewAvatarSource);
+  }, [profilePreviewAvatarSource]);
 
   const animatedStyle = useAnimatedStyle(() => {
     'worklet';
@@ -239,7 +270,11 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
         <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
             {/* Avatar Pill - Separate circular glass surface with Story Logic */}
-            <View style={[
+            <View 
+              collapsable={false}
+              ref={avatarShellRef}
+              style={[
+              shouldHideAvatarSource && { opacity: 0 },
               item.stories && item.stories.length > 0 && item.stories.some((s) => !s.seen) && {
                 shadowColor: activeTheme.primary,
                 shadowOffset: { width: 0, height: 0 },
@@ -250,11 +285,30 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
               }
             ]}>
               <Pressable
-                onPress={() => {
-                  if (item.stories && item.stories.length > 0 && onAvatarPress) {
-                    onAvatarPress(item);
-                  } else {
-                    handlePress();
+                onPressIn={(event) => {
+                  event.stopPropagation?.();
+                }}
+                onPressOut={(event) => {
+                  event.stopPropagation?.();
+                }}
+                onPress={(event) => {
+                  event.stopPropagation?.();
+                  if (onAvatarPress) {
+                    const node = avatarShellRef.current;
+                    if (node && typeof (node as any).measureInWindow === 'function') {
+                      (node as any).measureInWindow((pageX: number, pageY: number, w: number, h: number) => {
+                        onAvatarPress(item, { x: pageX, y: pageY, width: w, height: h });
+                      });
+                    } else if (node && typeof (node as any).measure === 'function') {
+                      (node as any).measure((_x: number, _y: number, w: number, h: number, pageX: number, pageY: number) => {
+                        onAvatarPress(item, { x: pageX, y: pageY, width: w, height: h });
+                      });
+                    } else {
+                      // Use the press layout if measurement fails, never hardcoded 20/400
+                      itemRef.current?.measure((_x, _y, w, h, pageX, pageY) => {
+                        onAvatarPress(item, { x: pageX || 20, y: pageY || 400, width: w || 56, height: h || 56 });
+                      });
+                    }
                   }
                 }}
               >
@@ -281,7 +335,9 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
                       avatarType={item.avatarType}
                       teddyVariant={item.teddyVariant}
                       isOnline={getPresence(item.id).isOnline}
-                      // Removing border from SoulAvatar so it doesn't double up with GlassPillSurface border
+                      sharedTransitionTag={ENABLE_PROFILE_AVATAR_SHARED_TRANSITION ? profileAvatarTransitionTag : undefined}
+                      sharedTransition={ENABLE_PROFILE_AVATAR_SHARED_TRANSITION ? PROFILE_AVATAR_SHARED_TRANSITION : undefined}
+                      allowExperimentalSharedTransition={ENABLE_PROFILE_AVATAR_SHARED_TRANSITION}
                     />
                   </View>
                 </GlassPillSurface>
@@ -349,6 +405,9 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
     prevProps.isPinned === nextProps.isPinned &&
     prevProps.isMuted === nextProps.isMuted &&
     prevProps.isSelected === nextProps.isSelected &&
+    prevProps.isScreenFocused === nextProps.isScreenFocused &&
+    prevProps.profileAvatarTransition.phase === nextProps.profileAvatarTransition.phase &&
+    prevProps.profileAvatarTransition.profileId === nextProps.profileAvatarTransition.profileId &&
     prevProps.onSelect === nextProps.onSelect &&
     prevProps.getPresence(prevProps.item.id).isOnline === nextProps.getPresence(nextProps.item.id).isOnline
   );
@@ -765,10 +824,16 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
       if (chatTransitionState.getPhase() === 'returning') {
         return;
       }
-      
+
+      // Only run the chat-morph reset if we actually went TO a chat screen.
+      // Coming back from profile/other screens, items are already managed by
+      // their own transition (profileAvatarTransitionState) — touching morph
+      // here causes a second animation that fights with the first.
+      const cameFromChat = chatTransitionState.getPhase() === 'entering';
+
       chatTransitionState.setPhase('idle');
-      homeMorphProgress.value = 1;
       selectedPillId.value = ''; // Clear selection on return
+
       if (!hasFocusedOnce.current) {
         hasFocusedOnce.current = true;
         homeMorphProgress.value = 0;
@@ -776,6 +841,15 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
         statusRailOffset.value = 0;
         return;
       }
+
+      if (!cameFromChat) {
+        // Profile dismiss / non-chat return — items should be unconditionally
+        // visible. Snap morph to 0 in case any prior animation left it mid-flight.
+        homeMorphProgress.value = 0;
+        return;
+      }
+
+      homeMorphProgress.value = 1;
       homeMorphProgress.value = withTiming(0, {
         duration: HOME_MORPH_DURATION,
         easing: Easing.bezier(0.5, 0, 0.1, 1),
@@ -795,13 +869,20 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
     return unsubscribe;
   }, [homeMorphProgress, navigation, statusRailOpacity, statusRailOffset]);
 
-  // Safety & Ready Trigger: Ensure visibility if focus listener fails or when app becomes ready
+  // Safety & Ready Trigger: Ensure visibility if focus listener fails or when app becomes ready.
+  // Skip the morph reset whenever the profile transition is driving things — its
+  // dismiss subscription animates morphProgress 1→0 over 320ms in lockstep with
+  // the profile screen, and we don't want a 600ms reset overriding that.
   useEffect(() => {
     if (isReady && isFocused) {
         if (statusRailOpacity.value === 0) {
             statusRailOpacity.value = withTiming(1, { duration: 600 });
         }
-        if (homeMorphProgress.value === 1 && !chatTransitionState.getPhase().includes('returning')) {
+        const profilePhase = profileAvatarTransitionState.getState().phase;
+        const profileDriving = profilePhase === 'presented' || profilePhase === 'dismissing';
+        if (!profileDriving
+            && homeMorphProgress.value === 1
+            && !chatTransitionState.getPhase().includes('returning')) {
              homeMorphProgress.value = withTiming(0, {
                duration: 600,
                easing: Easing.bezier(0.5, 0, 0.1, 1)
@@ -841,6 +922,26 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
 
     return unsubscribe;
   }, [homeMorphProgress, statusRailOpacity, statusRailOffset]);
+
+  const [profileAvatarTransition, setProfileAvatarTransition] = useState(() =>
+    profileAvatarTransitionState.getState()
+  );
+
+  useEffect(() => {
+    const unsubscribe = profileAvatarTransitionState.subscribe((state) => {
+      setProfileAvatarTransition(state);
+      // Profile is a full-screen SheetScreen overlay. We do NOT drive any
+      // morph animation on the home list here — the overlay already covers
+      // the home, so animating items in/out behind it just causes desyncs
+      // on dismiss (rows stuck invisible because morphProgress > 0.7).
+      // Instead, force the morph to 0 on every transition so the home list
+      // is unconditionally visible whenever the profile pops back.
+      if (state.phase === 'dismissing' || state.phase === 'idle') {
+        homeMorphProgress.value = 0;
+      }
+    });
+    return unsubscribe;
+  }, [homeMorphProgress]);
 
 
 
@@ -943,6 +1044,56 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
       },
     });
   };
+
+  const handleProfilePress = useCallback(async (contact: Contact, layout: { x: number, y: number, width: number, height: number }) => {
+    const isGroup = contact.isGroup === true;
+    const targetPathname = (isGroup ? '/group-info/[id]' : '/profile/[id]') as any;
+    const fallbackPath = (isGroup ? `/group-info/${contact.id}` : `/profile/${contact.id}`) as any;
+    const normalizedId = normalizeId(contact.id);
+    const profileAvatarTransitionTag = normalizedId ? getProfileAvatarTransitionTag(normalizedId) : undefined;
+
+    try {
+      // Resolve the avatar source URI (same logic as chat screen)
+      const avatarSourceUri = resolveAvatarImageUri({
+        uri: contact.avatar,
+        localUri: contact.localAvatarUri,
+        avatarType: (contact.avatarType as any) || 'default',
+        teddyVariant: (contact as any)?.teddyVariant,
+        fallbackId: contact.id || 'default',
+      });
+
+      // Signal the transition state (coordinates the morph lifecycle)
+      if (normalizedId) {
+        profileAvatarTransitionState.show(normalizedId);
+      }
+
+      // Keep warming opportunistically, but don't block the morph on this network/cache path.
+      if (!isGroup && avatarSourceUri) {
+        void warmAvatarSource(avatarSourceUri);
+      }
+
+      router.push({
+        pathname: targetPathname,
+        params: !isGroup && ENABLE_PROFILE_AVATAR_SHARED_TRANSITION && profileAvatarTransitionTag
+          ? {
+              id: contact.id,
+              avatarTransition: '1',
+              avatarSource: avatarSourceUri || undefined,
+            }
+          : {
+              id: contact.id,
+              avatarX: Math.round(layout.x).toString(),
+              avatarY: Math.round(layout.y).toString(),
+              avatarW: Math.round(layout.width).toString(),
+              avatarH: Math.round(layout.height).toString(),
+              avatarSource: !isGroup ? (avatarSourceUri || undefined) : undefined,
+            },
+      });
+    } catch (err) {
+      console.error('[HomeScreen] Profile morph failed:', err);
+      router.push(fallbackPath);
+    }
+  }, [router]);
 
   const handleMyStatusPress = (latestStatus?: any) => {
     if (!currentUser) return;
@@ -1431,11 +1582,13 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
             onSelect={handleUserSelect}
             homeMorphProgress={homeMorphProgress}
             selectedPillId={selectedPillId}
-            onAvatarPress={handleStatusPress}
+            onAvatarPress={handleProfilePress}
+            isScreenFocused={isFocused}
+            profileAvatarTransition={profileAvatarTransition}
         />
       </SwipeableRow>
     );
-  }, [lastMessagesMap, typingUsers, getPresence, connectivity, handleUserSelect, homeMorphProgress, archiveContact, clearChatMessages, unfriendContact, pinnedChatIds, mutedChatIds, selectedChatIds]);
+  }, [lastMessagesMap, typingUsers, getPresence, connectivity, handleUserSelect, homeMorphProgress, archiveContact, clearChatMessages, unfriendContact, pinnedChatIds, mutedChatIds, selectedChatIds, handleProfilePress, isFocused, profileAvatarTransition]);
 
   const keyExtractor = useCallback((item: Contact) => item.id, []);
 
@@ -1729,7 +1882,9 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
                         connectivity={connectivity}
                         homeMorphProgress={homeMorphProgress}
                         selectedPillId={selectedPillId}
-                        onAvatarPress={handleStatusPress}
+                        onAvatarPress={handleProfilePress}
+                        isScreenFocused={isFocused}
+                        profileAvatarTransition={profileAvatarTransition}
                         isClone
                     />
                 </View>
