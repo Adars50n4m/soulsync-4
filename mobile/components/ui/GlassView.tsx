@@ -1,4 +1,4 @@
-import React, { Component, useEffect, useState } from 'react';
+import React, { Component, forwardRef, useEffect, useState } from 'react';
 import {
     View,
     Pressable,
@@ -108,7 +108,12 @@ const withAlpha = (color: string, alpha: number) => {
     return color;
 };
 
-export const GlassView = ({
+// `forwardRef` so the legacy `Animated.createAnimatedComponent(GlassView)`
+// path (used in app/(tabs)/index.tsx) can attach a ref to the underlying
+// View. Without it, react-native's Animated API crashes with
+// "Looks like you're passing a function component … which supports only
+// class components. Please wrap your function component with React.forwardRef()".
+export const GlassView = forwardRef<View, GlassViewProps>(({
     intensity = 45,
     tint = 'dark',
     style,
@@ -118,7 +123,7 @@ export const GlassView = ({
     glowIntensity = 0.32,
     pressed = false,
     ...rest
-}: GlassViewProps) => {
+}, ref) => {
     const androidBg = ANDROID_SOLID_BG[tint] || ANDROID_SOLID_BG.dark;
     const fallbackBg = FALLBACK_BG[tint] || FALLBACK_BG.dark;
 
@@ -151,7 +156,7 @@ export const GlassView = ({
     const transparent = withAlpha(glowColor, 0);
 
     return (
-        <View style={[styles.container, style]} {...rest}>
+        <View ref={ref} style={[styles.container, style]} {...rest}>
             {/* iOS: native blur — works perfectly */}
             {!IS_ANDROID && !blurDisabled && (
                 <BlurGuard fallback={fallbackBg}>
@@ -198,7 +203,9 @@ export const GlassView = ({
             {children}
         </View>
     );
-};
+});
+
+GlassView.displayName = 'GlassView';
 
 
 const styles = StyleSheet.create({
