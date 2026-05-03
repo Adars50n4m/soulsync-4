@@ -21,10 +21,11 @@ import {
     getProfileAvatarTransitionTag,
     SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION,
     PROFILE_AVATAR_SHARED_TRANSITION,
+    SOUL_LIQUID_SPRING,
 } from '../../constants/sharedTransitions';
 import Animated, {
     useSharedValue, useAnimatedStyle, withTiming, withDelay, withSpring, interpolate, runOnJS, Easing,
-    useAnimatedScrollHandler, Extrapolation
+    useAnimatedScrollHandler, Extrapolation, FadeInDown
 } from 'react-native-reanimated';
 import { SheetScreen } from 'react-native-sheet-transitions';
 import { useRouter } from 'expo-router';
@@ -195,27 +196,35 @@ export default function ProfileScreen() {
 
     const heroEntryAnimatedStyle = useAnimatedStyle(() => {
         'worklet';
+        const targetW = width;
+        const targetH = 540;
+        
         if (!hasAvatarMorph) {
             return {
-                left: 0,
-                top: 0,
-                width,
-                height: 540,
+                width: targetW,
+                height: targetH,
                 borderRadius: 0,
-                right: 'auto',
+                transform: [{ translateX: 0 }, { translateY: 0 }],
             };
         }
 
+        const p = heroMorphProgress.value;
+        const sourceW = avatarOrigin.width;
+        const sourceH = avatarOrigin.height;
+        
+        // Calculate the translation required to move from source to target
+        const translateX = interpolate(p, [0, 1], [avatarOrigin.x, 0], Extrapolation.CLAMP);
+        const translateY = interpolate(p, [0, 1], [avatarOrigin.y, 0], Extrapolation.CLAMP);
+
+        // LIQUID RESHAPE: Interpolate width/height/radius in lockstep
         return {
-            left: interpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.x, 0], Extrapolation.CLAMP),
-            top: interpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.y, 0], Extrapolation.CLAMP),
-            width: interpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.width, width], Extrapolation.CLAMP),
-            height: interpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.height, 540], Extrapolation.CLAMP),
-            // Only manually interpolate radius if we are NOT using the native shared transition
-            borderRadius: useSharedAvatarTransition 
-                ? 0 
-                : interpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.width / 2, 0], Extrapolation.CLAMP),
-            right: 'auto', // Fixes width stretching when left is animated
+            width: interpolate(p, [0, 1], [sourceW, targetW], Extrapolation.CLAMP),
+            height: interpolate(p, [0, 1], [sourceH, targetH], Extrapolation.CLAMP),
+            borderRadius: interpolate(p, [0, 0.8, 1], [sourceW / 2, 20, 0], Extrapolation.CLAMP),
+            transform: [
+                { translateX },
+                { translateY }
+            ] as any,
         };
     });
 
@@ -465,12 +474,10 @@ export default function ProfileScreen() {
         }
 
         heroMorphProgress.value = withSpring(1, {
-            damping: 22,
+            damping: 28,
             stiffness: 180,
-            mass: 0.8,
+            mass: 0.9,
             overshootClamping: true,
-            restDisplacementThreshold: 0.01,
-            restSpeedThreshold: 0.01,
         });
         headerOpacity.value = withDelay(180, withTiming(1, {
             duration: 250,
@@ -538,6 +545,12 @@ export default function ProfileScreen() {
             easing: dismissEasing,
         });
 
+        // Was: withSpring with damping 32 / stiffness 160 (over-damped — crawls
+        // asymptotically and never reaches Reanimated's rest threshold within
+        // DISMISS_DURATION, so the safety timeout fired mid-morph and the screen
+        // popped while the avatar was still 5–10% from its origin → visible
+        // stutter, then a snap to the chat header. Switched to withTiming so the
+        // morph lands exactly at 0 in DISMISS_DURATION and pops cleanly.
         heroMorphProgress.value = withTiming(0, {
             duration: DISMISS_DURATION,
             easing: dismissEasing,
@@ -548,10 +561,10 @@ export default function ProfileScreen() {
             }
         });
 
-        // Safety: pop screen even if callback doesn't fire
+        // Safety net only — withTiming's callback should fire first.
         setTimeout(() => {
             if (isClosingRef.current) finishDismiss(action);
-        }, DISMISS_DURATION + 40);
+        }, DISMISS_DURATION + 80);
     }, [finishDismiss, hasAvatarMorph, headerOpacity, heroMorphProgress, id, useSharedAvatarTransition]);
 
     useEffect(() => {
@@ -670,10 +683,6 @@ export default function ProfileScreen() {
                     <Animated.View
                         collapsable={false}
                         style={[styles.heroMediaShell, headerAnimatedStyle, heroEntryAnimatedStyle]}
-                        {...(useSharedAvatarTransition && profileAvatarTransitionTag ? {
-                            sharedTransitionTag: profileAvatarTransitionTag,
-                            sharedTransition: PROFILE_AVATAR_SHARED_TRANSITION,
-                        } : {})}
                     >
                         {heroAvatarUri ? (
                             <Image
@@ -803,11 +812,14 @@ export default function ProfileScreen() {
 
                     {/* Shared Media Section */}
                     <Animated.View
-                        style={[
-                            styles.mediaSection,
-                            mediaSectionAnimatedStyle
-                        ]}
+                        entering={FadeInDown.springify().damping(22).stiffness(160).delay(350)}
                     >
+                        <Animated.View
+                            style={[
+                                styles.mediaSection,
+                                mediaSectionAnimatedStyle
+                            ]}
+                        >
                         {/* Message Search */}
                         <Pressable
                             onPress={() => setIsSearching(prev => !prev)}
@@ -963,19 +975,25 @@ export default function ProfileScreen() {
                                 <Text style={styles.emptyText}>No {activeCategory} found</Text>
                             </View>
                         )}
+                        </Animated.View>
                     </Animated.View>
 
-                    {/* Connection Info */}
-                    <GlassView intensity={30} tint="dark" style={styles.infoCard} >
-                        <View style={styles.infoRow}>
-                            <MaterialIcons name="access-time" size={18} color="rgba(255,255,255,0.4)" />
-                            <Text style={styles.infoText}>Connected since the beginning</Text>
-                        </View>
-                        <View style={styles.infoRow}>
-                            <MaterialIcons name="favorite" size={18} color={activeTheme.primary} />
-                            <Text style={styles.infoText}>Synced forever</Text>
-                        </View>
-                    </GlassView>
+                    <Animated.View 
+                        entering={FadeInDown.springify().damping(22).stiffness(160).delay(450)}
+                    >
+                        <Animated.View style={styles.infoCardWrapper}>
+                            <GlassView intensity={30} tint="dark" style={styles.infoCard} >
+                                <View style={styles.infoRow}>
+                                    <MaterialIcons name="access-time" size={18} color="rgba(255,255,255,0.4)" />
+                                    <Text style={styles.infoText}>Connected since the beginning</Text>
+                                </View>
+                                <View style={styles.infoRow}>
+                                    <MaterialIcons name="favorite" size={18} color={activeTheme.primary} />
+                                    <Text style={styles.infoText}>Synced forever</Text>
+                                </View>
+                            </GlassView>
+                        </Animated.View>
+                    </Animated.View>
                 </Animated.ScrollView>
 
                 {/* Liquid Glass Media Viewer Modal with Seamless Morph Transition */}
@@ -1105,7 +1123,7 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     scrollContent: {
-        paddingBottom: 140,
+        paddingBottom: 80,
     },
     heroBackgroundContainer: {
         position: 'absolute',
@@ -1366,9 +1384,11 @@ const styles = StyleSheet.create({
         color: 'rgba(255,255,255,0.2)',
         fontSize: 14,
     },
+    infoCardWrapper: {
+        marginTop: 32,
+    },
     infoCard: {
         marginHorizontal: 20,
-        marginTop: 32,
         borderRadius: 30,
         overflow: 'hidden',
         padding: 24,

@@ -137,6 +137,14 @@ interface AppContextType {
     leaveGroupMusicRoom: (groupId?: string) => Promise<void>;
     requestMusicSync: () => void;
     musicSyncScope: any;
+    setIsSeeking: (seeking: boolean) => void;
+    isSeeking: boolean;
+    playbackOwnerChatId: string | null;
+    setPlaybackOwnerChatId: (chatId: string | null) => void;
+    lyrics: any[];
+    currentLyricIndex: number;
+    showLyrics: boolean;
+    setShowLyrics: (v: boolean) => void;
 }
 
 export const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -323,6 +331,14 @@ const AppProviderInternal: React.FC<{ children: React.ReactNode }> = ({ children
         leaveGroupMusicRoom: music.leaveGroupMusicRoom,
         requestMusicSync: music.requestMusicSync,
         musicSyncScope: music.musicSyncScope,
+        setIsSeeking: music.setIsSeeking,
+        isSeeking: music.isSeeking,
+        playbackOwnerChatId: music.playbackOwnerChatId,
+        setPlaybackOwnerChatId: music.setPlaybackOwnerChatId,
+        lyrics: music.lyrics,
+        currentLyricIndex: music.currentLyricIndex,
+        showLyrics: music.showLyrics,
+        setShowLyrics: music.setShowLyrics,
 
         // Settings
         theme,
@@ -461,6 +477,12 @@ export const useAppContext = (): AppContextType => {
             leaveGroupMusicRoom: async () => {},
             requestMusicSync: () => {},
             musicSyncScope: { type: 'none' },
+            playbackOwnerChatId: null,
+            setPlaybackOwnerChatId: () => {},
+            lyrics: [],
+            currentLyricIndex: 0,
+            showLyrics: false,
+            setShowLyrics: () => {},
             offlineService: null,
         } as any;
     }

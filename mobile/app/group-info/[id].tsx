@@ -46,6 +46,12 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { BlurView } from 'expo-blur';
 import { SheetScreen } from 'react-native-sheet-transitions';
+import { 
+  getProfileAvatarTransitionTag, 
+  SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION,
+  PROFILE_AVATAR_SHARED_TRANSITION 
+} from '../../constants/sharedTransitions';
+import { normalizeId } from '../../utils/idNormalization';
 
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -63,6 +69,13 @@ export default function GroupInfoScreen() {
     }>();
     const id = params.id;
     const transitionTargetId = useMemo(() => String(Array.isArray(id) ? id[0] : id || ''), [id]);
+    const groupAvatarTransitionTag = useMemo(() => {
+        const tid = normalizeId(transitionTargetId);
+        return tid ? getProfileAvatarTransitionTag(tid) : undefined;
+    }, [transitionTargetId]);
+
+    const useSharedAvatarTransition = SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION && !!groupAvatarTransitionTag;
+
     const router = useRouter();
     const navigation = useNavigation();
     const { contacts, currentUser, activeTheme, offlineService, refreshLocalCache } = useApp();
@@ -180,26 +193,7 @@ export default function GroupInfoScreen() {
             RNExtrapolation.CLAMP
         );
 
-        if (!hasAvatarMorph) {
-            return {
-                transform: [
-                    { translateY: scrollParallax },
-                    { scale: scrollScale }
-                ] as any,
-                left: 0,
-                top: 0,
-                width: SCREEN_WIDTH,
-                height: SCREEN_HEIGHT * 0.45,
-                borderRadius: 0,
-            };
-        }
-
         return {
-            left: rnInterpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.x, 0], RNExtrapolation.CLAMP),
-            top: rnInterpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.y, 0], RNExtrapolation.CLAMP),
-            width: rnInterpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.width, SCREEN_WIDTH], RNExtrapolation.CLAMP),
-            height: rnInterpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.height, SCREEN_HEIGHT * 0.45], RNExtrapolation.CLAMP),
-            borderRadius: rnInterpolate(heroMorphProgress.value, [0, 1], [avatarOrigin.width / 2, 0], RNExtrapolation.CLAMP),
             transform: [
                 { translateY: scrollParallax * heroProgress },
                 { scale: 1 + ((scrollScale - 1) * heroProgress) }
@@ -207,11 +201,44 @@ export default function GroupInfoScreen() {
         };
     });
 
+    const heroEntryAnimatedStyle = useRNAnimatedStyle(() => {
+        'worklet';
+        const targetW = SCREEN_WIDTH;
+        const targetH = SCREEN_HEIGHT * 0.45;
+
+        if (!hasAvatarMorph) {
+            return {
+                width: targetW,
+                height: targetH,
+                borderRadius: 0,
+                transform: [{ translateX: 0 }, { translateY: 0 }],
+                opacity: 1,
+            };
+        }
+
+        const p = heroMorphProgress.value;
+        const sourceW = avatarOrigin.width;
+        const sourceH = avatarOrigin.height;
+
+        return {
+            width: rnInterpolate(p, [0, 1], [sourceW, targetW], RNExtrapolation.CLAMP),
+            height: rnInterpolate(p, [0, 1], [sourceH, targetH], RNExtrapolation.CLAMP),
+            borderRadius: rnInterpolate(p, [0, 1], [sourceW / 2, 0], RNExtrapolation.CLAMP),
+            opacity: rnInterpolate(p, [0, 0.4, 1], [0, 1, 1], RNExtrapolation.CLAMP),
+            transform: [
+                {
+                    translateX: rnInterpolate(p, [0, 1], [avatarOrigin.x, 0], RNExtrapolation.CLAMP),
+                },
+                {
+                    translateY: rnInterpolate(p, [0, 1], [avatarOrigin.y, 0], RNExtrapolation.CLAMP),
+                }
+            ] as any,
+        };
+    });
 
     const pageBackgroundStyle = useRNAnimatedStyle(() => {
         'worklet';
         return {
-            // Delay the background "fog-in" until the avatar has expanded significantly
             opacity: rnInterpolate(heroMorphProgress.value, [0, 0.4, 1], [0, 1, 1], RNExtrapolation.CLAMP),
         };
     });

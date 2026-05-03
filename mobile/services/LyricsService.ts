@@ -24,16 +24,33 @@ export interface LyricsResult {
  */
 function parseLRC(lrc: string): LyricLine[] {
   const lines: LyricLine[] = [];
-  const regex = /\[(\d{2}):(\d{2})\.(\d{2,3})\]\s*(.*)/g;
-  let match;
+  const tsRegex = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/g;
 
-  while ((match = regex.exec(lrc)) !== null) {
-    const minutes = parseInt(match[1], 10);
-    const seconds = parseInt(match[2], 10);
-    const ms = parseInt(match[3].padEnd(3, '0'), 10);
-    const time = minutes * 60 + seconds + ms / 1000;
-    const text = match[4].trim();
-    if (text) lines.push({ time, text });
+  // Process line-by-line. A single line can have multiple leading timestamps
+  // (LRC repeats), e.g. "[00:30.00][01:53.40] text" — we emit one entry per
+  // timestamp and strip ALL bracketed timestamps + LRC metadata tags from the
+  // text so they never leak into the displayed lyric.
+  for (const rawLine of lrc.split(/\r?\n/)) {
+    const timestamps: number[] = [];
+    let m: RegExpExecArray | null;
+    tsRegex.lastIndex = 0;
+    while ((m = tsRegex.exec(rawLine)) !== null) {
+      const minutes = parseInt(m[1], 10);
+      const seconds = parseInt(m[2], 10);
+      const ms = parseInt(m[3].padEnd(3, '0'), 10);
+      timestamps.push(minutes * 60 + seconds + ms / 1000);
+    }
+    if (timestamps.length === 0) continue;
+
+    // Strip every bracketed tag (timestamps + metadata like [ar:], [ti:], [by:])
+    // and any inline word-level timestamps (<00:00.00>).
+    const text = rawLine
+      .replace(/\[[^\]]*\]/g, '')
+      .replace(/<\d{2}:\d{2}\.\d{2,3}>/g, '')
+      .trim();
+    if (!text) continue;
+
+    for (const time of timestamps) lines.push({ time, text });
   }
 
   return lines.sort((a, b) => a.time - b.time);

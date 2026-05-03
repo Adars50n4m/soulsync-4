@@ -6,6 +6,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { getInfoAsync } from 'expo-file-system';
 import { proxySupabaseUrl } from '../config/api';
 import { statusService } from '../services/StatusService';
+import { storageService } from '../services/StorageService';
 
 interface StatusThumbnailProps {
   statusId: string;
@@ -105,6 +106,25 @@ export const StatusThumbnail: React.FC<StatusThumbnailProps> = ({
   const [loading, setLoading] = useState(!cachedUri);
   const [sourceAttempt, setSourceAttempt] = useState(0);
 
+  const isDirectRenderableUri = (value?: string | null): value is string => {
+    if (!value) return false;
+    const normalized = storageService.normalizePseudoLocalUri(value);
+    return (
+      normalized.startsWith('http://')
+      || normalized.startsWith('https://')
+      || normalized.startsWith('file://')
+      || normalized.startsWith('content://')
+      || normalized.startsWith('ph://')
+    );
+  };
+
+  const toCandidate = (value?: string | null): string | null => {
+    if (!value) return null;
+    const normalized = storageService.normalizePseudoLocalUri(value);
+    if (isDirectRenderableUri(normalized)) return normalized;
+    return proxySupabaseUrl(value);
+  };
+
   useEffect(() => {
     let isMounted = true;
 
@@ -145,15 +165,28 @@ export const StatusThumbnail: React.FC<StatusThumbnailProps> = ({
         }
 
         if (uriHint) {
-          if (uriHint.startsWith('http://') || uriHint.startsWith('https://') || uriHint.startsWith('content://')) {
-            persist(uriHint);
+          const normalizedHint = storageService.normalizePseudoLocalUri(uriHint);
+          if (
+            normalizedHint.startsWith('http://')
+            || normalizedHint.startsWith('https://')
+            || normalizedHint.startsWith('content://')
+          ) {
+            persist(normalizedHint);
             return;
           }
 
-          if (uriHint.startsWith('file://')) {
-            const info = await getInfoAsync(uriHint);
+          if (normalizedHint.startsWith('file://')) {
+            const info = await getInfoAsync(normalizedHint);
             if (info.exists) {
-              persist(uriHint);
+              persist(normalizedHint);
+              return;
+            }
+          }
+
+          if (normalizedHint.startsWith('ph://')) {
+            const resolvedHint = await storageService.resolveUri(normalizedHint).catch(() => normalizedHint);
+            if (resolvedHint && isDirectRenderableUri(resolvedHint)) {
+              persist(resolvedHint);
               return;
             }
           }
@@ -209,9 +242,9 @@ export const StatusThumbnail: React.FC<StatusThumbnailProps> = ({
 
   const fallbackCandidates = [
     uri,
-    mediaKey ? proxySupabaseUrl(mediaKey) : null,
-    mediaKey || null,
-    uriHint || null,
+    toCandidate(mediaKey),
+    isDirectRenderableUri(mediaKey) ? mediaKey : null,
+    isDirectRenderableUri(uriHint) ? uriHint : null,
   ].filter((value, index, arr): value is string => !!value && arr.indexOf(value) === index);
 
   const exhausted = sourceAttempt >= fallbackCandidates.length;

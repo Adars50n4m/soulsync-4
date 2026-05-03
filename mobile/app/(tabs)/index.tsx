@@ -10,9 +10,7 @@ import {
   Alert,
   FlatList,
   Platform,
-  ScrollView,
 } from 'react-native';
-import BottomSheet, { BottomSheetFlatList } from '@gorhom/bottom-sheet';
 import { Svg, Circle } from 'react-native-svg';
 // FlashList available but FlatList used for stability
 // import { FlashList } from '@shopify/flash-list';
@@ -31,14 +29,18 @@ import Animated, {
   useAnimatedStyle,
   withSpring,
   withTiming,
+  withDelay,
   Easing,
   interpolate,
   Extrapolation,
   useDerivedValue,
   SharedTransition,
+  interpolateColor,
+  useAnimatedProps,
 } from 'react-native-reanimated';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
+import * as ImageManipulator from 'expo-image-manipulator';
 import {
     cacheDirectory,
     documentDirectory,
@@ -51,6 +53,7 @@ import { proxySupabaseUrl } from '../../config/api';
 import { chatTransitionState } from '../../services/chatTransitionState';
 import SwipeableRow from '../../components/ui/SwipeableRow';
 import { profileAvatarTransitionState } from '../../services/profileAvatarTransitionState';
+import { myStatusTransitionState } from '../../services/myStatusTransitionState';
 import { resolveAvatarImageUri, warmAvatarSource } from '../../utils/avatarSource';
 
 import { useApp } from '../../context/AppContext';
@@ -63,6 +66,7 @@ import {
   getProfileAvatarTransitionTag,
   PROFILE_AVATAR_SHARED_TRANSITION,
   SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION,
+  SOUL_LIQUID_TRANSITION,
 } from '../../constants/sharedTransitions';
 
 import LottieView from 'lottie-react-native';
@@ -78,15 +82,7 @@ const DEFAULT_AVATAR = '';
 const HOME_MORPH_DURATION = 500;
 const ENABLE_PROFILE_AVATAR_SHARED_TRANSITION = SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION;
 
-const statusTransition = SharedTransition.custom((values) => {
-  'worklet';
-  return {
-    height: withSpring(values.targetHeight, { damping: 20, stiffness: 120 }),
-    width: withSpring(values.targetWidth, { damping: 20, stiffness: 120 }),
-    originX: withSpring(values.targetOriginX, { damping: 20, stiffness: 120 }),
-    originY: withSpring(values.targetOriginY, { damping: 20, stiffness: 120 }),
-  };
-});
+const statusTransition = SOUL_LIQUID_TRANSITION;
 
 const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promise<string> => {
   let resolvedUri = asset.uri;
@@ -100,9 +96,27 @@ const resolveStatusAssetUri = async (asset: ImagePicker.ImagePickerAsset): Promi
     }
   }
 
+  // iOS captures photos as HEIC by default, but our R2 worker only accepts
+  // jpg/png/webp/mp4/mov. Transcode HEIC → JPEG before caching so the upload
+  // round-trip succeeds and the worker doesn't reject it as "Invalid file type".
+  const rawExt = (asset.fileName?.split('.').pop() || resolvedUri.split('.').pop() || '').toLowerCase();
+  const isImage = asset.type !== 'video';
+  const isHeic = isImage && (rawExt === 'heic' || rawExt === 'heif');
+  if (isHeic) {
+    try {
+      const result = await ImageManipulator.manipulateAsync(resolvedUri, [], {
+        format: ImageManipulator.SaveFormat.JPEG,
+        compress: 0.92,
+      });
+      resolvedUri = result.uri;
+    } catch (err) {
+      console.warn('[resolveStatusAssetUri] HEIC → JPEG conversion failed, falling back to original:', err);
+    }
+  }
+
   // Persist picked media into app cache so viewer/home preview can read reliably.
   if (resolvedUri.startsWith('file://')) {
-    const ext = asset.fileName?.split('.').pop() || (asset.type === 'video' ? 'mp4' : 'jpg');
+    const ext = isHeic ? 'jpg' : (asset.fileName?.split('.').pop() || (asset.type === 'video' ? 'mp4' : 'jpg'));
     const cacheDir = cacheDirectory || documentDirectory;
     if (!cacheDir) return resolvedUri;
     const target = `${cacheDir}status-${Date.now()}.${ext}`;
@@ -136,6 +150,8 @@ const formatTime = (ts: string) => {
   }
 };
 // Remove global hasRenderedHomeOnce flag
+
+const AnimatedGlassView = Animated.createAnimatedComponent(GlassView);
 
 interface ChatListItemProps {
   item: Contact;
@@ -193,6 +209,28 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
     && profileAvatarTransition.phase === 'presented'
     && normalizeId(profileAvatarTransition.profileId || '') === normalizedProfileId;
 
+  // Avatar shell (story-glow shadow + GlassPillSurface ring border) needs to
+  // re-appear in lockstep with the profile dismiss morph (320ms). A static
+  // 0→1 flip on `phase !== 'presented'` was making the ring "pop in" after
+  // the morphing hero landed, because it was hidden behind the SheetScreen
+  // bg until the very last frame. Driving it as a delayed fade synchronizes
+  // the ring's reveal with the back-half of the morph, when the shrinking
+  // hero stops covering the pill.
+  const avatarShellOpacity = useSharedValue(shouldHideAvatarSource ? 0 : 1);
+  useEffect(() => {
+    if (shouldHideAvatarSource) {
+      avatarShellOpacity.value = 0; // Instant on present so the entry morph is clean
+      return;
+    }
+    avatarShellOpacity.value = withDelay(
+      120,
+      withTiming(1, { duration: 200, easing: Easing.out(Easing.cubic) })
+    );
+  }, [shouldHideAvatarSource, avatarShellOpacity]);
+  const avatarShellAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: avatarShellOpacity.value,
+  }));
+
   useEffect(() => {
     if (!profilePreviewAvatarSource) return;
     void warmAvatarSource(profilePreviewAvatarSource);
@@ -207,11 +245,11 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
     if (Platform.OS === 'android') {
       return {
         transform: [{ scale: scaleAnim.value }],
-        opacity: isItemSelected ? 1 : opacityAnim.value * interpolate(homeMorphProgress.value, [0, 0.4], [1, 0], Extrapolation.CLAMP),
+        opacity: isItemSelected ? 1 : opacityAnim.value * interpolate(homeMorphProgress.value, [0, 0.9], [1, 0], Extrapolation.CLAMP),
       };
     }
 
-    const translateShift = isItemSelected ? 0 : interpolate(homeMorphProgress.value, [0, 1], [0, 35 + (index % 5) * 20], Extrapolation.IDENTITY);
+    const translateShift = isItemSelected ? 0 : interpolate(homeMorphProgress.value, [0, 1], [0, 20 + (index % 5) * 15], Extrapolation.IDENTITY);
     const scaleShift = isItemSelected ? 1 : interpolate(homeMorphProgress.value, [0, 1], [1, 0.92], Extrapolation.IDENTITY);
 
     return {
@@ -220,7 +258,7 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
         { translateY: translateShift } as any,
         { scale: scaleShift } as any
       ],
-      opacity: isClone ? 1 : opacityAnim.value * interpolate(homeMorphProgress.value, [0, 0.7], [1, 0], Extrapolation.CLAMP),
+      opacity: isClone ? 1 : opacityAnim.value * interpolate(homeMorphProgress.value, [0, 0.9], [1, 0], Extrapolation.CLAMP),
     };
   });
 
@@ -263,18 +301,18 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
         style={styles.chatPillContainer}
       >
         {isSelected && (
-          <View style={{ position: 'absolute', top: 8, right: 12, zIndex: 5, backgroundColor: '#ff4444', borderRadius: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center' }}>
+          <View style={{ position: 'absolute', top: 16, right: 16, zIndex: 5, backgroundColor: '#ff4444', borderRadius: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center' }}>
             <MaterialIcons name="check" size={16} color="#fff" />
           </View>
         )}
         <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
             {/* Avatar Pill - Separate circular glass surface with Story Logic */}
-            <View 
+            <Animated.View
               collapsable={false}
               ref={avatarShellRef}
               style={[
-              shouldHideAvatarSource && { opacity: 0 },
+              avatarShellAnimatedStyle,
               item.stories && item.stories.length > 0 && item.stories.some((s) => !s.seen) && {
                 shadowColor: activeTheme.primary,
                 shadowOffset: { width: 0, height: 0 },
@@ -342,7 +380,7 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
                   </View>
                 </GlassPillSurface>
               </Pressable>
-            </View>
+            </Animated.View>
 
             {/* Message Content Pill - Separate elongated glass surface */}
             <GlassPillSurface
@@ -415,6 +453,94 @@ const ChatListItem = React.memo(({ item, index, lastMsg, onSelect, onLongPress, 
 
 ChatListItem.displayName = 'ChatListItem';
 
+// Telegram-style card morph: rectangular card → circular avatar on scroll.
+const StatusCardWrapper = React.memo(({
+  children,
+  index,
+  item,
+  avatarOverlay,
+  railCollapseProgress,
+  homeMorphProgress,
+  selectedPillId,
+  statusTransition,
+}: {
+  children: React.ReactNode;
+  index: number;
+  item: any;
+  avatarOverlay?: React.ReactNode;
+  railCollapseProgress: Animated.SharedValue<number>;
+  homeMorphProgress: Animated.SharedValue<number>;
+  selectedPillId: Animated.SharedValue<string>;
+  statusTransition: any;
+}) => {
+  const cardStyle = useAnimatedStyle(() => {
+    'worklet';
+    const p = railCollapseProgress.value;
+    const w = interpolate(p, [0, 1], [115, 56], Extrapolation.CLAMP);
+    const h = interpolate(p, [0, 1], [175, 56], Extrapolation.CLAMP);
+    const borderRadius = 28;
+    const translateX = interpolate(p, [0, 1], [0, -index * 18], Extrapolation.CLAMP);
+    return {
+      width: w,
+      height: h,
+      borderRadius,
+      transform: [{ translateX }] as any,
+      opacity: selectedPillId.value === item.id
+        ? 1
+        : interpolate(homeMorphProgress.value, [0, 0.9], [1, 0], Extrapolation.CLAMP),
+    };
+  });
+
+  const chromeStyle = useAnimatedStyle(() => {
+    'worklet';
+    const p = railCollapseProgress.value;
+    const morphP = homeMorphProgress.value;
+    const isSelected = selectedPillId.value === item.id;
+    
+    return {
+      opacity: interpolate(p, [0, 0.55], [1, 0], Extrapolation.CLAMP) * 
+               (isSelected ? 1 : interpolate(morphP, [0, 0.9], [1, 0], Extrapolation.CLAMP)),
+    };
+  });
+
+  const overlayStyle = useAnimatedStyle(() => {
+    'worklet';
+    const p = railCollapseProgress.value;
+    return {
+      opacity: interpolate(p, [0.45, 1], [0, 1], Extrapolation.CLAMP),
+      transform: [
+        { scale: interpolate(p, [0.45, 1], [0.6, 1], Extrapolation.CLAMP) },
+      ] as any,
+    };
+  });
+
+  const statusSharedTransitionProps = item.id === 'my-status'
+    ? {}
+    : ({
+        sharedTransitionTag: `status-hero-${item.id}`,
+        sharedTransition: statusTransition,
+      } as any);
+
+  return (
+    <Animated.View 
+      style={[styles.statusCard, cardStyle as any]}
+      {...statusSharedTransitionProps}
+    >
+      <Animated.View style={[StyleSheet.absoluteFill, chromeStyle]}>
+        {children}
+      </Animated.View>
+      {avatarOverlay ? (
+        <Animated.View 
+          style={[StyleSheet.absoluteFill, styles.statusAvatarOverlay, overlayStyle as any]}
+          pointerEvents="none"
+        >
+          {avatarOverlay}
+        </Animated.View>
+      ) : null}
+    </Animated.View>
+  );
+});
+
 const AnimatedMoreMenu = ({ router, isSearching }: { router: any, isSearching: boolean }) => {
   const [expanded, setExpanded] = useState(false);
   const progress = useSharedValue(0);
@@ -433,7 +559,9 @@ const AnimatedMoreMenu = ({ router, isSearching }: { router: any, isSearching: b
       width: interpolate(progress.value, [0, 1], [40, 200]),
       height: interpolate(progress.value, [0, 1], [40, 270]),
       borderRadius: interpolate(progress.value, [0, 1], [20, 16]),
-      backgroundColor: expanded ? 'rgba(0,0,0,0.6)' : 'transparent',
+      backgroundColor: interpolateColor(progress.value, [0, 1], ['rgba(255,255,255,0.08)', 'rgba(0,0,0,0.6)']),
+      borderWidth: 1,
+      borderColor: interpolateColor(progress.value, [0, 1], ['rgba(255,255,255,0.1)', 'rgba(255,255,255,0.2)']),
     };
   });
 
@@ -456,6 +584,12 @@ const AnimatedMoreMenu = ({ router, isSearching }: { router: any, isSearching: b
     };
   });
 
+  const animatedGlassProps = useAnimatedProps(() => {
+    return {
+      intensity: 30 + (progress.value * 20),
+    };
+  });
+
   // Backdrop uses a simple fullscreen overlay instead of measuring Dimensions every render
   return (
     <View style={[{ zIndex: expanded ? 1000 : 1, width: 40, height: 40 }]}>
@@ -466,10 +600,14 @@ const AnimatedMoreMenu = ({ router, isSearching }: { router: any, isSearching: b
          />
       )}
       <Animated.View style={[
-        { position: 'absolute', top: 0, right: 0, overflow: 'hidden', zIndex: 10, borderWidth: expanded ? 1 : 0, borderColor: expanded ? 'rgba(255,255,255,0.1)' : 'transparent' },
+        { position: 'absolute', top: 0, right: 0, overflow: 'hidden', zIndex: 10 },
         containerStyle
       ]}>
-        <GlassView intensity={expanded ? 50 : 0} tint="dark" style={{ flex: 1, backgroundColor: 'transparent' }}>
+        <AnimatedGlassView 
+          animatedProps={animatedGlassProps} 
+          tint="dark" 
+          style={{ flex: 1, backgroundColor: 'transparent' }}
+        >
           {/* Menu Items */}
           <Animated.View style={[StyleSheet.absoluteFill, menuStyle, { paddingVertical: 0, justifyContent: 'flex-start' }]} pointerEvents={expanded ? 'auto' : 'none'}>
              {/* Cancel/Cut Option - Takes the exact position of the original 3-dots */}
@@ -540,7 +678,7 @@ const AnimatedMoreMenu = ({ router, isSearching }: { router: any, isSearching: b
               <MaterialIcons name="more-vert" size={24} color="#fff" />
             </Animated.View>
           </Pressable>
-        </GlassView>
+        </AnimatedGlassView>
       </Animated.View>
     </View>
   );
@@ -751,6 +889,7 @@ export default function HomeScreen() {
   const statusRailOpacity = useSharedValue(0); // Start at 0, fade in when ready/focused
   const statusRailOffset = useSharedValue(0);
   const homeMorphProgress = useSharedValue(0);
+  const myStatusSourceOpacity = useSharedValue(1);
   const selectedPillId = useSharedValue('');
   const scrollPosition = useSharedValue(0);
   const statusRefs = useRef<Record<string, any>>({});
@@ -790,10 +929,16 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
       { translateY: baseTranslateY },
       { scale: interpolate(homeMorphProgress.value, [0, 1], [1, 0.92], Extrapolation.IDENTITY) },
     ] as any,
-    opacity: interpolate(homeMorphProgress.value, [0, 0.6], [1, 1], Extrapolation.CLAMP),
+    opacity: 1, // Keep home content opaque so the morphing hero stays visible
   };
 });
 
+const homeChromeFadeStyle = useAnimatedStyle(() => {
+  'worklet';
+  return {
+    opacity: interpolate(homeMorphProgress.value, [0, 0.9], [1, 0], Extrapolation.CLAMP),
+  };
+});
 
 
   const homeBackdropAnimatedStyle = useAnimatedStyle(() => {
@@ -930,20 +1075,49 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
   useEffect(() => {
     const unsubscribe = profileAvatarTransitionState.subscribe((state) => {
       setProfileAvatarTransition(state);
-      // Profile is a full-screen SheetScreen overlay. We do NOT drive any
-      // morph animation on the home list here — the overlay already covers
-      // the home, so animating items in/out behind it just causes desyncs
-      // on dismiss (rows stuck invisible because morphProgress > 0.7).
-      // Instead, force the morph to 0 on every transition so the home list
-      // is unconditionally visible whenever the profile pops back.
-      if (state.phase === 'dismissing' || state.phase === 'idle') {
-        homeMorphProgress.value = 0;
+      // Unlike the chat-card morph, profile-avatar morph should not dim or
+      // translate the whole home screen. We only coordinate source-avatar
+      // hiding and clear any stale selection once the transition is done.
+      if (state.phase === 'idle') {
+        selectedPillId.value = '';
+        if (chatTransitionState.getPhase() === 'idle') {
+          homeMorphProgress.value = 0;
+        }
       }
     });
     return unsubscribe;
-  }, [homeMorphProgress]);
+  }, [homeMorphProgress, selectedPillId]);
 
+  // Track the my-status hero morph state so the source pill can hide while
+  // the my-status sheet is presented (so the morphing card is the only
+  // visible representation on screen — same pattern as profileAvatarTransition).
+  const [myStatusTransition, setMyStatusTransition] = useState(() =>
+    myStatusTransitionState.getState()
+  );
+  useEffect(() => {
+    const unsubscribe = myStatusTransitionState.subscribe((state) => {
+      setMyStatusTransition(state);
 
+      // Keep the home screen visually stable during the my-status transition.
+      // The source pill itself hides/reappears, but the whole home feed should
+      // not fade/scale out, otherwise dismiss shows a black/empty frame.
+      homeMorphProgress.value = 0;
+      if (state.phase === 'presented') {
+        myStatusSourceOpacity.value = 0; // Instant hide on present
+      } else if (state.phase === 'dismissing' || state.phase === 'idle') {
+        if (state.phase === 'idle') {
+          selectedPillId.value = '';
+        }
+        // Reappear immediately on dismiss so the shrinking card has a live
+        // target to land into, avoiding the black-delay frame.
+        myStatusSourceOpacity.value = withTiming(1, { duration: 120 });
+      }
+    });
+    return unsubscribe;
+  }, [homeMorphProgress, myStatusSourceOpacity]);
+  const myStatusSourceAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: myStatusSourceOpacity.value,
+  }));
 
   const contactStatusGroupsMap = useMemo(() => {
     const map = new Map<string, any>();
@@ -1046,9 +1220,15 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
   };
 
   const handleProfilePress = useCallback(async (contact: Contact, layout: { x: number, y: number, width: number, height: number }) => {
+    if (!contact?.id) {
+      return;
+    }
     const isGroup = contact.isGroup === true;
     const targetPathname = (isGroup ? '/group-info/[id]' : '/profile/[id]') as any;
-    const fallbackPath = (isGroup ? `/group-info/${contact.id}` : `/profile/${contact.id}`) as any;
+    const fallbackRoute = {
+      pathname: targetPathname,
+      params: { id: String(contact.id) },
+    } as any;
     const normalizedId = normalizeId(contact.id);
     const profileAvatarTransitionTag = normalizedId ? getProfileAvatarTransitionTag(normalizedId) : undefined;
 
@@ -1064,6 +1244,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
 
       // Signal the transition state (coordinates the morph lifecycle)
       if (normalizedId) {
+        selectedPillId.value = contact.id; // Exempt this card from list fade-out
         profileAvatarTransitionState.show(normalizedId);
       }
 
@@ -1074,7 +1255,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
 
       router.push({
         pathname: targetPathname,
-        params: !isGroup && ENABLE_PROFILE_AVATAR_SHARED_TRANSITION && profileAvatarTransitionTag
+        params: ENABLE_PROFILE_AVATAR_SHARED_TRANSITION && profileAvatarTransitionTag
           ? {
               id: contact.id,
               avatarTransition: '1',
@@ -1091,29 +1272,53 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
       });
     } catch (err) {
       console.error('[HomeScreen] Profile morph failed:', err);
-      router.push(fallbackPath);
+      router.push(fallbackRoute);
     }
-  }, [router]);
+  }, [router, selectedPillId]);
 
   const handleMyStatusPress = (latestStatus?: any) => {
     if (!currentUser) return;
-    
+
     // Auto-retry failures
     if (pendingStatusUploads.some(upload => upload.uploadStatus === 'failed')) {
       void retryPendingStatusUploads();
     }
 
     if (myStatuses.length > 0 || pendingStatusUploads.length > 0) {
-      router.push({
-        pathname: '/my-status',
-        params: {
-          sharedTag: 'status-hero-card',
-          statusId: latestStatus?.id || '',
-          mediaKey: latestStatus?.mediaKey || '',
-          uriHint: latestStatus?.mediaLocalPath || latestStatus?.mediaUrl || '',
-          mediaType: latestStatus?.mediaType || '',
-        },
-      });
+      const navigateWithLayout = (layout: { x: number; y: number; width: number; height: number }) => {
+        selectedPillId.value = 'my-status'; // Exempt this card from list fade-out
+        myStatusTransitionState.show();
+        router.push({
+          pathname: '/my-status',
+          params: {
+            sharedTag: 'status-hero-card',
+            statusId: latestStatus?.id || '',
+            mediaKey: latestStatus?.mediaKey || '',
+            uriHint: latestStatus?.mediaLocalPath || latestStatus?.mediaUrl || '',
+            mediaType: latestStatus?.mediaType || '',
+            cardX: Math.round(layout.x).toString(),
+            cardY: Math.round(layout.y).toString(),
+            cardW: Math.round(layout.width).toString(),
+            cardH: Math.round(layout.height).toString(),
+          },
+        });
+      };
+
+      const node = statusRefs.current['my-status'];
+      if (node && typeof (node as any).measureInWindow === 'function') {
+        (node as any).measureInWindow((x: number, y: number, w: number, h: number) => {
+          navigateWithLayout({ x, y, width: w, height: h });
+        });
+      } else if (node && typeof (node as any).measure === 'function') {
+        (node as any).measure((_x: number, _y: number, w: number, h: number, pageX: number, pageY: number) => {
+          navigateWithLayout({ x: pageX, y: pageY, width: w, height: h });
+        });
+      } else {
+        // Sensible fallback if measurement is unavailable; matches the
+        // home rail's actual position on most phones (paddingHorizontal: 20,
+        // status card width 115 / height 175).
+        navigateWithLayout({ x: 20, y: 200, width: 115, height: 175 });
+      }
     } else {
       setIsMediaPickerVisible(true);
     }
@@ -1234,78 +1439,6 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
   // Telegram-style card morph: rectangular card → circular avatar on scroll.
   // Card shrinks from 115×175 to 56×56 with circular borderRadius, the
   // original chrome fades out, and an avatar overlay fades in centered.
-  const StatusCardWrapper = useCallback(({
-    children,
-    index,
-    item,
-    avatarOverlay,
-  }: {
-    children: React.ReactNode;
-    index: number;
-    item: any;
-    avatarOverlay?: React.ReactNode;
-  }) => {
-    const cardStyle = useAnimatedStyle(() => {
-      'worklet';
-      const p = railCollapseProgress.value;
-      const w = interpolate(p, [0, 1], [115, 56], Extrapolation.CLAMP);
-      const h = interpolate(p, [0, 1], [175, 56], Extrapolation.CLAMP);
-      // borderRadius 28 stays a perfect circle once width = 56 (28 = 56/2).
-      const borderRadius = 28;
-      // Width animation already reflows the FlatList tightly; nudge each
-      // subsequent card a few px left so circles overlap slightly.
-      const translateX = interpolate(p, [0, 1], [0, -index * 18], Extrapolation.CLAMP);
-      return {
-        width: w,
-        height: h,
-        borderRadius,
-        transform: [{ translateX }] as any,
-      };
-    });
-
-    const chromeStyle = useAnimatedStyle(() => {
-      'worklet';
-      const p = railCollapseProgress.value;
-      return {
-        opacity: interpolate(p, [0, 0.55], [1, 0], Extrapolation.CLAMP),
-      };
-    });
-
-    const overlayStyle = useAnimatedStyle(() => {
-      'worklet';
-      const p = railCollapseProgress.value;
-      return {
-        opacity: interpolate(p, [0.45, 1], [0, 1], Extrapolation.CLAMP),
-        transform: [
-          { scale: interpolate(p, [0.45, 1], [0.6, 1], Extrapolation.CLAMP) },
-        ] as any,
-      };
-    });
-
-    return (
-      <Animated.View 
-        style={[styles.statusCard, cardStyle as any]}
-        sharedTransitionTag={item.id === 'my-status' ? 'status-hero-card' : `status-hero-${item.id}`}
-        sharedTransitionStyle={statusTransition}
-      >
-        <Animated.View style={[StyleSheet.absoluteFill, chromeStyle]}>
-          {children}
-        </Animated.View>
-        {avatarOverlay ? (
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              StyleSheet.absoluteFillObject,
-              { alignItems: 'center', justifyContent: 'center' },
-              overlayStyle,
-            ]}
-          >
-            {avatarOverlay}
-          </Animated.View>
-        ) : null}
-      </Animated.View>
-    );
-  }, [railCollapseProgress]);
 
   const renderStatusItem = useCallback(({ item, index }: { item: any; index: number }) => {
     if (item.id === 'my-status') {
@@ -1336,7 +1469,16 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
       );
 
       return (
-        <StatusCardWrapper index={index} item={item} avatarOverlay={myStatusOverlay}>
+        <StatusCardWrapper 
+          index={index} 
+          item={item} 
+          avatarOverlay={myStatusOverlay}
+          railCollapseProgress={railCollapseProgress}
+          homeMorphProgress={homeMorphProgress}
+          selectedPillId={selectedPillId}
+          statusTransition={statusTransition}
+        >
+        <Animated.View style={[{ flex: 1 }, myStatusSourceAnimatedStyle]}>
         <Pressable
           ref={ref => statusRefs.current['my-status'] = ref}
           style={{ flex: 1 }}
@@ -1349,10 +1491,10 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
                   <Image source={{ uri: firstPending.localUri }} style={[styles.myStatusPreviewBgFull, { opacity: 0.6 }]} />
                   <View style={styles.uploadingOverlay}>
                     <View style={{ justifyContent: 'center', alignItems: 'center' }}>
-                      <StatusProgressRing 
-                          progress={firstPending ? (statusUploadProgress[firstPending.id] || 0) / 100 : 0}
-                          size={78} 
-                          color={activeTheme.primary} 
+                      <StatusProgressRing
+                          progress={firstPending ? Math.min(1, statusUploadProgress[firstPending.id] || 0) : 0}
+                          size={78}
+                          color={activeTheme.primary}
                       />
                       <View style={{ position: 'absolute' }}>
                           <SoulAvatar 
@@ -1441,6 +1583,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
             </View>
           )}
         </Pressable>
+        </Animated.View>
         </StatusCardWrapper>
       );
     }
@@ -1472,7 +1615,15 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
     );
 
     return (
-      <StatusCardWrapper index={index} item={item} avatarOverlay={contactOverlay}>
+      <StatusCardWrapper 
+        index={index} 
+        item={item} 
+        avatarOverlay={contactOverlay}
+        railCollapseProgress={railCollapseProgress}
+        homeMorphProgress={homeMorphProgress}
+        selectedPillId={selectedPillId}
+        statusTransition={statusTransition}
+      >
       <Pressable
         key={contact.id}
         ref={ref => statusRefs.current[contact.id] = ref}
@@ -1533,6 +1684,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
     handleMyStatusPress,
     handleStatusPress,
     StatusCardWrapper,
+    myStatusSourceAnimatedStyle,
   ]);
 
   const lastMessagesMap = useMemo(() => {
@@ -1611,7 +1763,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
 
   const renderHeader = useCallback(() => (
     <View style={styles.homeHeaderWrapper}>
-      <View style={styles.topHeader}>
+      <Animated.View style={[styles.topHeader, homeChromeFadeStyle]}>
         {selectionMode ? (
           <View style={styles.headerActions}>
             <Pressable onPress={exitSelectionMode} hitSlop={10} style={{ marginRight: 12 }}>
@@ -1628,7 +1780,7 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
             <AnimatedMoreMenu router={router} isSearching={false} />
           </View>
         )}
-      </View>
+      </Animated.View>
       <Animated.View style={[styles.statusRail, statusRailAnimStyle]}>
         <FlatList
           horizontal
@@ -1640,12 +1792,9 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
           renderItem={renderStatusItem}
         />
       </Animated.View>
-      <ScrollView 
-        horizontal 
-        showsHorizontalScrollIndicator={false}
-        style={{ marginTop: -1, marginBottom: 8 }}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 6, gap: 8 }}
-      >
+      {/* Filter chip row — fixed flex layout (not a ScrollView) so the chips
+          stay locked in place. */}
+      <Animated.View style={[styles.filterRow, homeChromeFadeStyle]}>
         {[
           { id: 'all', label: 'All' },
           { id: 'unread', label: 'Unread' },
@@ -1672,9 +1821,9 @@ const homeContentAnimatedStyle = useAnimatedStyle(() => {
         >
           <MaterialIcons name="add" size={18} color="rgba(255,255,255,0.6)" />
         </GlassChipButton>
-      </ScrollView>
+      </Animated.View>
     </View>
-  ), [contactsWithStories, renderStatusItem, statusRailAnimStyle, router, chatFilter, selectionMode, selectedChatIds.length, exitSelectionMode, bulkDeleteSelected]);
+  ), [contactsWithStories, renderStatusItem, statusRailAnimStyle, router, chatFilter, selectionMode, selectedChatIds.length, exitSelectionMode, bulkDeleteSelected, homeChromeFadeStyle]);
 
   return (
     <View style={styles.container}>
@@ -2032,6 +2181,11 @@ const styles = StyleSheet.create({
   statusPlaceholder: { backgroundColor: 'rgba(255,255,255,0.05)' },
   myStatusEmptyPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 38 },
   statusOverlay: { ...StyleSheet.absoluteFillObject },
+  statusAvatarOverlay: { 
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 28,
+    overflow: 'hidden',
+  },
   contactAvatarPositioner: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 50, alignItems: 'center', justifyContent: 'center' },
   contactAvatarCorner: { position: 'absolute', top: 12, left: 12, zIndex: 10 },
   storyRing: { borderRadius: 30, alignItems: 'center', justifyContent: 'center' },
@@ -2097,6 +2251,20 @@ const styles = StyleSheet.create({
   addChipContent: {
     minHeight: 32,
     minWidth: 32,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    // Center the chip row in the available width so the spacing on the left
+    // and the right is always symmetric — the previous left-aligned padding
+    // made the row look like it was pushed to the right because "Favourites"
+    // is a wide pill and shoved the "+" close to the right edge.
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 6,
+    marginTop: -1,
+    marginBottom: 8,
   },
   moreMenuItemMorph: {
     flexDirection: 'row',

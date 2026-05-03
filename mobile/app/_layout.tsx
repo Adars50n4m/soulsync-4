@@ -277,8 +277,9 @@ function RootContent() {
         }} />
         <Stack.Screen name="music" options={{
           presentation: 'transparentModal',
-          animation: 'fade',
+          animation: 'none',
           headerShown: false,
+          gestureEnabled: false,
           contentStyle: { backgroundColor: 'transparent' },
         }} />
         <Stack.Screen name="chat/[id]" options={{

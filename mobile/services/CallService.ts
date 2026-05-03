@@ -94,6 +94,9 @@ class CallService {
     private _subscribingPersonalChannel: boolean = false;
     private _lastPersonalSubscribeAt: number = 0;
     private readonly PERSONAL_SUBSCRIBE_MIN_GAP_MS = 5000;
+    private _personalReconnectInFlight: boolean = false;
+    private _lastPersonalReconnectLogAt: number = 0;
+    private readonly PERSONAL_RECONNECT_LOG_MIN_GAP_MS = 15000;
     private processedSignalIds: Set<string> = new Set();
     private signalPollInterval: NodeJS.Timeout | null = null;
     private _fastPollInterval: NodeJS.Timeout | null = null;
@@ -1334,9 +1337,24 @@ class CallService {
     }
 
     private _reconnectIfNeeded(): void {
+        if (!isOnlineCached()) return;
+
         if (!this.personalChannelSubscribed && this.userId && !this._connectionLimitHit) {
-            console.log('[CallService] 🔄 Personal channel not subscribed — reconnecting');
+            if (this._subscribingPersonalChannel || this._personalReconnectInFlight) {
+                return;
+            }
+
+            const now = Date.now();
+            if (now - this._lastPersonalReconnectLogAt >= this.PERSONAL_RECONNECT_LOG_MIN_GAP_MS) {
+                console.log('[CallService] 🔄 Personal channel not subscribed — reconnecting');
+                this._lastPersonalReconnectLogAt = now;
+            }
+
+            this._personalReconnectInFlight = true;
             this._subscribePersonalChannel(this.userId);
+            setTimeout(() => {
+                this._personalReconnectInFlight = false;
+            }, this.PERSONAL_SUBSCRIBE_MIN_GAP_MS);
         }
         
         // Check room channel
@@ -1373,7 +1391,11 @@ class CallService {
         if (_personalChannel) {
             const state = _personalChannel.state;
             if (state === 'closed' || state === 'errored' || state === 'leaving') {
-                console.warn(`[CallService] ⚠️ Personal channel unhealthy (${state}) — reconnecting`);
+                const now = Date.now();
+                if (now - this._lastPersonalReconnectLogAt >= this.PERSONAL_RECONNECT_LOG_MIN_GAP_MS) {
+                    console.warn(`[CallService] ⚠️ Personal channel unhealthy (${state}) — reconnecting`);
+                    this._lastPersonalReconnectLogAt = now;
+                }
                 this.personalChannelSubscribed = false;
                 this._reconnectIfNeeded();
             }

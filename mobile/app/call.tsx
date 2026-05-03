@@ -21,7 +21,9 @@ import Animated, {
     withSpring,
     runOnJS,
     interpolate,
-    cancelAnimation
+    cancelAnimation,
+    FadeIn,
+    FadeOut
 } from 'react-native-reanimated';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useKeepAwake } from 'expo-keep-awake';
@@ -112,6 +114,7 @@ export default function CallScreen() {
     const [showDiagnostics, setShowDiagnostics] = useState(false);
     const [stats, setStats] = useState({ bytesReceived: 0 });
     const [showLiveChat, setShowLiveChat] = useState(false);
+    const [showMoreOptions, setShowMoreOptions] = useState(false);
 
     const hasRemoteTracks = useMemo(() => {
         if (remoteStreams.size === 0) return false;
@@ -163,19 +166,16 @@ export default function CallScreen() {
 
     const canRenderVideo = !!RTCView && !!RemoteVideoComponent;
     const edgeGlowPulse = useSharedValue(0);
-    const edgeGlowStrong = useMemo(() => hexToRgba(activeTheme?.accent || '#FF6A88', 0.65), [activeTheme?.accent]);
+    const edgeGlowStrong = 'rgba(255, 255, 255, 1)';
     const edgeGlowSoft = useMemo(() => hexToRgba(activeTheme?.accent || '#FF6A88', 0), [activeTheme?.accent]);
 
     useEffect(() => {
-        if (isEdgeGlowEnabled && isVideo && uiConnected) {
-            edgeGlowPulse.value = withRepeat(
-                withTiming(1, { duration: 1400, easing: Easing.inOut(Easing.quad) }),
-                -1, true
-            );
+        if (isEdgeGlowEnabled) {
+            edgeGlowPulse.value = withTiming(1, { duration: 500, easing: Easing.out(Easing.quad) });
         } else {
-            edgeGlowPulse.value = withTiming(0, { duration: 220 });
+            edgeGlowPulse.value = withTiming(0, { duration: 400 });
         }
-    }, [isEdgeGlowEnabled, isVideo, uiConnected]);
+    }, [isEdgeGlowEnabled]);
 
     useEffect(() => {
         let timeout: NodeJS.Timeout;
@@ -302,7 +302,7 @@ export default function CallScreen() {
 
     const handleToggleMute = useCallback(() => toggleAppMute(), [toggleAppMute]);
     const handleToggleVideo = useCallback(() => toggleVideo?.(), [toggleVideo]);
-    const handleToggleEdgeGlow = useCallback(() => isVideo && setIsEdgeGlowEnabled(prev => !prev), [isVideo]);
+    const handleToggleEdgeGlow = useCallback(() => setIsEdgeGlowEnabled(prev => !prev), []);
     const handleToggleSpeaker = useCallback(async () => {
         await applySpeakerOutput(!isSpeaker, true);
     }, [isSpeaker, applySpeakerOutput]);
@@ -378,6 +378,9 @@ export default function CallScreen() {
     }));
 
     const edgeGlowStyle = useAnimatedStyle(() => ({ opacity: edgeGlowPulse.value }));
+    const backgroundOverlayStyle = useAnimatedStyle(() => ({
+        backgroundColor: `rgba(0, 0, 0, ${interpolate(edgeGlowPulse.value, [0, 1], [0.4, 0.85])})`
+    }));
 
     // NEW: Mesh Background Animation
     const meshP1 = useSharedValue(0);
@@ -706,25 +709,42 @@ export default function CallScreen() {
                             )
                         )}
 
-                        <View style={[styles.overlay, { zIndex: 1, backgroundColor: 'rgba(5, 5, 8, 0.4)' }]} />
+                        <Animated.View style={[styles.overlay, { zIndex: 1 }, backgroundOverlayStyle]} />
                     </View>
 
                     {/* 2. Edge Glow */}
-                    {isEdgeGlowEnabled && isVideo && (
+                    {isEdgeGlowEnabled && (
                         <Animated.View pointerEvents="none" style={[styles.edgeGlowContainer, edgeGlowStyle]}>
-                            {Platform.OS === 'ios' ? (
-                                <LinearGradient colors={[edgeGlowStrong, edgeGlowSoft]} style={StyleSheet.absoluteFill} />
-                            ) : (
-                                <View style={[StyleSheet.absoluteFill, { borderWidth: 8, borderColor: edgeGlowStrong, opacity: 0.4 }]} />
-                            )}
+                            {/* Top Glow Strip */}
+                            <LinearGradient 
+                                colors={[edgeGlowStrong, 'transparent']} 
+                                style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 100 }} 
+                            />
+                            {/* Bottom Glow Strip */}
+                            <LinearGradient 
+                                colors={['transparent', edgeGlowStrong]} 
+                                style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 120 }} 
+                            />
+                            {/* Left Glow Strip */}
+                            <LinearGradient 
+                                colors={[edgeGlowStrong, 'transparent']} 
+                                start={{x: 0, y: 0.5}} end={{x: 1, y: 0.5}}
+                                style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 60 }} 
+                            />
+                            {/* Right Glow Strip */}
+                            <LinearGradient 
+                                colors={['transparent', edgeGlowStrong]} 
+                                start={{x: 0, y: 0.5}} end={{x: 1, y: 0.5}}
+                                style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 60 }} 
+                            />
                         </Animated.View>
                     )}
 
                     {!isInPipMode ? (
-                        <View style={styles.content}>
+                        <View style={[styles.content, { paddingTop: insets.top }]}>
                             {/* Header */}
                             {!showLiveChat && (
-                                <View style={[styles.header, { marginTop: Math.max(insets.top, 20) }]}>
+                                <View style={[styles.header, { marginTop: 12 }]}>
                                     <Pressable onPress={handleMinimize} style={styles.iconButton}>
                                         <MaterialIcons name="keyboard-arrow-down" size={32} color="white" />
                                     </Pressable>
@@ -777,17 +797,61 @@ export default function CallScreen() {
                                         </View>
                                     ) : (
                                         <View style={styles.controlsRow}>
-                                            <Pressable style={[styles.controlBtn, activeCall?.isMuted && styles.controlBtnActive]} onPress={handleToggleMute}><Ionicons name={activeCall?.isMuted ? "mic-off" : "mic"} size={24} color={activeCall?.isMuted ? "#000" : "white"} /></Pressable>
-                                            <Pressable style={[styles.controlBtn, isSpeaker && styles.controlBtnActive]} onPress={handleToggleSpeaker}><Ionicons name={isSpeaker ? "volume-high" : "volume-low"} size={24} color={isSpeaker ? "#000" : "white"} /></Pressable>
-                                            {isVideo && <Pressable style={[styles.controlBtn, activeCall?.isVideoOff && styles.controlBtnActive]} onPress={handleToggleVideo}><MaterialIcons name={activeCall?.isVideoOff ? "videocam-off" : "videocam"} size={24} color={activeCall?.isVideoOff ? "#000" : "white"} /></Pressable>}
-                                            <Pressable style={[styles.controlBtn, showLiveChat && styles.controlBtnActive]} onPress={() => setShowLiveChat(true)}>
-                                                <Entypo name="chat" size={22} color={showLiveChat ? "#000" : "white"} />
+                                            <Pressable style={[styles.controlBtn, activeCall?.isMuted && styles.controlBtnActive]} onPress={handleToggleMute}>
+                                                <Ionicons name={activeCall?.isMuted ? "mic-off" : "mic"} size={24} color={activeCall?.isMuted ? "#000" : "white"} />
                                             </Pressable>
-                                            <Pressable style={styles.controlBtn} onPress={handleMinimize}><MaterialIcons name="picture-in-picture" size={24} color="white" /></Pressable>
-                                            <Pressable style={[styles.controlBtn, styles.endCallBtn]} onPress={handleEndCall}><MaterialIcons name="call-end" size={28} color="white" /></Pressable>
+                                            
+                                            <Pressable style={[styles.controlBtn, isSpeaker && styles.controlBtnActive]} onPress={handleToggleSpeaker}>
+                                                <Ionicons name={isSpeaker ? "volume-high" : "volume-low"} size={24} color={isSpeaker ? "#000" : "white"} />
+                                            </Pressable>
+                                            
+                                            <Pressable 
+                                                style={[styles.controlBtn, !isVideo && { backgroundColor: 'rgba(255,255,255,0.05)' }]} 
+                                                onPress={handleToggleVideo}
+                                            >
+                                                <MaterialIcons name={isVideo ? (activeCall?.isVideoOff ? "videocam-off" : "videocam") : "videocam"} size={24} color="white" />
+                                            </Pressable>
+
+                                            <Pressable style={styles.controlBtn} onPress={handleMinimize}>
+                                                <MaterialIcons name="picture-in-picture" size={24} color="white" />
+                                            </Pressable>
+
+                                            <Pressable 
+                                                style={[styles.controlBtn, showMoreOptions && styles.controlBtnActive]} 
+                                                onPress={() => setShowMoreOptions(prev => !prev)}
+                                            >
+                                                <MaterialIcons name="more-vert" size={24} color={showMoreOptions ? "#000" : "white"} />
+                                            </Pressable>
+                                            
+                                            <Pressable style={[styles.controlBtn, styles.endCallBtn]} onPress={handleEndCall}>
+                                                <MaterialIcons name="call-end" size={28} color="white" />
+                                            </Pressable>
                                         </View>
                                     )}
                                 </GlassView>
+                            )}
+
+                            {/* More Options Menu */}
+                            {showMoreOptions && (
+                                <Animated.View entering={FadeIn.duration(200)} exiting={FadeOut.duration(150)} style={[styles.moreMenuContainer, { bottom: Math.max(insets.bottom, 40) + 75 }]}>
+                                    <GlassView intensity={60} tint="dark" style={styles.moreMenuContent}>
+                                        <Pressable style={styles.moreMenuItem} onPress={() => { handleToggleEdgeGlow(); setShowMoreOptions(false); }}>
+                                            <View style={[styles.moreMenuIcon, isEdgeGlowEnabled && { backgroundColor: activeTheme.primary + '33' }]}>
+                                                <MaterialIcons name="auto-awesome" size={20} color={isEdgeGlowEnabled ? activeTheme.primary : "white"} />
+                                            </View>
+                                            <Text style={styles.moreMenuText}>Edge Glow</Text>
+                                        </Pressable>
+                                        
+                                        <View style={styles.moreMenuDivider} />
+                                        
+                                        <Pressable style={styles.moreMenuItem} onPress={() => { setShowLiveChat(true); setShowMoreOptions(false); }}>
+                                            <View style={styles.moreMenuIcon}>
+                                                <Entypo name="chat" size={18} color="white" />
+                                            </View>
+                                            <Text style={styles.moreMenuText}>Live Chat</Text>
+                                        </Pressable>
+                                    </GlassView>
+                                </Animated.View>
                             )}
 
                             {/* Diagnostics Toggle */}
@@ -868,7 +932,7 @@ const styles = StyleSheet.create({
     securityBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.1)', padding: 6, borderRadius: 12 },
     securityTextContainer: { overflow: 'hidden' },
     securityText: { color: 'rgba(255,255,255,0.6)', fontSize: 10 },
-    mainInfo: { alignItems: 'center', marginTop: 40 },
+    mainInfo: { alignItems: 'center', marginTop: 25 },
     avatarWrapper: { width: 180, height: 180, justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
     pulseRing: { position: 'absolute', width: 170, height: 170, borderRadius: 85, borderWidth: 1, borderColor: 'rgba(255,100,136,0.25)' },
     contactName: { color: '#fff', fontSize: 28, fontWeight: 'bold' },
@@ -882,7 +946,7 @@ const styles = StyleSheet.create({
     selfVideoContainer: { position: 'absolute', width: 110, height: 160, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)', backgroundColor: '#000', zIndex: 100 },
     selfVideo: { flex: 1 },
     selfVideoPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-    edgeGlowContainer: { ...StyleSheet.absoluteFillObject, zIndex: 5 },
+    edgeGlowContainer: { ...StyleSheet.absoluteFillObject, zIndex: 100 },
     pipOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     pipName: { color: '#fff', marginTop: 10, fontSize: 16 },
     incomingActionsRow: { flexDirection: 'row', justifyContent: 'space-around', width: '100%' },
@@ -900,4 +964,10 @@ const styles = StyleSheet.create({
     participantNameText: { color: 'white', fontSize: 12 },
     tilePlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#1A1A20' },
     tileName: { color: 'white', marginTop: 10, fontSize: 14, opacity: 0.7 },
+    moreMenuContainer: { position: 'absolute', right: 20, width: 180, zIndex: 1000 },
+    moreMenuContent: { borderRadius: 20, overflow: 'hidden', padding: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+    moreMenuItem: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 12 },
+    moreMenuIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' },
+    moreMenuText: { color: 'white', fontSize: 14, fontWeight: '500' },
+    moreMenuDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.1)', marginHorizontal: 12 },
 });

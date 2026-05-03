@@ -85,22 +85,38 @@ export const SUPPORT_SHARED_TRANSITIONS = true;
  */
 export const SUPPORT_PROFILE_AVATAR_SHARED_TRANSITION = false;
 
-export const PROFILE_AVATAR_SHARED_TRANSITION = SharedTransition.custom((values) => {
+/**
+ * UNIVERSAL LIQUID MORPH PHYSICS
+ *
+ * This spring is carefully tuned to feel fluid and "organic" rather than mechanical.
+ * Damping is high to prevent oscillation (jitter) during the reshape phase,
+ * while stiffness is moderate to maintain responsiveness.
+ */
+export const SOUL_LIQUID_SPRING = {
+  damping: 32,      // Perfectly buttery deceleration, zero overshoot
+  stiffness: 150,    // Organic, flow-like motion
+  mass: 1.1,
+  reduceMotion: ReduceMotion.Never,
+} as const;
+
+/**
+ * Universal Shared Transition for Profile Avatars and Status Cards.
+ * Ensures uniform physics for all properties (width, height, position, radius)
+ * so they morph in perfect synchronization.
+ */
+export const SOUL_LIQUID_TRANSITION = SharedTransition.custom((values) => {
   'worklet';
-  const liquidSpring = { damping: 26, stiffness: 210, mass: 1.1, reduceMotion: ReduceMotion.Never };
   return {
-    width: withSpring(values.targetWidth, liquidSpring),
-    height: withSpring(values.targetHeight, liquidSpring),
-    originX: withSpring(values.targetOriginX, liquidSpring),
-    originY: withSpring(values.targetOriginY, liquidSpring),
-    borderRadius: withSpring(values.targetBorderRadius, { ...liquidSpring, damping: 28, stiffness: 280 }), 
-  };
-}).progressAnimation((values, progress) => {
-  'worklet';
-  return {
-    opacity: 1, // Visible instantly for the expand feel
+    width: withSpring(values.targetWidth, SOUL_LIQUID_SPRING),
+    height: withSpring(values.targetHeight, SOUL_LIQUID_SPRING),
+    originX: withSpring(values.targetOriginX, SOUL_LIQUID_SPRING),
+    originY: withSpring(values.targetOriginY, SOUL_LIQUID_SPRING),
+    borderRadius: withSpring(values.targetBorderRadius, SOUL_LIQUID_SPRING),
   };
 });
+
+// Alias for backwards compatibility
+export const PROFILE_AVATAR_SHARED_TRANSITION = SOUL_LIQUID_TRANSITION;
 
 export type SpringConfig = typeof LIQUID_GLASS_SPRING;
 export type TimingConfig = typeof LIQUID_TIMING;

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, memo, useCallback, useMemo } from '
 import {
     View, Text, Image, TextInput, Pressable, StyleSheet, StatusBar,
     FlatList, useWindowDimensions, ImageBackground,
-    KeyboardAvoidingView, Platform, Keyboard, ScrollView
+    KeyboardAvoidingView, Platform, Keyboard, ScrollView, BackHandler, PanResponder
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 
@@ -18,7 +18,8 @@ import Animated, {
     FadeInDown, 
     runOnJS,
     interpolate,
-    Extrapolation
+    Extrapolation,
+    Easing,
 } from 'react-native-reanimated';
 import { useApp } from '../context/AppContext';
 import { getSaavnApiUrl } from '../config/api';
@@ -39,6 +40,131 @@ interface Song {
     url: string;
     duration?: number;
 }
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+const InteractiveSeekBar = memo(({
+    progressPercent,
+    playbackMs,
+    durationSeconds,
+    onSeek,
+    formatClock,
+    compact = false,
+    fillColor = '#fff',
+    isSeeking,
+    setIsSeeking,
+}: {
+    progressPercent: number;
+    playbackMs: number;
+    durationSeconds: number;
+    onSeek: (positionMs: number) => void;
+    formatClock: (seconds: number) => string;
+    compact?: boolean;
+    fillColor?: string;
+    isSeeking?: boolean;
+    setIsSeeking?: (val: boolean) => void;
+}) => {
+    const thumbScale = useSharedValue(1);
+    const barLayout = useRef<{ x: number, width: number } | null>(null);
+    const [previewMs, setPreviewMs] = useState<number | null>(null);
+    const barRef = useRef<View>(null);
+
+    const animatedThumbStyle = useAnimatedStyle(() => ({
+        transform: [{ scale: withTiming(thumbScale.value, { duration: 100 }) }]
+    }));
+    
+    const durationMs = Math.max(0, Number(durationSeconds || 0) * 1000);
+    const displayMs = previewMs ?? playbackMs;
+    
+    const [barWidth, setBarWidth] = useState(0);
+    const displayPercent = barWidth > 0 && durationMs > 0
+        ? clamp((displayMs / durationMs) * 100, 0, 100)
+        : clamp(progressPercent, 0, 100);
+    const handleTouch = useCallback((locationX: number) => {
+        if (barWidth <= 0) return;
+        const percent = clamp(locationX / barWidth, 0, 1);
+        setPreviewMs(percent * durationMs);
+    }, [barWidth, durationMs]);
+
+    const commitTouch = useCallback((locationX: number) => {
+        if (barWidth <= 0) {
+            setPreviewMs(null);
+            return;
+        }
+        const percent = clamp(locationX / barWidth, 0, 1);
+        const targetMs = percent * durationMs;
+        setPreviewMs(null);
+        onSeek(targetMs);
+    }, [barWidth, durationMs, onSeek]);
+
+
+    const seekAbsoluteX = useRef<number>(0);
+    const seekStartPageX = useRef<number>(0);
+
+    const panResponder = useRef(
+        PanResponder.create({
+            onStartShouldSetPanResponder: () => true,
+            onMoveShouldSetPanResponder: () => true,
+            onPanResponderGrant: (evt) => {
+                thumbScale.value = 1.4;
+                setIsSeeking?.(true);
+                const { pageX } = evt.nativeEvent;
+                const relativeX = pageX - seekAbsoluteX.current;
+                handleTouch(relativeX);
+            },
+            onPanResponderMove: (evt) => {
+                const relativeX = evt.nativeEvent.pageX - seekAbsoluteX.current;
+                handleTouch(relativeX);
+            },
+            onPanResponderRelease: (evt) => {
+                thumbScale.value = 1;
+                setIsSeeking?.(false);
+                const relativeX = evt.nativeEvent.pageX - seekAbsoluteX.current;
+                commitTouch(relativeX);
+            },
+            onPanResponderTerminate: () => {
+                thumbScale.value = 1;
+                setIsSeeking?.(false);
+                setPreviewMs(null);
+            },
+            onPanResponderTerminationRequest: () => false,
+        })
+    ).current;
+
+    return (
+        <View style={styles.progressBarWrapper}>
+            <View
+                ref={barRef}
+                onLayout={(e) => {
+                    const { width } = e.nativeEvent.layout;
+                    setBarWidth(width);
+                    barRef.current?.measure((fx, fy, w, h, px, py) => {
+                        seekAbsoluteX.current = px;
+                    });
+                }}
+                {...panResponder.panHandlers}
+                style={compact ? styles.compactSeekTouchArea : styles.seekTouchArea}
+            >
+                <View style={styles.progressBarBg} pointerEvents="none">
+                    <View style={[styles.progressBarFill, { width: `${displayPercent}%`, backgroundColor: fillColor }]} />
+                    <Animated.View 
+                        style={[
+                            styles.progressThumb, 
+                            { left: `${displayPercent}%`, backgroundColor: fillColor },
+                            animatedThumbStyle
+                        ]} 
+                    />
+                </View>
+            </View>
+            {!compact && (
+                <View style={styles.timeLabels}>
+                    <Text style={styles.timeText}>{formatClock(displayMs / 1000)}</Text>
+                    <Text style={styles.timeText}>{formatClock(durationSeconds || 0)}</Text>
+                </View>
+            )}
+        </View>
+    );
+});
 
 // Memoized Song Item for performance
 const SongItem = memo(({
@@ -112,6 +238,8 @@ const ListHeader = memo(({
     currentLyricIndex,
     onSeekLyric,
     magentaColor,
+    isSeeking,
+    setIsSeeking,
 }: any) => {
     return (
         <View style={[styles.overlayHeader, isKeyboardVisible && { paddingBottom: 0 }]}>
@@ -132,15 +260,15 @@ const ListHeader = memo(({
                     </View>
                     {/* Progress */}
                     <View style={[styles.progressBarWrapper, { marginBottom: 4 }]}>
-                        <Pressable onPress={onSeek} hitSlop={{ top: 10, bottom: 10 }}>
-                            <View style={styles.progressBarBg}>
-                                <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
-                            </View>
-                        </Pressable>
-                        <View style={styles.timeLabels}>
-                            <Text style={styles.timeText}>{formatClock(playbackMs / 1000)}</Text>
-                            <Text style={styles.timeText}>{formatClock(currentSong.duration || 0)}</Text>
-                        </View>
+                        <InteractiveSeekBar
+                            progressPercent={progress}
+                            playbackMs={playbackMs}
+                            durationSeconds={Number(currentSong.duration || 0)}
+                            onSeek={onSeek}
+                            formatClock={formatClock}
+                            isSeeking={isSeeking}
+                            setIsSeeking={setIsSeeking}
+                        />
                     </View>
                     {/* Scrollable lyrics */}
                     {lyricsLoading ? (
@@ -192,15 +320,15 @@ const ListHeader = memo(({
                         </Text>
                         {!isKeyboardVisible && (
                             <View style={styles.progressBarWrapper}>
-                                <Pressable onPress={onSeek} hitSlop={{ top: 10, bottom: 10 }}>
-                                    <View style={styles.progressBarBg}>
-                                        <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
-                                    </View>
-                                </Pressable>
-                                <View style={styles.timeLabels}>
-                                    <Text style={styles.timeText}>{formatClock(playbackMs / 1000)}</Text>
-                                    <Text style={styles.timeText}>{currentSong ? formatClock(currentSong.duration || 0) : "No Media"}</Text>
-                                </View>
+                                <InteractiveSeekBar
+                                    progressPercent={progress}
+                                    playbackMs={playbackMs}
+                                    durationSeconds={Number(currentSong?.duration || 0)}
+                                    onSeek={onSeek}
+                                    formatClock={formatClock}
+                                    isSeeking={isSeeking}
+                                    setIsSeeking={setIsSeeking}
+                                />
                             </View>
                         )}
                     </View>
@@ -278,7 +406,13 @@ const ListHeader = memo(({
 export default function MusicScreen() {
     const { width, height } = useWindowDimensions();
     const router = useRouter();
-    const { activeTheme, musicState, currentUser, playSong, togglePlayMusic, toggleFavoriteSong, startCall, getPlaybackPosition, seekTo, repeatMode, toggleRepeat, shuffle, toggleShuffle, queue, addToQueue, playNext, playPrevious, sleepTimerMinutes, setSleepTimer } = useApp() as any;
+    const { 
+        musicState, playSong, togglePlayMusic, toggleFavoriteSong, 
+        seekTo, getPlaybackPosition, playNext, playPrevious, 
+        repeatMode, toggleRepeat, shuffle, toggleShuffle,
+        addToQueue, leaveGroupMusicRoom, isSeeking, setIsSeeking,
+        activeTheme 
+    } = useApp() as any;
     const themeAccent = activeTheme?.primary || MAGENTA;
 
     const [activeTab, setActiveTab] = useState<'music' | 'favorites' | 'lyrics' | 'queue'>('music');
@@ -303,9 +437,12 @@ export default function MusicScreen() {
 
     // Animations
     const slideY = useSharedValue(height);
+    const isClosingRef = useRef(false);
+    const allowNativePopRef = useRef(false);
 
     const navigation = useNavigation();
     const closeScreen = () => {
+        allowNativePopRef.current = true;
         if (navigation.canGoBack()) {
             navigation.goBack();
             return;
@@ -313,17 +450,25 @@ export default function MusicScreen() {
         router.back();
     };
 
-    const handleClose = () => {
-        slideY.value = withTiming(height, { duration: 220 }, (finished) => {
+    const handleClose = useCallback(() => {
+        if (isClosingRef.current) return;
+        isClosingRef.current = true;
+        slideY.value = withTiming(height, {
+            duration: 280,
+            easing: Easing.bezier(0.4, 0, 0.2, 1),
+        }, (finished) => {
             if (finished) {
                 runOnJS(closeScreen)();
             }
         });
-    };
+    }, [height, navigation, router, slideY]);
 
     useEffect(() => {
         // Open the music overlay
-        slideY.value = withTiming(0, { duration: 220 });
+        slideY.value = withTiming(0, {
+            duration: 280,
+            easing: Easing.bezier(0.2, 0.9, 0.2, 1),
+        });
 
         // Initial Load Logic:
         // Fetch Bollywood Trending but DO NOT auto-play.
@@ -343,6 +488,26 @@ export default function MusicScreen() {
             hideSub.remove();
         };
     }, []);
+
+    useEffect(() => {
+        const unsubscribe = navigation.addListener('beforeRemove', (event: any) => {
+            if (allowNativePopRef.current || isClosingRef.current) return;
+            event.preventDefault();
+            handleClose();
+        });
+
+        const backSub = BackHandler.addEventListener('hardwareBackPress', () => {
+            if (isClosingRef.current) return true;
+            handleClose();
+            return true;
+        });
+
+        return () => {
+            unsubscribe();
+            backSub.remove();
+            allowNativePopRef.current = false;
+        };
+    }, [handleClose, navigation]);
 
     const overlayStyle = useAnimatedStyle(() => ({
         transform: [{ translateY: slideY.value }]
@@ -630,18 +795,16 @@ export default function MusicScreen() {
     , [musicState.favorites]);
 
     const displaySongs = activeTab === 'favorites' ? musicState.favorites
-        : activeTab === 'queue' ? queue
+        : activeTab === 'queue' ? musicState.queue
         : songs;
 
-    const handleSeek = useCallback((e: any) => {
-        const { locationX } = e.nativeEvent;
-        const barWidth = width - 48; // Screen width - padding (24 * 2)
-        const percent = Math.max(0, Math.min(1, locationX / barWidth));
-        const duration = musicState.currentSong?.duration || 240;
-        const targetMs = percent * duration * 1000;
+    const handleSeek = useCallback((targetMs: number) => {
+        console.log('[Music] Seeking to:', targetMs);
         seekTo(targetMs);
-        setProgress(percent * 100);
+        const duration = Number(musicState.currentSong?.duration || 0);
+        const percent = duration > 0 ? (targetMs / (duration * 1000)) * 100 : 0;
         setPlaybackMs(targetMs);
+        setProgress(clamp(percent, 0, 100));
     }, [musicState.currentSong?.duration, seekTo]);
 
     const formatClock = (seconds: number) => {
@@ -678,8 +841,10 @@ export default function MusicScreen() {
             currentLyricIndex={currentLyricIndex}
             onSeekLyric={seekTo}
             magentaColor={themeAccent}
+            isSeeking={isSeeking}
+            setIsSeeking={setIsSeeking}
         />
-    ), [musicState.currentSong, musicState.isPlaying, progress, playbackMs, searchQuery, activeTab, keyboardVisible, repeatMode, shuffle, showLyrics, lyrics, lyricsLoading, currentLyricIndex, themeAccent]);
+    ), [musicState.currentSong, musicState.isPlaying, progress, playbackMs, searchQuery, activeTab, keyboardVisible, repeatMode, shuffle, showLyrics, lyrics, lyricsLoading, currentLyricIndex, themeAccent, isSeeking, setIsSeeking]);
 
     const handleSongLongPress = useCallback((song: Song) => {
         addToQueue(song);
@@ -772,7 +937,7 @@ export default function MusicScreen() {
                                     <View style={{ marginTop: 50, alignItems: 'center' }}>
                                         <SoulLoader size={200} />
                                     </View>
-                                ) : activeTab === 'queue' && queue.length === 0 ? (
+                                ) : activeTab === 'queue' && musicState.queue.length === 0 ? (
                                     <View style={{ alignItems: 'center', marginTop: 40 }}>
                                         <MaterialIcons name="queue-music" size={40} color="rgba(255,255,255,0.1)" />
                                         <Text style={{ color: 'rgba(255,255,255,0.25)', fontSize: 13, marginTop: 12 }}>Queue is empty</Text>
@@ -836,6 +1001,8 @@ const styles = StyleSheet.create({
     dragHandle: { width: 48, height: 6, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 3, alignSelf: 'center', marginTop: 12, marginBottom: 24 },
     listContent: { paddingHorizontal: 24, paddingBottom: 120 },
     overlayHeader: { width: '100%', alignItems: 'center' },
+    seekTouchArea: { width: '100%', height: 32, justifyContent: 'center', marginVertical: -10 },
+    compactSeekTouchArea: { width: '100%', height: 24, justifyContent: 'center', marginVertical: -8 },
     
     playerInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 20, width: '100%', marginBottom: 16 },
     artworkWrapper: { width: 112, height: 112, borderRadius: 20, position: 'relative', overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', backgroundColor: '#1a1a1a', shadowColor: '#fff', shadowOpacity: 0.3, shadowRadius: 20, shadowOffset: { width: 0, height: 10 } },
@@ -846,8 +1013,9 @@ const styles = StyleSheet.create({
     overlayTrackArtist: { color: '#fff', fontSize: 14, fontWeight: '600', marginTop: 2 },
     
     progressBarWrapper: { width: '100%', marginTop: 16 },
-    progressBarBg: { width: '100%', height: 6, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow: 'hidden' },
-    progressBarFill: { height: '100%', backgroundColor: '#fff', borderRadius: 3, shadowColor: '#fff', shadowOpacity: 0.8, shadowRadius: 10 },
+    progressBarBg: { width: '100%', height: 4, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 2, justifyContent: 'center' },
+    progressBarFill: { height: '100%', backgroundColor: '#fff', borderRadius: 2 },
+    progressThumb: { position: 'absolute', width: 12, height: 12, borderRadius: 6, backgroundColor: '#fff', marginLeft: -6 },
     timeLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
     timeText: { color: 'rgba(255,255,255,0.4)', fontSize: 10, fontWeight: '600' },
 

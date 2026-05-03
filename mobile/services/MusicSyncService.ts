@@ -37,6 +37,20 @@ class MusicSyncService {
     private errorHandled = false;
     private scope: MusicSyncScope = { type: 'none' };
 
+    private isChannelReady(): boolean {
+        return !!this.channel && this.channel.state === 'joined';
+    }
+
+    private sendBroadcast(event: 'playback_update' | 'sync_request' | 'ping' | 'pong', payload: Record<string, any>): void {
+        if (!this.isChannelReady()) return;
+
+        this.channel!.send({
+            type: 'broadcast',
+            event,
+            payload,
+        }).catch(() => {});
+    }
+
     get partnerId(): string | null {
         return this.scope.type === 'direct' ? this.scope.targetId : null;
     }
@@ -295,7 +309,7 @@ class MusicSyncService {
     }
 
     broadcastUpdate(state: Partial<PlaybackState>): void {
-        if (!this.userId || !this.channel) return;
+        if (!this.userId) return;
 
         const fullState: PlaybackState = {
             currentSong: null,
@@ -308,11 +322,7 @@ class MusicSyncService {
 
         fullState.updatedAt = Date.now();
 
-        this.channel.send({
-            type: 'broadcast',
-            event: 'playback_update',
-            payload: fullState,
-        }).catch(() => {});
+        this.sendBroadcast('playback_update', fullState as unknown as Record<string, any>);
 
         if (this.scope.type === 'group') {
             void this.persistGroupState(fullState);
@@ -327,41 +337,27 @@ class MusicSyncService {
             void this.emitGroupSnapshot();
         }
 
-        if (!this.channel) return;
-
-        this.channel.send({
-            type: 'broadcast',
-            event: 'sync_request',
-            payload: {
-                updatedBy: this.userId,
-                updatedAt: Date.now(),
-            },
-        }).catch(() => {});
+        this.sendBroadcast('sync_request', {
+            updatedBy: this.userId,
+            updatedAt: Date.now(),
+        });
     }
 
     sendPing(): void {
-        if (!this.userId || !this.channel) return;
-        this.channel.send({
-            type: 'broadcast',
-            event: 'ping',
-            payload: {
-                updatedBy: this.userId,
-                updatedAt: Date.now(),
-            },
-        }).catch(() => {});
+        if (!this.userId) return;
+        this.sendBroadcast('ping', {
+            updatedBy: this.userId,
+            updatedAt: Date.now(),
+        });
     }
 
     sendPong(pingTime: number): void {
-        if (!this.userId || !this.channel) return;
-        this.channel.send({
-            type: 'broadcast',
-            event: 'pong',
-            payload: {
-                updatedBy: this.userId,
-                updatedAt: Date.now(),
-                position: pingTime,
-            },
-        }).catch(() => {});
+        if (!this.userId) return;
+        this.sendBroadcast('pong', {
+            updatedBy: this.userId,
+            updatedAt: Date.now(),
+            position: pingTime,
+        });
     }
 
     getConnectionStatus(): 'disconnected' | 'connecting' | 'connected' {

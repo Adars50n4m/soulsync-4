@@ -5,7 +5,7 @@ import {
     View, Text, TextInput, Pressable, AppState,
     StyleSheet, StatusBar, Platform,
     Modal, Animated as RNAnimated, Dimensions, Keyboard, KeyboardEvent, Alert, InteractionManager, ScrollView, FlatList,
-    Image as RNImage, KeyboardAvoidingView
+    Image as RNImage, KeyboardAvoidingView, PanResponder
 } from 'react-native';
 import { SoulLoader } from '../../components/ui/SoulLoader';
 import { Image } from 'expo-image';
@@ -62,6 +62,8 @@ import Animated, {
     Easing,
     FadeInDown,
     FadeOutDown,
+    FadeInUp,
+    FadeOutUp,
     LinearTransition,
     runOnJS,
     useAnimatedProps,
@@ -263,6 +265,88 @@ const SiriWaveform = ({ level, active, themeColor }: { level: number; active: bo
     );
 };
 
+// One word in a karaoke line. Top-level Animated.Text (not nested inside a Text)
+// so Reanimated's UI-thread color updates actually paint on iOS.
+const KaraokeWord = React.memo(({ word, index, total, progress, color, baseColor, fontSize }: any) => {
+    const animatedStyle = useAnimatedStyle(() => {
+        const slot = total > 0 ? (index + 0.5) / total : 0;
+        // Word lights up just before its slot is reached, then stays lit.
+        const fade = interpolate(progress.value, [slot - 0.12, slot], [0, 1], Extrapolation.CLAMP);
+        return {
+            color: interpolateColor(fade, [0, 1], [baseColor, color]),
+        };
+    });
+    return (
+        <Animated.Text style={[{ fontSize, fontWeight: '700', letterSpacing: 0.3 }, animatedStyle]}>
+            {word}
+        </Animated.Text>
+    );
+});
+
+// Karaoke header line. Each word is its own sibling Animated.Text in a row
+// (not nested in a Text), so per-word color animations apply on iOS. Font size
+// is computed from the measured container width so long Devanagari lines still
+// fit without wrapping.
+const KaraokeLine = React.memo(({ text, lineStart, lineEnd, color, baseColor, getPlaybackPosition, isPlaying }: any) => {
+    const progress = useSharedValue(0);
+    const [containerWidth, setContainerWidth] = useState(180);
+
+    useEffect(() => {
+        progress.value = 0;
+        const span = Math.max(0.5, lineEnd - lineStart);
+        const sync = async () => {
+            try {
+                const posMs = await getPlaybackPosition();
+                const p = ((posMs / 1000) - lineStart) / span;
+                progress.value = withTiming(Math.max(0, Math.min(1, p)), { duration: 100 });
+            } catch { }
+        };
+        sync();
+        if (!isPlaying) return;
+        const tick = setInterval(sync, 100);
+        return () => clearInterval(tick);
+    }, [text, lineStart, lineEnd, isPlaying]);
+
+    const wordTokens = useMemo(() => text.trim().split(/\s+/).filter(Boolean), [text]);
+
+    // Estimate font size to fit the line on one row. Devanagari glyphs are wider
+    // than Latin per character, so use a larger char-width factor when present.
+    const fontSize = useMemo(() => {
+        const isDevanagari = /[ऀ-ॿ]/.test(text);
+        const charFactor = isDevanagari ? 0.78 : 0.55;
+        const usable = Math.max(40, containerWidth - 4);
+        const ideal = usable / Math.max(1, text.length * charFactor);
+        return Math.max(9, Math.min(14, Math.floor(ideal)));
+    }, [text, containerWidth]);
+
+    return (
+        <View
+            style={{ height: 20, justifyContent: 'center', overflow: 'hidden' }}
+            onLayout={(e) => setContainerWidth(e.nativeEvent.layout.width)}
+        >
+            <Animated.View
+                key={text + lineStart}
+                entering={FadeInUp.duration(280).springify().damping(16)}
+                exiting={FadeOutUp.duration(180)}
+                style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'nowrap' }}
+            >
+                {wordTokens.map((word: string, i: number) => (
+                    <KaraokeWord
+                        key={i}
+                        word={i < wordTokens.length - 1 ? word + ' ' : word}
+                        index={i}
+                        total={wordTokens.length}
+                        progress={progress}
+                        color={color}
+                        baseColor={baseColor}
+                        fontSize={fontSize}
+                    />
+                ))}
+            </Animated.View>
+        </View>
+    );
+});
+
 export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUser, onBack, onBackStart, sourceY: propsSourceY }: SingleChatScreenProps) {
     const { id: paramsId, sourceY: paramsSourceY } = useLocalSearchParams();
     const insets = useSafeAreaInsets();
@@ -279,7 +363,17 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
 
     const router = useRouter();
     const isFocused = useIsFocused();
-    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, toggleHeart, deleteMessage, musicState, getPlaybackPosition, seekTo, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, initializeChatSession, cleanupChatSession, fetchOtherUserProfile, setMusicPartner, joinGroupMusicRoom, leaveGroupMusicRoom, requestMusicSync, startGroupCall, sendMediaLikePulse, remoteLikePulse, offlineService, refreshLocalCache } = useApp() as any;
+    const { contacts, messages, sendChatMessage, startCall, activeCall, updateMessage, addReaction, toggleHeart, deleteMessage, musicState, getPlaybackPosition, seekTo, isSeeking, setIsSeeking, currentUser, activeTheme, sendTyping, typingUsers, uploadProgressTracker, connectivity, initializeChatSession, cleanupChatSession, fetchOtherUserProfile, setMusicPartner, joinGroupMusicRoom, leaveGroupMusicRoom, requestMusicSync, startGroupCall, sendMediaLikePulse, remoteLikePulse, offlineService, refreshLocalCache, playbackOwnerChatId, lyrics, currentLyricIndex, showLyrics } = useApp() as any;
+    // Only show music UI in this chat if this chat owns the current playback.
+    const musicVisibleHere = !!musicState?.currentSong && playbackOwnerChatId === rawId;
+    // Karaoke mode in the header: lyrics toggle is on, song has lyrics, this chat owns playback.
+    const currentLine = lyrics?.[currentLyricIndex];
+    const nextLine = lyrics?.[currentLyricIndex + 1];
+    const karaokeText: string = (
+        musicVisibleHere && showLyrics && lyrics?.length > 0 && currentLine?.text
+    ) || '';
+    const karaokeLineStart: number = currentLine?.time ?? 0;
+    const karaokeLineEnd: number = nextLine?.time ?? (karaokeLineStart + (Number(musicState?.currentSong?.duration) || 5));
     const themeAccent = activeTheme?.primary || '#BC002A';
     const themeAccentSoft = activeTheme?.accent || '#FF6A88';
     const { getPresence } = usePresence();
@@ -415,6 +509,49 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
         ] as any,
     }));
 
+    const [isCallExpanded, setIsCallExpanded] = useState(false);
+    const callMorphProgress = useSharedValue(0);
+
+
+    const toggleCallMenu = useCallback(() => {
+        const next = !isCallExpanded;
+        setIsCallExpanded(next);
+        callMorphProgress.value = withSpring(next ? 1 : 0, { 
+            damping: 18, 
+            stiffness: 120,
+            mass: 0.8
+        });
+    }, [isCallExpanded]);
+
+    const animatedCallMorphStyle = useAnimatedStyle(() => {
+        const p = callMorphProgress.value;
+        const entryProgress = backgroundMorphProgress.value;
+        const offsetY = headerPillOffsetY.value;
+
+        return {
+            width: interpolate(p, [0, 1], [44, 180], Extrapolation.CLAMP),
+            height: interpolate(p, [0, 1], [44, 170], Extrapolation.CLAMP),
+            borderRadius: interpolate(p, [0, 1], [22, 24], Extrapolation.CLAMP),
+            backgroundColor: interpolateColor(p, [0, 1], ['rgba(255, 255, 255, 0.08)', 'transparent']),
+            position: 'absolute',
+            top: HEADER_PILL_TOP + (HEADER_PILL_HEIGHT - 44) / 2 + offsetY,
+            right: 24 + 10,
+            opacity: interpolate(entryProgress, [0, 0.6, 1], [0, 0, 1], Extrapolation.CLAMP),
+            overflow: 'hidden',
+            zIndex: 9999,
+            borderWidth: 1.2,
+            borderColor: 'rgba(255, 255, 255, 0.22)',
+            transform: [
+                { scale: interpolate(entryProgress, [0, 1], [0.8, 1], Extrapolation.CLAMP) }
+            ] as any,
+        };
+    });
+
+    const animatedCallContentOpacity = useAnimatedStyle(() => ({
+        opacity: interpolate(callMorphProgress.value, [0.4, 1], [0, 1], Extrapolation.CLAMP),
+        transform: [{ scale: interpolate(callMorphProgress.value, [0, 1], [0.8, 1], Extrapolation.CLAMP) }]
+    }));
+
     const headerMorphAnimatedStyle = useAnimatedStyle(() => {
         const progress = headerPillProgress.value;
         const selProgress = selectionModeProgress.value;
@@ -509,8 +646,9 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
 
     const navigation = useNavigation();
 
-    // Cleanup when back morph finishes
+    // Cleanup when back morph
     const finishBack = useCallback(() => {
+        console.log('[ChatScreen] finishBack triggered - isOverlay:', isOverlay);
         if (onBack) {
             onBack();
         } else if (navigation.canGoBack()) {
@@ -613,7 +751,10 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             });
             // Small handoff delay keeps the return motion closer to the
             // entry feel without changing the pill animation itself.
-            setTimeout(() => finishBack(), MORPH_OUT_HANDOFF);
+            // Overlays (like Status View) need the component to stay mounted
+            // for the FULL duration to see the animation finish.
+            const handoffDelay = isOverlay ? MORPH_IN_OUT_DURATION : MORPH_OUT_HANDOFF;
+            setTimeout(() => finishBack(), handoffDelay);
             return;
         }
         chatTransitionState.setPhase('returning');
@@ -666,19 +807,68 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
     const hasScrolledInitial = useRef(false);
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-    // Music progress for header glow
+    // Music progress for header glow. Stays visible while paused — we just stop
+    // polling. Only resets when there's no song at all or this chat doesn't own
+    // the active playback.
     const [musicProgress, setMusicProgress] = useState(0);
     useEffect(() => {
-        if (!musicState?.isPlaying || !musicState?.currentSong) { setMusicProgress(0); return; }
-        const interval = setInterval(async () => {
+        if (!musicVisibleHere) { setMusicProgress(0); return; }
+        if (isSeeking) return;
+
+        const sync = async () => {
             try {
                 const pos = await getPlaybackPosition();
                 const dur = (musicState.currentSong?.duration || 240) * 1000;
-                setMusicProgress(Math.min(pos / dur, 1)); // Store as ratio 0-1
+                setMusicProgress(Math.min(pos / dur, 1));
             } catch { }
-        }, 200); // Faster polling for real-time feel
+        };
+
+        // Always sync once so the bar reflects the real position after pause/resume.
+        sync();
+        if (!musicState.isPlaying) return;
+
+        const interval = setInterval(sync, 200);
         return () => clearInterval(interval);
-    }, [musicState?.isPlaying, musicState?.currentSong?.id]);
+    }, [musicVisibleHere, musicState?.isPlaying, musicState?.currentSong?.id, isSeeking]);
+
+    const headerPillRef = useRef<View>(null);
+    const [headerPillWidth, setHeaderPillWidth] = useState(SCREEN_WIDTH - MAIN_PILL_LEFT - 24);
+    const headerBarPageX = useRef(0);
+    const handleHeaderSeek = useCallback((locationX: number, commit = false) => {
+        if (!musicState?.currentSong?.duration) return;
+        const percent = Math.max(0, Math.min(1, locationX / headerPillWidth));
+        const targetMs = percent * musicState.currentSong.duration * 1000;
+        if (commit) {
+            seekTo(targetMs);
+            setIsSeeking(false);
+        }
+        setMusicProgress(percent);
+    }, [musicState?.currentSong?.duration, seekTo, headerPillWidth, setIsSeeking]);
+
+    const headerSeekPanResponder = useRef(
+        PanResponder.create({
+            onStartShouldSetPanResponder: () => true,
+            onMoveShouldSetPanResponder: () => true,
+            onPanResponderGrant: (e) => {
+                setIsSeeking(true);
+                const { locationX, pageX } = e.nativeEvent;
+                headerBarPageX.current = pageX - locationX;
+                handleHeaderSeek(locationX);
+            },
+            onPanResponderMove: (e) => {
+                const relativeX = e.nativeEvent.pageX - headerBarPageX.current;
+                handleHeaderSeek(relativeX);
+            },
+            onPanResponderRelease: (e) => {
+                const relativeX = e.nativeEvent.pageX - headerBarPageX.current;
+                handleHeaderSeek(relativeX, true);
+            },
+            onPanResponderTerminate: () => {
+                setIsSeeking(false);
+            },
+            onPanResponderTerminationRequest: () => false,
+        })
+    ).current;
 
     // Animation Layout State
     const [inputLayout, setInputLayout] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
@@ -897,6 +1087,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
     }, [isGroup, profilePreviewAvatarSource]);
 
     const openProfileWithMorph = useCallback(() => {
+        if (isNavigatingRef.current) return;
         try {
             console.log('[ChatScreen] Opening profile for:', targetProfileId);
             const pushProfile = async (origin?: { x: number; y: number; width: number; height: number }) => {
@@ -2162,6 +2353,14 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                     {/* Standard Navigation Header (Only in non-overlay mode) */}
                     <View style={[StyleSheet.absoluteFill, { zIndex: 10 }]} pointerEvents="box-none">
                         <Animated.View
+                            ref={headerPillRef}
+                            onLayout={(e) => {
+                                // Block layout updates during exit to prevent "jumping" or "stuttering" in the morph
+                                // Using JS-safe phase check here
+                                if (chatTransitionState.getPhase() !== 'returning') {
+                                    setHeaderPillWidth(e.nativeEvent.layout.width);
+                                }
+                            }}
                             style={[
                                 styles.headerPill,
                                 headerMorphAnimatedStyle,
@@ -2184,33 +2383,45 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                 <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
                             </View>
 
-                                                       {musicState?.currentSong && musicProgress > 0 && (
-                                <View 
-                                    style={{ 
-                                        position: 'absolute', 
-                                        bottom: 0, 
-                                        left: 0, 
-                                        right: 0,
-                                        height: 2, 
-                                        backgroundColor: 'rgba(255,255,255,0.05)',
-                                        zIndex: 15
-                                    }} 
-                                >
+                                                       {musicVisibleHere && (
                                     <View 
+                                        {...headerSeekPanResponder.panHandlers}
                                         style={{ 
-                                            width: `${musicProgress * 100}%`, 
-                                            height: '100%', 
-                                            backgroundColor: activeTheme.primary,
-                                            borderRadius: 2,
-                                            shadowColor: activeTheme.primary,
-                                            shadowOffset: { width: 0, height: 0 },
-                                            shadowOpacity: 0.8,
-                                            shadowRadius: 4,
-                                            elevation: 5
+                                            position: 'absolute', 
+                                            bottom: 0, 
+                                            left: 0, 
+                                            right: 0,
+                                            height: 14, 
+                                            backgroundColor: 'transparent',
+                                            zIndex: 15,
+                                            justifyContent: 'flex-end'
                                         }} 
-                                    />
-                                </View>
-                            )}
+                                    >
+                                        <View 
+                                            style={{ 
+                                                width: '100%',
+                                                height: 2, 
+                                                backgroundColor: 'rgba(255,255,255,0.05)',
+                                            }} 
+                                            pointerEvents="none"
+                                        >
+                                            <View 
+                                                style={{ 
+                                                    width: `${musicProgress * 100}%`, 
+                                                    height: '100%', 
+                                                    backgroundColor: activeTheme.primary,
+                                                    borderRadius: 2,
+                                                    shadowColor: activeTheme.primary,
+                                                    shadowOffset: { width: 0, height: 0 },
+                                                    shadowOpacity: 0.8,
+                                                    shadowRadius: 4,
+                                                    elevation: 5
+                                                }} 
+                                                pointerEvents="none"
+                                            />
+                                        </View>
+                                    </View>
+                                )}
 
                             <View style={[styles.header, { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, height: '100%', paddingRight: 8 }]} pointerEvents="box-none">
                                 <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
@@ -2234,33 +2445,73 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                                     </Pressable>
                                     <View style={styles.headerInfo}>
                                         <Text style={styles.contactName}>{contact?.name || '...'}</Text>
-                                        <Text style={[styles.statusText, { color: activeTheme.primary }]}>
-                                            {musicState?.currentSong ? 
-                                                (musicState.currentSong.name.split('(')[0].split('-')[0].split('[')[0].replace(/&quot;/gi, '"').replace(/&amp;/gi, '&').trim()) 
-                                                : 'ONLINE'
-                                            }
-                                        </Text>
+                                        {karaokeText ? (
+                                            <KaraokeLine
+                                                text={karaokeText}
+                                                lineStart={karaokeLineStart}
+                                                lineEnd={karaokeLineEnd}
+                                                color={activeTheme.primary}
+                                                baseColor="rgba(255,255,255,0.55)"
+                                                getPlaybackPosition={getPlaybackPosition}
+                                                isPlaying={!!musicState?.isPlaying}
+                                            />
+                                        ) : (
+                                            <Text style={[styles.statusText, { color: activeTheme.primary }]} numberOfLines={1}>
+                                                {musicVisibleHere
+                                                    ? (musicState.currentSong.name.split('(')[0].split('-')[0].split('[')[0].replace(/&quot;/gi, '"').replace(/&amp;/gi, '&').trim())
+                                                    : 'ONLINE'
+                                                }
+                                            </Text>
+                                        )}
                                     </View>
-                                    <View style={{ flexDirection: 'row', marginLeft: 'auto', marginRight: 0 }}>
+                                    <View style={{ flexDirection: 'row', marginLeft: 'auto', alignItems: 'center' }}>
                                         <PressableFlash
-                                            style={[styles.headerButton, { marginRight: 6 }]}
+                                            style={[styles.headerButton, { marginRight: 8 }]}
                                             borderRadius={22}
                                             flashColor={activeTheme.primary}
                                             onPress={() => setShowMusicPlayer(true)}
                                         >
                                             <MaterialIcons name="music-note" size={20} color="#ffffff" style={{ marginLeft: -2.5 }} />
                                         </PressableFlash>
-                                        <PressableFlash
-                                            style={styles.headerButton}
-                                            borderRadius={22}
-                                            flashColor={activeTheme.primary}
-                                            onPress={openCallModal}
-                                        >
-                                            <MaterialIcons name="call" size={20} color="#ffffff" />
-                                        </PressableFlash>
+
+                                        {/* Placeholder for Morphing Menu (outside) */}
+                                        <View style={{ width: 44, height: 44, marginRight: 2 }} />
                                     </View>
                                 </View>
                             </View>
+                        </Animated.View>
+
+                        {/* Seamless Morphing Call Menu (Root Level for breakout expansion) */}
+                        <Animated.View style={animatedCallMorphStyle}>
+                            <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
+                            
+                            <Pressable 
+                                style={{ position: 'absolute', top: 0, right: 0, width: 44, height: 44, alignItems: 'center', justifyContent: 'center', zIndex: 10 }} 
+                                onPress={toggleCallMenu}
+                            >
+                                <MaterialIcons 
+                                    name={isCallExpanded ? "close" : "call"} 
+                                    size={20} 
+                                    color="#ffffff" 
+                                    style={!isCallExpanded ? { marginLeft: 0.8, marginTop: 0.5 } : {}} 
+                                />
+                            </Pressable>
+
+                                <Animated.View style={[{ flex: 1, padding: 6, marginTop: 38 }, animatedCallContentOpacity]} pointerEvents={isCallExpanded ? 'auto' : 'none'}>
+                                    <Pressable style={styles.miniCallItem} onPress={() => { handleCall('audio'); toggleCallMenu(); }}>
+                                        <View style={[styles.miniCallIcon, { backgroundColor: 'rgba(34, 197, 94, 0.15)' }]}>
+                                            <MaterialIcons name="call" size={18} color="#22c55e" />
+                                        </View>
+                                        <Text style={styles.miniCallText}>Audio Call</Text>
+                                    </Pressable>
+                                    <View style={styles.miniCallDivider} />
+                                    <Pressable style={styles.miniCallItem} onPress={() => { handleCall('video'); toggleCallMenu(); }}>
+                                        <View style={[styles.miniCallIcon, { backgroundColor: 'rgba(244, 63, 94, 0.15)' }]}>
+                                            <MaterialIcons name="videocam" size={18} color="#f43f5e" />
+                                        </View>
+                                        <Text style={styles.miniCallText}>Video Call</Text>
+                                    </Pressable>
+                                </Animated.View>
                         </Animated.View>
 
                         {!selectionMode && (
@@ -2638,45 +2889,6 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
             />
 
             {/* Call Options Dropdown */}
-            {showCallModal && (
-                <View style={[StyleSheet.absoluteFill, { zIndex: 9999, elevation: 9999 }]}>
-                    <Pressable style={styles.modalOverlay} onPress={closeCallModal}>
-                        <RNAnimated.View
-                            style={[
-                                styles.callDropdown,
-                                {
-                                    top: callOptionsPosition.y,
-                                    right: 24,
-                                    opacity: modalAnim,
-                                    transform: [{
-                                        scale: modalAnim.interpolate({
-                                            inputRange: [0, 1],
-                                            outputRange: [0.9, 1],
-                                        })
-                                    }]
-                                }
-                            ]}
-                        >
-                            <View style={[styles.callDropdownContent, { backgroundColor: 'transparent' }]}>
-                                <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
-                                <Pressable style={styles.callDropdownItem} onPress={() => handleCall('audio')}>
-                                    <View style={[styles.callDropdownIcon, { backgroundColor: 'rgba(34, 197, 94, 0.15)' }]}>
-                                        <MaterialIcons name="call" size={20} color="#22c55e" />
-                                    </View>
-                                    <Text style={styles.callDropdownText}>{isGroup ? 'Group Call' : 'Audio'}</Text>
-                                </Pressable>
-                                <View style={styles.callDropdownDivider} />
-                                <Pressable style={styles.callDropdownItem} onPress={() => handleCall('video')}>
-                                    <View style={[styles.callDropdownIcon, { backgroundColor: 'rgba(244, 63, 94, 0.15)' }]}>
-                                        <MaterialIcons name="videocam" size={20} color="#f43f5e" />
-                                    </View>
-                                    <Text style={styles.callDropdownText}>Video</Text>
-                                </Pressable>
-                            </View>
-                        </RNAnimated.View>
-                    </Pressable>
-                </View>
-            )}
 
 
 
@@ -2832,6 +3044,7 @@ export default function SingleChatScreen({ id: propsId, isOverlay, user: propsUs
                 isOpen={showMusicPlayer}
                 onClose={() => setShowMusicPlayer(false)}
                 contactName={contact?.name || 'Someone'}
+                chatId={rawId}
             />
 
             <GlassAlert
@@ -2877,7 +3090,7 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: 'transparent',
         paddingLeft: 8,
-        paddingRight: 16,
+        paddingRight: 10,
         flexDirection: 'row',
         alignItems: 'center',
         // gap: 14,
@@ -3159,7 +3372,7 @@ const styles = StyleSheet.create({
     },
     callDropdown: {
         position: 'absolute',
-        width: 140,
+        width: 160,
         borderRadius: 16,
         overflow: 'hidden',
         borderWidth: 1.2,
@@ -3188,6 +3401,7 @@ const styles = StyleSheet.create({
         color: '#ffffff',
         fontSize: 14,
         fontWeight: '600',
+        marginLeft: 12,
     },
     callDropdownDivider: {
         height: 1,
@@ -3504,4 +3718,8 @@ const styles = StyleSheet.create({
         color: 'rgba(255,255,255,0.55)',
         fontSize: 11,
     },
+    miniCallItem: { flexDirection: 'row', alignItems: 'center', padding: 10, gap: 12 },
+    miniCallIcon: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+    miniCallText: { color: 'white', fontSize: 15, fontWeight: '700' },
+    miniCallDivider: { height: 1, backgroundColor: 'rgba(255,255,255,0.08)', marginHorizontal: 8 },
 });

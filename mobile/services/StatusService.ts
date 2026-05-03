@@ -18,11 +18,17 @@ import {
     downloadAsync 
 } from 'expo-file-system';
 import * as SQLite from 'expo-sqlite';
+import * as ImageManipulator from 'expo-image-manipulator';
 import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDb } from './LocalDBService';
 
 class StatusService {
+  private normalizeStatusUriCandidate(value?: string | null): string {
+    if (!value) return '';
+    return storageService.normalizePseudoLocalUri(value);
+  }
+
   private async getDb() {
     return await getDb();
   }
@@ -116,7 +122,27 @@ class StatusService {
         const isAlreadyUploaded = mediaKey && !mediaKey.startsWith('file://') && !mediaKey.startsWith('content://');
 
         if (!isAlreadyUploaded) {
-          mediaKey = await storageService.uploadStatusMedia(item.localUri, userId, item.mediaType, (p) => {
+          // Belt-and-braces HEIC handling: the picker now transcodes HEIC →
+          // JPEG up front, but a previously-queued HEIC pending upload could
+          // still be sitting here from before the fix landed. Detect by
+          // extension and convert in place so it stops perma-failing against
+          // the R2 worker's allow-list (jpg/png/webp/mp4/mov).
+          let uploadUri = item.localUri;
+          const ext = (uploadUri.split('.').pop() || '').toLowerCase();
+          if (item.mediaType === 'image' && (ext === 'heic' || ext === 'heif')) {
+            try {
+              const converted = await ImageManipulator.manipulateAsync(uploadUri, [], {
+                format: ImageManipulator.SaveFormat.JPEG,
+                compress: 0.92,
+              });
+              uploadUri = converted.uri;
+              await db.runAsync('UPDATE pending_uploads SET local_uri = ? WHERE id = ?', [uploadUri, item.id]);
+            } catch (convErr) {
+              console.warn('[StatusService] HEIC → JPEG conversion failed for queued upload:', convErr);
+            }
+          }
+
+          mediaKey = await storageService.uploadStatusMedia(uploadUri, userId, item.mediaType, (p) => {
             if (onProgress) onProgress(item.id, p);
           });
           if (!mediaKey) throw new Error('R2 upload failed during sync');
@@ -274,15 +300,31 @@ class StatusService {
   async getMediaSource(statusId: string, mediaKey?: string): Promise<{uri: string, isLocal: boolean} | null> {
     const db = await getDb();
     const status = await db.getFirstAsync<any>('SELECT media_local_path as mediaLocalPath, media_key as mediaKey FROM cached_statuses WHERE id = ?', [statusId]);
-    if (status?.mediaLocalPath) {
-      if (status.mediaLocalPath.startsWith('content://')) return { uri: status.mediaLocalPath, isLocal: true };
-      const info = await getInfoAsync(status.mediaLocalPath);
-      if (info.exists) return { uri: status.mediaLocalPath, isLocal: true };
+    const localPath = this.normalizeStatusUriCandidate(status?.mediaLocalPath);
+    if (localPath) {
+      if (localPath.startsWith('ph://')) {
+        const resolved = await storageService.resolveUri(localPath).catch(() => localPath);
+        if (resolved?.startsWith('file://') || resolved?.startsWith('content://') || resolved?.startsWith('ph://')) {
+          return { uri: resolved, isLocal: true };
+        }
+      }
+      if (localPath.startsWith('content://')) return { uri: localPath, isLocal: true };
+      if (localPath.startsWith('file://')) {
+        const info = await getInfoAsync(localPath);
+        if (info.exists) return { uri: localPath, isLocal: true };
+      }
     }
-    const key = mediaKey || status?.mediaKey;
+    const key = this.normalizeStatusUriCandidate(mediaKey || status?.mediaKey);
     if (!key) return null;
     if (key.startsWith('http')) return { uri: key, isLocal: false };
     if (key.startsWith('file://') || key.startsWith('content://')) return { uri: key, isLocal: true };
+    if (key.startsWith('ph://')) {
+      const resolved = await storageService.resolveUri(key).catch(() => key);
+      if (resolved?.startsWith('file://') || resolved?.startsWith('content://') || resolved?.startsWith('ph://')) {
+        return { uri: resolved, isLocal: true };
+      }
+      return null;
+    }
     const signedUrl = await storageService.getSignedUrl(key);
     return signedUrl ? { uri: signedUrl, isLocal: false } : null;
   }
@@ -305,7 +347,12 @@ class StatusService {
     }
     const key = mediaKey || status?.mediaKey;
     if (key) await storageService.deleteMedia(key).catch(() => {});
-    if (status?.mediaLocalPath) await deleteAsync(status.mediaLocalPath, { idempotent: true });
+    if (status?.mediaLocalPath) {
+      const localPath = await storageService.resolveUri(status.mediaLocalPath).catch(() => status.mediaLocalPath);
+      if (localPath?.startsWith('file://') || localPath?.startsWith('content://')) {
+        await deleteAsync(localPath, { idempotent: true }).catch(() => {});
+      }
+    }
     await db.runAsync('DELETE FROM pending_uploads WHERE id = ?', [statusId]);
     await db.runAsync('DELETE FROM cached_statuses WHERE id = ?', [statusId]);
   }

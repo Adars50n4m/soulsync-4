@@ -5,6 +5,7 @@ import { NativeModules, Platform, AppState, Alert } from 'react-native';
 import type { Song, MusicState } from '../types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { musicSyncService, type MusicSyncScope } from '../services/MusicSyncService';
+import { lyricsService, type LyricLine } from '../services/LyricsService';
 import { useAuth } from './AuthContext';
 
 // Safe require for TrackPlayer to prevent crash if native module is missing
@@ -97,6 +98,20 @@ interface MusicContextType {
     leaveGroupMusicRoom: (groupId?: string) => Promise<void>;
     requestMusicSync: () => void;
     musicSyncScope: MusicSyncScope;
+    setIsSeeking: (seeking: boolean) => void;
+    isSeeking: boolean;
+    // Which chat "owns" the currently playing track. Lets each chat screen
+    // decide whether to show the music UI in its header — only one chat at a
+    // time can be the owner because the device only plays one track.
+    playbackOwnerChatId: string | null;
+    setPlaybackOwnerChatId: (chatId: string | null) => void;
+    // Lyrics — fetched once per song, current line tracked while playing.
+    // Lifted to context so the chat-header karaoke view can subscribe even when
+    // the player overlay is closed.
+    lyrics: LyricLine[];
+    currentLyricIndex: number;
+    showLyrics: boolean;
+    setShowLyrics: (v: boolean) => void;
 }
 
 export const MusicContext = createContext<MusicContextType | undefined>(undefined);
@@ -111,12 +126,18 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const musicStateRef = useRef(musicState);
     musicStateRef.current = musicState;
     const [isPlayerReady, setIsPlayerReady] = useState(false);
+    const [isSeeking, setIsSeeking] = useState(false);
+    const lastSeekTimeRef = useRef<number>(0);
     const [clockOffset, setClockOffset] = useState(0);
     const [repeatMode, setRepeatMode] = useState<RepeatMode>('off');
     const [shuffle, setShuffle] = useState(false);
     const [queue, setQueue] = useState<Song[]>([]);
     const [sleepTimerMinutes, setSleepTimerMinutes] = useState<number | null>(null);
     const [musicSyncScope, setMusicSyncScope] = useState<MusicSyncScope>({ type: 'none' });
+    const [playbackOwnerChatId, setPlaybackOwnerChatId] = useState<string | null>(null);
+    const [lyrics, setLyrics] = useState<LyricLine[]>([]);
+    const [currentLyricIndex, setCurrentLyricIndex] = useState(0);
+    const [showLyrics, setShowLyrics] = useState(false);
     const sleepTimerRef = useRef<NodeJS.Timeout | null>(null);
     const queueIndexRef = useRef(-1);
     
@@ -292,7 +313,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                             title: remoteState.currentSong.name,
                             artist: remoteState.currentSong.artist,
                             artwork: remoteState.currentSong.image,
-                            duration: remoteState.currentSong.duration ? Number(remoteState.currentSong.duration) / 1000 : undefined,
+                            duration: remoteState.currentSong.duration ? Number(remoteState.currentSong.duration) : undefined,
                         });
                         
                         await TrackPlayer.seekTo(targetPosSeconds);
@@ -342,7 +363,13 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                         } else {
                             await TrackPlayer.pause();
                         }
-                        setMusicState(prev => ({ ...prev, isPlaying: remoteState.isPlaying }));
+                        
+                        if (!isSeeking) {
+                            const now = Date.now();
+                            if (now - lastSeekTimeRef.current > 2000) {
+                                setMusicState(prev => ({ ...prev, isPlaying: remoteState.isPlaying }));
+                            }
+                        }
                     }
                 } else if (!remoteState.isPlaying && !remoteState.currentSong) {
                     // Partner stopped playback
@@ -366,6 +393,33 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             musicSyncService.cleanup();
         };
     }, [currentUser, isPlayerReady]);
+
+    // ── Lyrics: fetch on song change ────────────────────────────────────────
+    useEffect(() => {
+        const song = musicState.currentSong;
+        setLyrics([]);
+        setCurrentLyricIndex(0);
+        if (!song) return;
+        let cancelled = false;
+        lyricsService
+            .getLyrics(song.name, song.artist, Number(song.duration))
+            .then(result => { if (!cancelled && result) setLyrics(result.lines); })
+            .catch(e => console.warn('[MusicContext] Lyrics error:', e));
+        return () => { cancelled = true; };
+    }, [musicState.currentSong?.id]);
+
+    // ── Lyrics: track current line while playing ────────────────────────────
+    useEffect(() => {
+        if (!musicState.isPlaying || lyrics.length === 0 || !TrackPlayer) return;
+        const tick = setInterval(async () => {
+            try {
+                const posSec = await TrackPlayer.getPosition();
+                const idx = lyricsService.getCurrentLineIndex(lyrics, posSec);
+                setCurrentLyricIndex(prev => (prev === idx ? prev : idx));
+            } catch { }
+        }, 250);
+        return () => clearInterval(tick);
+    }, [musicState.isPlaying, lyrics]);
 
     // ── Heartbeat Loop: Ensures real-time alignment during playback ─────────
     useEffect(() => {
@@ -449,7 +503,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 title: song.name,
                 artist: song.artist,
                 artwork: song.image,
-                duration: song.duration ? Number(song.duration) / 1000 : undefined,
+                duration: song.duration ? Number(song.duration) : undefined,
             });
             
             if (broadcast) {
@@ -522,12 +576,29 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const seekTo = useCallback(async (position: number) => {
         if (!isPlayerReady || !TrackPlayer) return;
-        await TrackPlayer.seekTo(position / 1000);
-        musicSyncService.broadcastUpdate({
-            currentSong: musicStateRef.current.currentSong,
-            isPlaying: musicStateRef.current.isPlaying,
-            position,
-        });
+        
+        try {
+            const seconds = position / 1000;
+            console.log(`[MusicContext] ⏩ Seeking to: ${seconds}s (${position}ms)`);
+            
+            lastSeekTimeRef.current = Date.now();
+            await TrackPlayer.seekTo(seconds);
+            
+            // On iOS, sometimes seek causes a pause if buffer is low
+            if (musicStateRef.current.isPlaying) {
+                await TrackPlayer.play();
+            }
+            
+            // Update local state immediately to prevent "jump back"
+            musicSyncService.broadcastUpdate({ 
+                currentSong: musicStateRef.current.currentSong,
+                isPlaying: musicStateRef.current.isPlaying,
+                position: position,
+                updatedAt: Date.now()
+            });
+        } catch (error) {
+            console.error('[MusicContext] Seek Error:', error);
+        }
     }, [isPlayerReady]);
 
     const getPlaybackPosition = useCallback(async () => {
@@ -639,6 +710,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         repeatMode, toggleRepeat, shuffle, toggleShuffle,
         queue, addToQueue, removeFromQueue, clearQueue, playNext, playPrevious,
         sleepTimerMinutes, setSleepTimer, setMusicPartner, joinGroupMusicRoom, leaveGroupMusicRoom, requestMusicSync, musicSyncScope,
+        isSeeking, setIsSeeking,
+        playbackOwnerChatId, setPlaybackOwnerChatId,
+        lyrics, currentLyricIndex, showLyrics, setShowLyrics,
     };
     return <MusicContext.Provider value={value}>{children}</MusicContext.Provider>;
 };

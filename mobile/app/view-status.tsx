@@ -18,16 +18,9 @@ import Animated, {
     withSpring,
     SharedTransition
 } from 'react-native-reanimated';
+import { SOUL_LIQUID_TRANSITION } from '../constants/sharedTransitions';
 
-const statusTransition = SharedTransition.custom((values) => {
-  'worklet';
-  return {
-    height: withSpring(values.targetHeight, { damping: 20, stiffness: 120 }),
-    width: withSpring(values.targetWidth, { damping: 20, stiffness: 120 }),
-    originX: withSpring(values.targetOriginX, { damping: 20, stiffness: 120 }),
-    originY: withSpring(values.targetOriginY, { damping: 20, stiffness: 120 }),
-  };
-});
+const statusTransition = SOUL_LIQUID_TRANSITION;
 import { Video, ResizeMode } from 'expo-av';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -35,6 +28,7 @@ import MaskedView from '@react-native-masked-view/masked-view';
 import GlassView from '../components/ui/GlassView';
 import { SoulAvatar } from '../components/SoulAvatar';
 import { statusService } from '../services/StatusService';
+import { storageService } from '../services/StorageService';
 import { useApp } from '../context/AppContext';
 import { proxySupabaseUrl } from '../config/api';
 import { UserStatusGroup } from '../types';
@@ -87,9 +81,9 @@ export default function ViewStatusScreen() {
     const initialUriHint = typeof initialUriHintParam === 'string' ? initialUriHintParam : '';
     const initialMediaType = typeof initialMediaTypeParam === 'string' ? initialMediaTypeParam : '';
     const buildImmediateMediaSource = useCallback((uriHint?: string, mediaKey?: string) => {
-        const candidate = uriHint || mediaKey || '';
+        const candidate = storageService.normalizePseudoLocalUri(uriHint || mediaKey || '');
         if (!candidate) return null;
-        if (candidate.startsWith('file://') || candidate.startsWith('content://')) {
+        if (candidate.startsWith('file://') || candidate.startsWith('content://') || candidate.startsWith('ph://')) {
             return { uri: candidate, isLocal: true };
         }
         if (candidate.startsWith('http://') || candidate.startsWith('https://')) {
@@ -424,8 +418,6 @@ export default function ViewStatusScreen() {
         <GestureHandlerRootView style={styles.black}>
             <Animated.View 
                 style={[styles.container, animatedStyle]}
-                sharedTransitionTag={initialSharedTag}
-                sharedTransitionStyle={statusTransition}
             >
                 <StatusBar hidden />
                 
@@ -547,13 +539,39 @@ export default function ViewStatusScreen() {
                                 <Ionicons name="chevron-back" size={28} color="#fff" />
                             </Pressable>
                             <View style={styles.userRow}>
+                                {/* For my own status, prefer currentUser from AppContext.
+                                    statusGroup.user is hydrated from cached_users (which
+                                    is filled via supabase.profiles), and a bypass/super
+                                    user has no profiles row → empty avatar. */}
                                 <SoulAvatar
-                                    uri={proxySupabaseUrl(statusGroup.user.avatarUrl)}
-                                    localUri={statusGroup.user.localAvatarUri}
+                                    uri={proxySupabaseUrl(
+                                        statusGroup.isMine
+                                            ? (currentUser?.avatar || statusGroup.user.avatarUrl)
+                                            : statusGroup.user.avatarUrl
+                                    )}
+                                    localUri={
+                                        statusGroup.isMine
+                                            ? ((currentUser as any)?.localAvatarUri || statusGroup.user.localAvatarUri)
+                                            : statusGroup.user.localAvatarUri
+                                    }
+                                    avatarType={
+                                        statusGroup.isMine
+                                            ? (currentUser?.avatarType as any) || (statusGroup.user as any).avatarType
+                                            : (statusGroup.user as any).avatarType
+                                    }
+                                    teddyVariant={
+                                        statusGroup.isMine
+                                            ? (currentUser?.teddyVariant as any) || (statusGroup.user as any).teddyVariant
+                                            : (statusGroup.user as any).teddyVariant
+                                    }
                                     size={36}
                                 />
                                 <View style={{ marginLeft: 12 }}>
-                                    <Text style={styles.userName}>{statusGroup.user.displayName || statusGroup.user.username}</Text>
+                                    <Text style={styles.userName}>
+                                        {statusGroup.isMine
+                                            ? (currentUser?.name || currentUser?.username || statusGroup.user.displayName || statusGroup.user.username)
+                                            : (statusGroup.user.displayName || statusGroup.user.username)}
+                                    </Text>
                                     <Text style={styles.timeLabel}>
                                         {new Date(currentStatus.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                     </Text>

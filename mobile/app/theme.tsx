@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, Pressable, StyleSheet, StatusBar, ScrollView } from 'react-native';
 import { useNavigation } from 'expo-router';
-import { MaterialIcons } from '@expo/vector-icons';
+import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { useApp, THEMES, ThemeName } from '../context/AppContext';
 
 export default function ThemeScreen() {
@@ -51,33 +51,69 @@ export default function ThemeScreen() {
                                 ]}
                                 onPress={() => handleSelectTheme(themeName)}
                             >
-                                {/* Theme Preview */}
+                                {/* Theme Preview — faithful miniature of the real
+                                    chat screen so the picked vibe shows exactly
+                                    how everything will look: header row with
+                                    "Soul" + menu, status card, filter chips,
+                                    chat-list pills, and the glass navbar. */}
                                 <View style={[styles.themePreview, { backgroundColor: themeConfig.background }]}>
-                                    {/* Mini App Preview */}
-                                    <View style={styles.miniHeader}>
-                                        <View style={[styles.miniDot, { backgroundColor: themeConfig.primary }]} />
-                                        <View style={styles.miniLine} />
+                                    {/* Header: Soul title + 3-dot menu */}
+                                    <View style={styles.miniHeaderRow}>
+                                        <Text style={styles.miniAppTitle}>Soul</Text>
+                                        <MaterialIcons name="more-vert" size={10} color="rgba(255,255,255,0.5)" />
                                     </View>
-                                    <View style={styles.miniChatList}>
-                                        <View style={styles.miniChatItem}>
-                                            <View style={styles.miniAvatar} />
-                                            <View style={styles.miniLines}>
-                                                <View style={styles.miniLineLong} />
-                                                <View style={[styles.miniLineShort, { backgroundColor: `${themeConfig.primary}40` }]} />
-                                            </View>
-                                        </View>
-                                        <View style={styles.miniChatItem}>
-                                            <View style={styles.miniAvatar} />
-                                            <View style={styles.miniLines}>
-                                                <View style={styles.miniLineLong} />
-                                                <View style={styles.miniLineShort} />
-                                            </View>
+
+                                    {/* My Status card row */}
+                                    <View style={styles.miniStatusRow}>
+                                        <View style={[styles.miniStatusCard, { backgroundColor: themeConfig.surface }]}>
+                                            <View style={[styles.miniStatusAvatar, { backgroundColor: `${themeConfig.primary}55` }]} />
+                                            <View style={[styles.miniStatusBadge, { backgroundColor: themeConfig.primary }]} />
                                         </View>
                                     </View>
-                                    <View style={styles.miniNav}>
-                                        <View style={[styles.miniNavDot, { backgroundColor: themeConfig.primary }]} />
-                                        <View style={styles.miniNavDot} />
-                                        <View style={styles.miniNavDot} />
+
+                                    {/* Filter chip row — All (active) / Unread / Fav */}
+                                    <View style={styles.miniChipRow}>
+                                        <View style={[styles.miniChipActive, { backgroundColor: `${themeConfig.primary}33`, borderColor: themeConfig.primary }]}>
+                                            <View style={[styles.miniChipText, { backgroundColor: themeConfig.primary }]} />
+                                        </View>
+                                        <View style={[styles.miniChip, { borderColor: 'rgba(255,255,255,0.18)' }]}>
+                                            <View style={styles.miniChipDimText} />
+                                        </View>
+                                        <View style={[styles.miniChip, { borderColor: 'rgba(255,255,255,0.18)' }]}>
+                                            <View style={styles.miniChipDimText} />
+                                        </View>
+                                    </View>
+
+                                    {/* Chat list pills */}
+                                    <View style={styles.miniChatRow}>
+                                        <View style={[styles.miniAvatarPill, { backgroundColor: themeConfig.surface }]} />
+                                        <View style={[styles.miniContentPill, { backgroundColor: themeConfig.surface }]}>
+                                            <View style={styles.miniNameLine} />
+                                            <View style={[styles.miniMsgLine, { backgroundColor: themeConfig.primary }]} />
+                                        </View>
+                                    </View>
+                                    <View style={styles.miniChatRow}>
+                                        <View style={[styles.miniAvatarPill, { backgroundColor: themeConfig.surface }]} />
+                                        <View style={[styles.miniContentPill, { backgroundColor: themeConfig.surface }]}>
+                                            <View style={styles.miniNameLine} />
+                                            <View style={styles.miniMsgLine} />
+                                        </View>
+                                    </View>
+
+                                    {/* Bottom navbar: glass pill (chat/phone/settings)
+                                        with chat as the active tab in primary, plus
+                                        a separate circular search FAB on the right. */}
+                                    <View style={styles.miniNavRow}>
+                                        <View style={[styles.miniNavBar, { backgroundColor: themeConfig.surface }]}>
+                                            <View style={[styles.miniNavTab, { backgroundColor: `${themeConfig.primary}40` }]}>
+                                                <Ionicons name="chatbubble-ellipses" size={7} color={themeConfig.primary} />
+                                            </View>
+                                            <Ionicons name="call" size={8} color="rgba(255,255,255,0.55)" />
+                                            <Ionicons name="settings-sharp" size={8} color="rgba(255,255,255,0.55)" />
+                                        </View>
+                                        <View style={[styles.miniSearchFab, { backgroundColor: themeConfig.surface }]}>
+                                            <Ionicons name="search" size={8} color="rgba(255,255,255,0.7)" />
+                                        </View>
                                     </View>
                                 </View>
 
@@ -163,83 +199,154 @@ const styles = StyleSheet.create({
     themeGrid: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        // gap: 16,
-        marginHorizontal: -8, // compensates for child margins
+        gap: 12,
     },
     themeCard: {
-        width: '47%',
+        // 47.5% × 2 + 12px gap fits comfortably inside 100% on every phone
+        // size; the previous `width: 47%` + `margin: 8` total of `94% + 32px`
+        // overflowed and forced a single-column wrap.
+        width: '48%',
         backgroundColor: 'rgba(255,255,255,0.03)',
         borderRadius: 16,
         padding: 12,
         borderWidth: 2,
-        margin: 8,
+        borderColor: 'transparent',
     },
     themePreview: {
-        height: 120,
+        height: 195,
         borderRadius: 10,
         padding: 8,
         marginBottom: 12,
+        gap: 5,
     },
-    miniHeader: {
+    miniHeaderRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        // gap: 6,
-        marginBottom: 8,
-        marginBottom: 8,
+        justifyContent: 'space-between',
     },
-    miniDot: {
-        marginRight: 6,
-        height: 8,
-        borderRadius: 4,
+    miniAppTitle: {
+        color: '#fff',
+        fontSize: 9,
+        fontWeight: '900',
+        letterSpacing: 0.4,
     },
-    miniLine: {
-        flex: 1,
-        height: 4,
-        backgroundColor: 'rgba(255,255,255,0.1)',
-        borderRadius: 2,
-    },
-    miniChatList: {
-        flex: 1,
-        gap: 6,
-    },
-    miniChatItem: {
+    miniStatusRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        // gap: 6,
     },
-    miniAvatar: {
-        marginRight: 6,
+    miniStatusCard: {
+        width: 32,
+        height: 36,
+        borderRadius: 7,
+        padding: 4,
+        position: 'relative',
+    },
+    miniStatusAvatar: {
+        width: 16,
         height: 16,
         borderRadius: 8,
-        backgroundColor: 'rgba(255,255,255,0.1)',
+        alignSelf: 'center',
+        marginTop: 3,
     },
-    miniLines: {
-        flex: 1,
-        // gap: 3,
+    miniStatusBadge: {
+        position: 'absolute',
+        bottom: 3,
+        right: 3,
+        width: 7,
+        height: 7,
+        borderRadius: 3.5,
     },
-    miniLineLong: {
-        height: 4,
-        marginBottom: 3,
-        borderRadius: 2,
-        width: '80%',
-    },
-    miniLineShort: {
-        height: 3,
-        backgroundColor: 'rgba(255,255,255,0.08)',
-        borderRadius: 2,
-        width: '50%',
-    },
-    miniNav: {
+    miniChipRow: {
         flexDirection: 'row',
-        justifyContent: 'center',
-        // gap: 8,
-        marginTop: 8,
+        alignItems: 'center',
+        gap: 4,
     },
-    miniNavDot: {
-        marginHorizontal: 4,
-        height: 6,
-        borderRadius: 3,
-        backgroundColor: 'rgba(255,255,255,0.2)',
+    miniChipActive: {
+        height: 11,
+        paddingHorizontal: 5,
+        borderRadius: 6,
+        borderWidth: 0.5,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    miniChip: {
+        height: 11,
+        paddingHorizontal: 6,
+        borderRadius: 6,
+        borderWidth: 0.5,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    miniChipText: {
+        height: 2,
+        width: 12,
+        borderRadius: 1,
+    },
+    miniChipDimText: {
+        height: 2,
+        width: 12,
+        borderRadius: 1,
+        backgroundColor: 'rgba(255,255,255,0.35)',
+    },
+    miniChatRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        height: 16,
+    },
+    miniAvatarPill: {
+        width: 16,
+        height: 16,
+        borderRadius: 8,
+    },
+    miniContentPill: {
+        flex: 1,
+        height: 16,
+        borderRadius: 8,
+        paddingHorizontal: 5,
+        justifyContent: 'center',
+        gap: 2,
+    },
+    miniNameLine: {
+        height: 2.5,
+        width: '55%',
+        borderRadius: 1.5,
+        backgroundColor: 'rgba(255,255,255,0.7)',
+    },
+    miniMsgLine: {
+        height: 2,
+        width: '40%',
+        borderRadius: 1,
+        backgroundColor: 'rgba(255,255,255,0.3)',
+    },
+    miniNavRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        marginTop: 'auto',
+    },
+    miniNavBar: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-around',
+        height: 18,
+        borderRadius: 9,
+        paddingHorizontal: 4,
+    },
+    miniNavTab: {
+        width: 18,
+        height: 13,
+        borderRadius: 6.5,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    miniSearchFab: {
+        width: 18,
+        height: 18,
+        borderRadius: 9,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     themeInfo: {
         flexDirection: 'row',

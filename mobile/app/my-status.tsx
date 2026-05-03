@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,10 +10,12 @@ import {
   StatusBar,
   RefreshControl,
   TextInput,
+  useWindowDimensions,
+  BackHandler,
 } from 'react-native';
 import { supabase } from '../config/supabase';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { statusService } from '../services/StatusService';
 import { CachedStatus } from '../types';
@@ -21,20 +23,29 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import { SoulAvatar } from '../components/SoulAvatar';
 import { StatusThumbnail } from '../components/StatusThumbnail';
+import GlassView from '../components/ui/GlassView';
 import { useApp } from '../context/AppContext';
 import { MediaPickerSheet } from '../components/MediaPickerSheet';
 import { SoulLoader } from '../components/ui/SoulLoader';
-import Animated, { SharedTransition, withSpring } from 'react-native-reanimated';
+import Animated, {
+  SharedTransition,
+  withSpring,
+  withTiming,
+  withDelay,
+  useSharedValue,
+  useDerivedValue,
+  useAnimatedStyle,
+  interpolate,
+  Extrapolation,
+  Easing,
+  runOnJS,
+  FadeInDown,
+} from 'react-native-reanimated';
+import { SheetScreen } from 'react-native-sheet-transitions';
+import { myStatusTransitionState } from '../services/myStatusTransitionState';
+import { SOUL_LIQUID_TRANSITION, SOUL_LIQUID_SPRING } from '../constants/sharedTransitions';
 
-const statusTransition = SharedTransition.custom((values) => {
-  'worklet';
-  return {
-    height: withSpring(values.targetHeight, { damping: 20, stiffness: 120 }),
-    width: withSpring(values.targetWidth, { damping: 20, stiffness: 120 }),
-    originX: withSpring(values.targetOriginX, { damping: 20, stiffness: 120 }),
-    originY: withSpring(values.targetOriginY, { damping: 20, stiffness: 120 }),
-  };
-});
+const statusTransition = SOUL_LIQUID_TRANSITION;
 
 interface StatusWithViewers extends CachedStatus {
   viewers: any[];
@@ -53,10 +64,16 @@ const getRelativeTime = (timestamp: number) => {
 
 export default function MyStatusScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const params = useLocalSearchParams<{
     sharedTag?: string;
+    cardX?: string;
+    cardY?: string;
+    cardW?: string;
+    cardH?: string;
   }>();
   const insets = useSafeAreaInsets();
+  const { width: screenWidth } = useWindowDimensions();
   const { currentUser, activeTheme, myStatuses: cachedMyStatuses } = useApp();
   const sharedTag = typeof params.sharedTag === 'string' && params.sharedTag.length > 0
     ? params.sharedTag
@@ -72,6 +89,221 @@ export default function MyStatusScreen() {
   const [isCaptionModalVisible, setIsCaptionModalVisible] = useState(false);
   const [statusToEdit, setStatusToEdit] = useState<StatusWithViewers | null>(null);
   const [editedCaption, setEditedCaption] = useState('');
+
+  // ───── Hero morph (home My Status pill ↔ this sheet) ─────
+  // Mirrors the profile screen's runDismissAnimation pattern: a single
+  // shared value drives the card from the source pill's measured layout
+  // to the destination shape (a near-full-width rounded card under the
+  // header), and runs in reverse on dismiss.
+  const cardOrigin = useMemo(() => ({
+    x: Number(Array.isArray(params.cardX) ? params.cardX[0] : params.cardX),
+    y: Number(Array.isArray(params.cardY) ? params.cardY[0] : params.cardY),
+    width: Number(Array.isArray(params.cardW) ? params.cardW[0] : params.cardW),
+    height: Number(Array.isArray(params.cardH) ? params.cardH[0] : params.cardH),
+  }), [params.cardH, params.cardW, params.cardX, params.cardY]);
+  const useSharedStatusTransition = false; // Reverting to manual morph for maximum stability and control
+  const hasCardMorph = Number.isFinite(cardOrigin.x)
+    && Number.isFinite(cardOrigin.y)
+    && Number.isFinite(cardOrigin.width)
+    && Number.isFinite(cardOrigin.height)
+    && cardOrigin.width > 0
+    && cardOrigin.height > 0;
+
+  // Destination shape — a rounded card centered horizontally, just below
+  // the header, sized to wrap the list + add row.
+  const cardDestX = 16;
+  const cardDestY = insets.top + 60;
+  const cardDestW = screenWidth - 32;
+  const hasStatuses = myStatuses.length > 0;
+  const cardDestH = hasStatuses
+    ? Math.max(210, Math.min(myStatuses.length, 6) * 76 + 78)
+    : 104;
+
+  const heroMorphProgress = useSharedValue(hasCardMorph ? 0 : 1);
+  const headerOpacity = useSharedValue(hasCardMorph ? 0 : 1);
+  const bgOpacity = useSharedValue(1);
+  const isClosingRef = useRef(false);
+  const allowNativePopRef = useRef(false);
+  const dismissedRef = useRef(false);
+
+  useEffect(() => {
+    if (!hasCardMorph) {
+      heroMorphProgress.value = 1;
+      headerOpacity.value = 1;
+      return;
+    }
+    heroMorphProgress.value = withSpring(1, {
+      damping: 28,
+      stiffness: 180,
+      mass: 0.9,
+      overshootClamping: true,
+    });
+    headerOpacity.value = withDelay(
+      150,
+      withTiming(1, { duration: 250, easing: Easing.out(Easing.cubic) })
+    );
+  }, [hasCardMorph, headerOpacity, heroMorphProgress]);
+  
+  const isMorphing = useDerivedValue(() => heroMorphProgress.value < 1);
+
+  const heroCardAnimatedStyle = useAnimatedStyle(() => {
+    'worklet';
+    if (!hasCardMorph) {
+      return {
+        left: cardDestX,
+        top: cardDestY,
+        width: cardDestW,
+        height: cardDestH,
+        borderRadius: 16,
+      };
+    }
+    const p = heroMorphProgress.value;
+    const sourceW = cardOrigin.width;
+    const sourceH = cardOrigin.height;
+
+    return {
+      left: cardDestX,
+      top: cardDestY,
+      width: interpolate(p, [0, 1], [sourceW, cardDestW], Extrapolation.CLAMP),
+      height: interpolate(p, [0, 1], [sourceH, cardDestH], Extrapolation.CLAMP),
+      // LIQUID RESHAPE: Start circular, morph through organic shape, land on rounded card
+      borderRadius: interpolate(p, [0, 0.7, 1], [sourceW / 2, 32, 16], Extrapolation.CLAMP),
+      transform: [
+        {
+          translateX: interpolate(p, [0, 1], [cardOrigin.x - cardDestX, 0], Extrapolation.CLAMP),
+        },
+        {
+          translateY: interpolate(p, [0, 1], [cardOrigin.y - cardDestY, 0], Extrapolation.CLAMP),
+        },
+        {
+          scale: interpolate(p, [0, 1], [0.98, 1], Extrapolation.CLAMP)
+        }
+      ] as any,
+    };
+  });
+
+  const chromeAnimatedStyle = useAnimatedStyle(() => {
+    'worklet';
+    const p = heroMorphProgress.value;
+    return {
+      opacity: headerOpacity.value,
+      transform: [
+        { translateY: interpolate(headerOpacity.value, [0, 1], [15, 0], Extrapolation.CLAMP) },
+        { scale: interpolate(p, [0, 1], [0.95, 1], Extrapolation.CLAMP) }
+      ] as any,
+    };
+  });
+
+  const realContentAnimatedStyle = useAnimatedStyle(() => {
+    'worklet';
+    const p = heroMorphProgress.value;
+    // Cross-fade the list content as we approach the destination
+    return { 
+      opacity: interpolate(p, [0.8, 1], [0, 1], Extrapolation.CLAMP),
+      transform: [
+        { scale: interpolate(p, [0.8, 1], [0.96, 1], Extrapolation.CLAMP) },
+        { translateY: interpolate(p, [0.8, 1], [15, 0], Extrapolation.CLAMP) }
+      ] as any
+    };
+  });
+
+  // Source-pill content (status thumbnail + "My Status" label) sits inside
+  // the hero card and is the inverse of the morph progress: fully visible at
+  // origin (small pill) and faded out at destination (where the list fades
+  // in). On dismiss it re-emerges as the card shrinks, so the user sees the
+  // pill content reappear instead of an empty gray rectangle.
+  const sourceContentAnimatedStyle = useAnimatedStyle(() => {
+    'worklet';
+    const p = heroMorphProgress.value;
+    return {
+      opacity: interpolate(p, [0, 0.9, 1], [1, 1, 0], Extrapolation.CLAMP),
+    };
+  });
+
+  // Pick the same "latest with media" status the home pill renders, so the
+  // morph's source layer matches what the user just tapped pixel-for-pixel.
+  const sourceStatus = useMemo(() => {
+    const reversed = [...cachedMyStatuses].reverse();
+    return (
+      reversed.find((status) => !!(status.mediaLocalPath || status.mediaUrl))
+      || reversed.find((status) => !!status.mediaKey)
+      || cachedMyStatuses[cachedMyStatuses.length - 1]
+    );
+  }, [cachedMyStatuses]);
+
+  const pageBackgroundStyle = useAnimatedStyle(() => {
+    'worklet';
+    return { opacity: bgOpacity.value };
+  });
+
+  const finishDismiss = useCallback(() => {
+    if (dismissedRef.current) return;
+    dismissedRef.current = true;
+    myStatusTransitionState.clear();
+    allowNativePopRef.current = true;
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    } else {
+      router.back();
+    }
+  }, [navigation, router]);
+
+  const runDismissAnimation = useCallback(() => {
+    if (isClosingRef.current) return;
+    isClosingRef.current = true;
+    myStatusTransitionState.dismiss();
+
+    if (!hasCardMorph) {
+      bgOpacity.value = withTiming(0, { duration: 200 });
+      headerOpacity.value = withTiming(0, { duration: 200 });
+      setTimeout(finishDismiss, 200);
+      return;
+    }
+
+    const DISMISS_DURATION = 260;
+    const dismissEasing = Easing.bezier(0.4, 0, 0.2, 1);
+
+    headerOpacity.value = withTiming(0, {
+      duration: 140,
+      easing: dismissEasing,
+    });
+    bgOpacity.value = withTiming(0, {
+      duration: 220,
+      easing: dismissEasing,
+    });
+    heroMorphProgress.value = withTiming(0, {
+      duration: DISMISS_DURATION,
+      easing: dismissEasing,
+    }, (finished) => {
+      'worklet';
+      if (finished) runOnJS(finishDismiss)();
+    });
+
+    // Safety net in case the worklet callback doesn't fire.
+    setTimeout(() => {
+      if (isClosingRef.current) finishDismiss();
+    }, DISMISS_DURATION + 40);
+  }, [bgOpacity, finishDismiss, hasCardMorph, headerOpacity, heroMorphProgress]);
+
+  // Intercept hardware back + nav-stack pop so the dismiss animates instead
+  // of teleporting back to the home screen.
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (event: any) => {
+      if (!hasCardMorph || isClosingRef.current || allowNativePopRef.current) return;
+      event.preventDefault();
+      runDismissAnimation();
+    });
+    const backSub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!hasCardMorph || isClosingRef.current) return false;
+      runDismissAnimation();
+      return true;
+    });
+    return () => {
+      allowNativePopRef.current = false;
+      unsubscribe();
+      backSub.remove();
+    };
+  }, [hasCardMorph, navigation, runDismissAnimation]);
 
   useEffect(() => {
     setMyStatuses((prev) => {
@@ -181,9 +413,11 @@ export default function MyStatusScreen() {
           onPress: async () => {
              try {
                setIsActionBusy(true);
+               setMyStatuses((prev) => prev.filter((s) => s.id !== status.id));
                await statusService.deleteMyStatus(status.id, status.mediaKey || '');
                await loadData();
              } catch (e) {
+               await loadData();
                const message = e instanceof Error ? e.message : 'Failed to delete status.';
                Alert.alert('Delete failed', message);
              } finally {
@@ -239,14 +473,16 @@ export default function MyStatusScreen() {
     const hasViewers = item.viewers && item.viewers.length > 0;
     
     return (
-      <View style={styles.itemWrapper}>
+      <Animated.View 
+        entering={FadeInDown.duration(400).delay(150 + index * 40).springify().damping(20).stiffness(120)}
+      >
         <View style={styles.statusItem}>
           <Pressable 
             style={styles.itemMain}
             onPress={() => router.push({
-              pathname: '/view-status',
-              params: {
-                id: currentUser?.id,
+              pathname: '/view-status' as any,
+              params: { 
+                id: currentUser?.id || item.userId,
                 sharedTag: `status-hero-status-${item.id}`,
                 statusId: item.id,
                 mediaKey: item.mediaKey || '',
@@ -256,11 +492,7 @@ export default function MyStatusScreen() {
             })}
           >
             <View style={styles.avatarContainer}>
-              <Animated.View
-                style={styles.statusThumbShell}
-                sharedTransitionTag={`status-hero-status-${item.id}`}
-                sharedTransitionStyle={statusTransition}
-              >
+              <Animated.View style={styles.statusThumbShell}>
                 <StatusThumbnail
                   statusId={item.id}
                   mediaKey={item.mediaKey}
@@ -296,68 +528,109 @@ export default function MyStatusScreen() {
           </Pressable>
         </View>
         {index < myStatuses.length - 1 && <View style={styles.separator} />}
-      </View>
+      </Animated.View>
     );
   };
 
   return (
-    <View style={styles.container}>
-      <LinearGradient colors={['#000', '#0a0a0a']} style={StyleSheet.absoluteFill} />
-      <StatusBar barStyle="light-content" />
-      
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={28} color="#fff" />
-        </Pressable>
-        <Text style={styles.headerTitle}>My status</Text>
-        <Pressable onPress={() => setIsMediaPickerVisible(true)} style={styles.editBtn}>
-          <Text style={styles.editText}>Add</Text>
-        </Pressable>
-      </View>
+    <SheetScreen
+      onClose={() => {
+        if (!isClosingRef.current) runDismissAnimation();
+      }}
+      style={{ backgroundColor: 'transparent' }}
+      opacityOnGestureMove
+      disableRootScale
+      customBackground={
+        <Animated.View style={[StyleSheet.absoluteFill, pageBackgroundStyle, { backgroundColor: '#000' }]} />
+      }
+    >
+      <View style={styles.container}>
+        <LinearGradient colors={['#000', '#0a0a0a']} style={StyleSheet.absoluteFill} />
+        <StatusBar barStyle="light-content" />
 
-      {/* Main Content - Always render to allow Shared Transition to find the tag */}
-      <View style={styles.content}>
-          <Animated.View 
-            style={styles.card} 
-            sharedTransitionTag={sharedTag}
-            sharedTransitionStyle={statusTransition}
-          >
+        {/* Header — fades in via headerOpacity once the morph settles */}
+        <Animated.View style={[styles.header, { paddingTop: insets.top + 10 }, chromeAnimatedStyle]}>
+          <Pressable onPress={() => runDismissAnimation()} style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={28} color="#fff" />
+          </Pressable>
+          <Text style={styles.headerTitle}>My status</Text>
+          <Pressable onPress={() => setIsMediaPickerVisible(true)} style={styles.editBtn}>
+            <Text style={styles.editText}>Add</Text>
+          </Pressable>
+        </Animated.View>
+
+        {/* Hero card — absolutely positioned so its left/top/width/height
+            can morph from the home pill's coords to the destination shape. */}
+        <Animated.View
+          style={[styles.heroCard, heroCardAnimatedStyle]}
+        >
+          {/* 1. LIQUID GHOST LAYER (Source image) */}
+          {hasStatuses && (
+            <Animated.View
+              pointerEvents="none"
+              style={[StyleSheet.absoluteFill, sourceContentAnimatedStyle]}
+            >
+              {sourceStatus && (
+                <StatusThumbnail
+                  statusId={sourceStatus.id}
+                  mediaKey={sourceStatus.mediaKey}
+                  uriHint={sourceStatus.mediaLocalPath || sourceStatus.mediaUrl}
+                  mediaType={sourceStatus.mediaType as any}
+                  style={StyleSheet.absoluteFill}
+                  showLoader={false}
+                />
+              )}
+              <LinearGradient
+                colors={['rgba(0,0,0,0.5)', 'transparent']}
+                style={styles.heroSourceTopGradient}
+                pointerEvents="none"
+              />
+              <View style={styles.heroSourceLabelWrapper}>
+                <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
+                <View style={styles.heroSourceLabelContent}>
+                  <Text style={styles.heroSourceLabelText} numberOfLines={1}>My Status</Text>
+                </View>
+              </View>
+            </Animated.View>
+          )}
+
+          {/* 2. REAL CONTENT LAYER (The list) */}
+          <Animated.View style={[StyleSheet.absoluteFill, realContentAnimatedStyle as any]}>
             <FlatList
               data={myStatuses}
               renderItem={renderItem}
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.list}
               scrollEnabled={myStatuses.length > 5}
-              ListEmptyComponent={() => <View style={{ height: 10 }} />}
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />
               }
             />
-            
-            {/* Add Status Row (Integrated in Card) */}
-            <View style={styles.separator} />
-            <Pressable 
-              style={styles.addStatusRow}
-              onPress={() => setIsMediaPickerVisible(true)}
-            >
+            {hasStatuses && <View style={styles.separator} />}
+            <Pressable style={styles.addStatusRow} onPress={() => setIsMediaPickerVisible(true)}>
               <View style={[styles.plusContainer, { backgroundColor: activeTheme.primary }]}>
                 <Ionicons name="add" size={24} color="#fff" />
               </View>
               <Text style={styles.addStatusText}>Add status</Text>
             </Pressable>
           </Animated.View>
+        </Animated.View>
 
-          {/* Footer */}
-          <View style={styles.footer}>
-            <View style={styles.privacyRow}>
-              <Ionicons name="lock-closed" size={12} color="rgba(255,255,255,0.4)" style={{ marginRight: 6 }} />
-              <Text style={styles.footerText}>
-                Your status updates are <Text style={[styles.encryptedText, { color: activeTheme.primary }]}>end-to-end encrypted</Text>. They will disappear after 24 hours.
-              </Text>
-            </View>
-        </View>
-      </View>
+        {/* Footer — sits below the destination card position, fades with chrome */}
+        <Animated.View
+          style={[
+            styles.footer,
+            { position: 'absolute', left: 0, right: 0, top: cardDestY + cardDestH + 16 },
+            chromeAnimatedStyle,
+          ]}
+        >
+          <View style={styles.privacyRow}>
+            <Ionicons name="lock-closed" size={12} color="rgba(255,255,255,0.4)" style={{ marginRight: 6 }} />
+            <Text style={styles.footerText}>
+              Your status updates are <Text style={[styles.encryptedText, { color: activeTheme.primary }]}>end-to-end encrypted</Text>. They will disappear after 24 hours.
+            </Text>
+          </View>
+        </Animated.View>
 
       <MediaPickerSheet
         visible={isMediaPickerVisible}
@@ -413,7 +686,8 @@ export default function MyStatusScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+      </View>
+    </SheetScreen>
   );
 }
 
@@ -431,11 +705,52 @@ const styles = StyleSheet.create({
   editText: { color: '#fff', fontSize: 17, fontWeight: '400' },
   headerTitle: { color: '#fff', fontSize: 17, fontWeight: '700' },
   content: { flex: 1, paddingHorizontal: 16 },
-  card: { 
-    backgroundColor: 'rgba(255,255,255,0.08)', 
-    borderRadius: 16, 
+  card: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 16,
     overflow: 'hidden',
-    marginTop: 10
+    marginTop: 10,
+  },
+  // Absolutely-positioned wrapper for the hero card so left/top/width/height
+  // can be animated to morph from the home pill's measured layout to its
+  // destination shape under the header.
+  heroCard: {
+    position: 'absolute',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    overflow: 'hidden',
+  },
+  // Source-pill mirror styles — match the home StatusCardWrapper so the
+  // morph keeps the same visual identity end-to-end.
+  heroSourceTopGradient: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 60,
+    zIndex: 1,
+  },
+  heroSourceLabelWrapper: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 54,
+    overflow: 'hidden',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.1)',
+  },
+  heroSourceLabelContent: {
+    flex: 1,
+    padding: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroSourceLabelText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.4,
+    textAlign: 'center',
   },
   list: { paddingVertical: 5 },
   itemWrapper: { paddingHorizontal: 16 },
@@ -443,6 +758,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', 
     alignItems: 'center', 
     paddingVertical: 12,
+    paddingHorizontal: 16,
   },
   itemMain: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   avatarContainer: {
@@ -471,8 +787,8 @@ const styles = StyleSheet.create({
   addStatusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    paddingLeft: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
   },
   plusContainer: {
     width: 48,

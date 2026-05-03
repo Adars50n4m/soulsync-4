@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
     View, Text, Image, Pressable, StyleSheet, Modal,
     ScrollView, TextInput,
-    Dimensions, PanResponder, KeyboardAvoidingView, Platform, Keyboard
+    Dimensions, KeyboardAvoidingView, Platform, Keyboard
 } from 'react-native';
+import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SoulLoader } from './ui/SoulLoader';
 import Animated, {
     useSharedValue,
@@ -26,7 +27,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { getSaavnApiUrl } from '../config/api';
 import { useApp } from '../context/AppContext';
 import { Song } from '../types';
-import { lyricsService, LyricLine } from '../services/LyricsService';
+import type { LyricLine } from '../services/LyricsService';
 
 const { width, height } = Dimensions.get('window');
 
@@ -34,6 +35,9 @@ interface MusicPlayerOverlayProps {
     isOpen: boolean;
     onClose: () => void;
     contactName?: string;
+    // ID of the chat that owns this player instance. Set on the music context
+    // whenever a song is played so other chats don't show this chat's song.
+    chatId?: string;
 }
 
 const formatTime = (seconds: number) => {
@@ -63,7 +67,9 @@ const PlayButton = ({ isPlaying, onPress, accentColor }: { isPlaying: boolean; o
             onPress={onPress}
             onPressIn={handlePressIn}
             onPressOut={handlePressOut}
-            hitSlop={25}
+            // No upward hit extension — the seek bar sits above this button and
+            // a symmetric hitSlop would steal taps from the bar's bottom edge.
+            hitSlop={{ top: 0, bottom: 25, left: 25, right: 25 }}
         >
             <Animated.View style={[styles.playButton, animatedStyle]}>
                 <MaterialIcons name={isPlaying ? 'pause' : 'play-arrow'} size={44} color="#000" />
@@ -82,7 +88,7 @@ const IconButton = ({ name, size, color, onPress }: { name: any; size: number; c
             onPress={onPress}
             onPressIn={() => { scale.value = withSpring(0.8, { damping: 15, stiffness: 400 }); }}
             onPressOut={() => { scale.value = withSpring(1, { damping: 10, stiffness: 200 }); }}
-            hitSlop={20}
+            hitSlop={{ top: 4, bottom: 20, left: 20, right: 20 }}
         >
             <Animated.View style={animStyle}>
                 <MaterialIcons name={name} size={size} color={color} />
@@ -100,6 +106,7 @@ const ArtworkView = ({
     lyricsScrollRef,
     themeAccent,
     isPlaying,
+    onLyricPress,
 }: any) => {
     const opacity = useSharedValue(1);
     const prevUri = useRef(uri);
@@ -127,15 +134,20 @@ const ArtworkView = ({
                         contentContainerStyle={{ paddingVertical: 20 }}
                     >
                         {lyrics.map((line: LyricLine, idx: number) => (
-                            <Text
+                            <Pressable
                                 key={idx}
-                                style={[
-                                    styles.lyricLine,
-                                    idx === currentLyricIndex && styles.lyricLineActive
-                                ]}
+                                onPress={() => onLyricPress?.(line)}
+                                hitSlop={6}
                             >
-                                {line.text}
-                            </Text>
+                                <Text
+                                    style={[
+                                        styles.lyricLine,
+                                        idx === currentLyricIndex && styles.lyricLineActive
+                                    ]}
+                                >
+                                    {line.text}
+                                </Text>
+                            </Pressable>
                         ))}
                     </ScrollView>
                 </View>
@@ -161,27 +173,37 @@ const ArtworkView = ({
 export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
     isOpen,
     onClose,
-    contactName
+    contactName,
+    chatId,
 }) => {
     const { musicState, playSong, togglePlayMusic, toggleFavoriteSong, getPlaybackPosition, seekTo, activeTheme, musicSyncScope,
-        repeatMode, toggleRepeat, shuffle, toggleShuffle, queue, addToQueue, removeFromQueue, clearQueue, playNext, playPrevious } = useApp() as any;
+        repeatMode, toggleRepeat, shuffle, toggleShuffle, queue, addToQueue, removeFromQueue, clearQueue, playNext, playPrevious, isSeeking, setIsSeeking,
+        setPlaybackOwnerChatId,
+        lyrics, currentLyricIndex, showLyrics, setShowLyrics } = useApp() as any;
+
+    // Wrap playSong so this chat is recorded as the playback owner. Other chats
+    // hide their music UI when their id doesn't match.
+    const playSongInThisChat = useCallback((song: Song) => {
+        if (chatId) setPlaybackOwnerChatId(chatId);
+        return playSong(song);
+    }, [chatId, playSong, setPlaybackOwnerChatId]);
     const themeAccent = activeTheme?.primary || '#fff';
     const [searchResults, setSearchResults] = useState<Song[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [activeTab, setActiveTab] = useState<'music' | 'favorites' | 'queue'>('music');
 
-    // Lyrics State
-    const [lyrics, setLyrics] = useState<LyricLine[]>([]);
-    const [lyricsLoading, setLyricsLoading] = useState(false);
-    const [showLyrics, setShowLyrics] = useState(false);
-    const [currentLyricIndex, setCurrentLyricIndex] = useState(0);
+    // Lyrics state lives in MusicContext now (so the chat header can subscribe).
     const lyricsScrollRef = useRef<ScrollView>(null);
 
     // Playback State
     const [position, setPosition] = useState(0);
     const [duration, setDuration] = useState(0);
-    const [isSeeking, setIsSeeking] = useState(false);
+    const [isScrubbing, setIsScrubbing] = useState(false);
+    const scrubThumbScale = useSharedValue(1);
+    const animatedScrubThumbStyle = useAnimatedStyle(() => ({
+        transform: [{ scale: scrubThumbScale.value }],
+    }));
     const [seekPosition, setSeekPosition] = useState(0);
 
     // ─── Reanimated Shared Values ────────────────────────────────────────────
@@ -280,40 +302,17 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
         height: expandedBaseHeight.value,
     }));
 
-    // ─── Playback polling ────────────────────────────────────────────────────
+    // ─── Playback position polling (lyrics tracking lives in MusicContext) ──
     useEffect(() => {
         let interval: any;
-        if (musicState.isPlaying && !isSeeking) {
+        if (musicState.isPlaying && !isSeeking && !isScrubbing) {
             interval = setInterval(async () => {
                 const pos = await getPlaybackPosition();
-                const posSeconds = pos / 1000;
-                setPosition(posSeconds);
-
-                if (lyrics.length > 0) {
-                    const idx = lyricsService.getCurrentLineIndex(lyrics, posSeconds);
-                    if (idx !== currentLyricIndex) setCurrentLyricIndex(idx);
-                }
+                setPosition(pos / 1000);
             }, 200);
         }
         return () => clearInterval(interval);
-    }, [musicState.isPlaying, isSeeking, lyrics, currentLyricIndex]);
-
-    // ─── Lyrics loader ───────────────────────────────────────────────────────
-    useEffect(() => {
-        const song = musicState.currentSong;
-        if (song) {
-            setLyricsLoading(true);
-            setLyrics([]);
-            setShowLyrics(false);
-            setCurrentLyricIndex(0);
-            lyricsService.getLyrics(song.name, song.artist, Number(song.duration))
-                .then(result => { if (result) setLyrics(result.lines); })
-                .catch(e => console.warn('[MusicPlayerOverlay] Lyrics error:', e))
-                .finally(() => setLyricsLoading(false));
-        } else {
-            setLyrics([]);
-        }
-    }, [musicState.currentSong?.id]);
+    }, [musicState.isPlaying, isSeeking, isScrubbing]);
 
     // ─── Animate header height when lyrics toggle ────────────────────────────
     useEffect(() => {
@@ -372,37 +371,120 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
     };
 
     const isFavorite = (song: Song) => musicState.favorites.some((s: any) => s.id === song.id);
+    const progressBarRef = useRef<View>(null);
 
-    // ─── Seek via PanResponder ───────────────────────────────────────────────
-    const [progressBarLayout, setProgressBarLayout] = useState({ width: 0, x: 0 });
-    const panResponder = useRef(
-        PanResponder.create({
-            onStartShouldSetPanResponder: () => true,
-            onMoveShouldSetPanResponder: () => true,
-            onPanResponderGrant: (evt) => {
-                setIsSeeking(true);
-                const touchX = evt.nativeEvent.locationX;
-                const percent = Math.max(0, Math.min(1, touchX / (progressBarLayout.width || width - 48)));
-                setSeekPosition(percent * duration);
-            },
-            onPanResponderMove: (evt) => {
-                const touchX = evt.nativeEvent.locationX;
-                const percent = Math.max(0, Math.min(1, touchX / (progressBarLayout.width || width - 48)));
-                setSeekPosition(percent * duration);
-            },
-            onPanResponderRelease: (evt) => {
-                const touchX = evt.nativeEvent.locationX;
-                const percent = Math.max(0, Math.min(1, touchX / (progressBarLayout.width || width - 48)));
-                const finalSeekTime = percent * duration;
-                seekTo(finalSeekTime * 1000);
-                setPosition(finalSeekTime);
-                setIsSeeking(false);
-            },
+    const progressBarWidthShared = useSharedValue(width - 48);
+    const seekSettleTimer = useRef<any>(null);
+
+    // Live, UI-thread-driven thumb percentage (0..1). During scrub it's set by the
+    // gesture; otherwise it tracks the polled `position`.
+    const scrubPercent = useSharedValue(0);
+    const isScrubbingShared = useSharedValue(false);
+
+    useEffect(() => {
+        if (!isScrubbing && duration > 0) {
+            scrubPercent.value = Math.min(position / duration, 1);
+        }
+    }, [position, duration, isScrubbing]);
+
+    const commitSeek = useCallback(async (targetSec: number) => {
+        // Optimistically pin the displayed position so the thumb doesn't snap
+        // back while the native player completes the seek.
+        setSeekPosition(targetSec);
+        setPosition(targetSec);
+
+        if (seekSettleTimer.current) clearTimeout(seekSettleTimer.current);
+
+        try {
+            await seekTo(targetSec * 1000);
+        } catch (e) {
+            console.warn('[MusicPlayerOverlay] seek failed:', e);
+        }
+
+        // iOS reports the old position for ~150–250ms after seekTo() resolves.
+        // Keep scrub flags up so the polling loop doesn't clobber the new value.
+        seekSettleTimer.current = setTimeout(() => {
+            setIsScrubbing(false);
+            setIsSeeking(false);
+            seekSettleTimer.current = null;
+        }, 300);
+    }, [seekTo, setIsSeeking]);
+
+    const beginScrub = useCallback(() => {
+        if (seekSettleTimer.current) {
+            clearTimeout(seekSettleTimer.current);
+            seekSettleTimer.current = null;
+        }
+        setIsScrubbing(true);
+        setIsSeeking(true);
+    }, [setIsSeeking]);
+
+    const updateScrubPosition = useCallback((targetSec: number) => {
+        setSeekPosition(targetSec);
+    }, []);
+
+    useEffect(() => () => {
+        if (seekSettleTimer.current) clearTimeout(seekSettleTimer.current);
+    }, []);
+
+    // Pan handles drag-to-scrub. Pan with minDistance(0) doesn't reliably fire
+    // onEnd for a pure tap, so we compose with Tap which always commits on lift.
+    const panGesture = Gesture.Pan()
+        .minDistance(0)
+        .onBegin((e) => {
+            'worklet';
+            isScrubbingShared.value = true;
+            const w = progressBarWidthShared.value || 1;
+            const percent = Math.max(0, Math.min(1, e.x / w));
+            scrubPercent.value = percent;
+            scrubThumbScale.value = withTiming(1.4, { duration: 80 });
+            runOnJS(beginScrub)();
+            runOnJS(updateScrubPosition)(percent * duration);
         })
-    ).current;
+        .onUpdate((e) => {
+            'worklet';
+            const w = progressBarWidthShared.value || 1;
+            const percent = Math.max(0, Math.min(1, e.x / w));
+            scrubPercent.value = percent;
+            runOnJS(updateScrubPosition)(percent * duration);
+        })
+        .onEnd((e) => {
+            'worklet';
+            const w = progressBarWidthShared.value || 1;
+            const percent = Math.max(0, Math.min(1, e.x / w));
+            scrubPercent.value = percent;
+            scrubThumbScale.value = withTiming(1, { duration: 120 });
+            isScrubbingShared.value = false;
+            runOnJS(commitSeek)(percent * duration);
+        })
+        .onFinalize(() => {
+            'worklet';
+            scrubThumbScale.value = withTiming(1, { duration: 120 });
+            isScrubbingShared.value = false;
+        });
 
-    const currentDisplayPosition = isSeeking ? seekPosition : position;
-    const progressPercent = duration > 0 ? Math.min((currentDisplayPosition / duration) * 100, 100) : 0;
+    const tapGesture = Gesture.Tap()
+        .maxDuration(400)
+        .onEnd((e, success) => {
+            'worklet';
+            if (!success) return;
+            const w = progressBarWidthShared.value || 1;
+            const percent = Math.max(0, Math.min(1, e.x / w));
+            scrubPercent.value = percent;
+            runOnJS(commitSeek)(percent * duration);
+        });
+
+    const seekGesture = Gesture.Exclusive(panGesture, tapGesture);
+
+    const animatedProgressFillStyle = useAnimatedStyle(() => ({
+        width: `${scrubPercent.value * 100}%`,
+    }));
+
+    const animatedThumbPositionStyle = useAnimatedStyle(() => ({
+        left: `${scrubPercent.value * 100}%`,
+    }));
+
+    const currentDisplayPosition = isScrubbing ? seekPosition : position;
 
     if (!isOpen) return null;
 
@@ -414,6 +496,10 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
             onRequestClose={onClose}
             statusBarTranslucent={true}
         >
+            {/* Modals mount in a separate native view tree on iOS — gestures inside
+                require their own GestureHandlerRootView, the outer one in _layout
+                doesn't reach in here. */}
+            <GestureHandlerRootView style={{ flex: 1 }}>
             {/* Backdrop */}
             <Animated.View style={[StyleSheet.absoluteFill, styles.backdropBase, backdropStyle]}>
                 <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
@@ -487,7 +573,7 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                                                 isFav={isFavorite(song)}
                                                 inQueue={queue.some((s: any) => s.id === song.id)}
                                                 themeAccent={themeAccent}
-                                                onPlay={() => playSong(song)}
+                                                onPlay={() => playSongInThisChat(song)}
                                                 onFav={() => toggleFavoriteSong(song)}
                                                 onQueue={() => addToQueue(song)}
                                             />
@@ -521,6 +607,12 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                                         lyricsScrollRef={lyricsScrollRef}
                                         themeAccent={themeAccent}
                                         isPlaying={musicState.isPlaying}
+                                        onLyricPress={(line: LyricLine) => {
+                                            setPosition(line.time);
+                                            setSeekPosition(line.time);
+                                            scrubPercent.value = duration > 0 ? Math.min(line.time / duration, 1) : 0;
+                                            commitSeek(line.time);
+                                        }}
                                     />
 
                                     <View style={styles.trackInfo}>
@@ -537,23 +629,32 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                                         )}
                                     </View>
 
-                                    {/* Progress Bar */}
                                     <View style={styles.progressBarContainer}>
-                                        <View
-                                            style={styles.progressBarTouchArea}
-                                            {...panResponder.panHandlers}
-                                            onLayout={(e) => setProgressBarLayout({
-                                                width: e.nativeEvent.layout.width,
-                                                x: e.nativeEvent.layout.x
-                                            })}
-                                        >
-                                            <View style={styles.progressBar}>
-                                                <View style={[styles.progressFill, { width: `${progressPercent}%`, backgroundColor: themeAccent }]} />
+                                        <GestureDetector gesture={seekGesture}>
+                                            <View
+                                                ref={progressBarRef}
+                                                onLayout={(e) => {
+                                                    progressBarWidthShared.value = e.nativeEvent.layout.width;
+                                                }}
+                                                style={styles.progressBarTouchArea}
+                                                collapsable={false}
+                                            >
+                                                <View style={styles.progressBar} pointerEvents="none">
+                                                    <Animated.View style={[styles.progressFill, { backgroundColor: themeAccent }, animatedProgressFillStyle]} />
+                                                    <Animated.View
+                                                        style={[
+                                                            styles.progressThumb,
+                                                            { backgroundColor: themeAccent },
+                                                            animatedThumbPositionStyle,
+                                                            animatedScrubThumbStyle,
+                                                        ]}
+                                                    />
+                                                </View>
                                             </View>
-                                        </View>
+                                        </GestureDetector>
                                         <View style={styles.timeLabels}>
                                             <Text style={styles.timeText}>{formatTime(currentDisplayPosition)}</Text>
-                                            <Text style={styles.timeText}>{formatTime(Math.max(currentDisplayPosition, duration))}</Text>
+                                            <Text style={styles.timeText}>{formatTime(duration)}</Text>
                                         </View>
                                     </View>
 
@@ -608,6 +709,7 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                     </KeyboardAvoidingView>
                 </GlassView>
             </Animated.View>
+            </GestureHandlerRootView>
         </Modal>
     );
 };
@@ -913,18 +1015,30 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     progressBarTouchArea: {
-        height: 20,
+        // Larger tap target. marginVertical compensates so visible layout doesn't shift,
+        // but the gesture detector now claims a 36px-tall strip — defeating the
+        // play button's hit slop that sits just below.
+        height: 36,
+        marginVertical: -8,
         justifyContent: 'center',
+        zIndex: 50,
     },
     progressBar: {
-        height: 6,
+        height: 4,
         backgroundColor: 'rgba(255,255,255,0.05)',
-        borderRadius: 3,
-        overflow: 'hidden',
+        borderRadius: 2,
+        justifyContent: 'center',
     },
     progressFill: {
         height: '100%',
-        borderRadius: 3,
+        borderRadius: 2,
+    },
+    progressThumb: {
+        position: 'absolute',
+        width: 12,
+        height: 12,
+        borderRadius: 6,
+        marginLeft: -6,
     },
     timeLabels: {
         flexDirection: 'row',

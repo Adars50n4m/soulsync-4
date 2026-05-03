@@ -58,10 +58,23 @@ const isPayloadTooLargeError = (error: any): boolean => {
 const inFlightUploads = new Map<string, Promise<string | null>>();
 
 export const storageService = {
+    normalizePseudoLocalUri(uri: string): string {
+        if (!uri) return uri;
+        const markers = ['ph://', 'file://', 'content://'];
+        for (const marker of markers) {
+            const idx = uri.indexOf(marker);
+            if (idx > 0) {
+                return uri.slice(idx);
+            }
+        }
+        return uri;
+    },
+
     /**
      * Resolves a potentially complex URI (like ph:// on iOS) to a local file path.
      */
     async resolveUri(uri: string): Promise<string> {
+        uri = this.normalizePseudoLocalUri(uri);
         if (Platform.OS === 'ios' && uri.startsWith('ph://')) {
             try {
                 const assetId = uri.substring(5).split('/')[0];
@@ -165,7 +178,21 @@ export const storageService = {
         formData.append('bucket', bucket);
         formData.append('folder', folder || '');
 
-        onProgress?.(0.4);
+        onProgress?.(0.05);
+
+        // fetch() can't surface upload-progress events, so simulate an
+        // asymptotic ramp toward 0.95 sized to the file. Mirrors the
+        // approach used in R2StorageService so the progress ring keeps
+        // moving instead of jumping 0 → 1 at the end.
+        const fileSizeKB = ((fileCheck as any).size || 0) / 1024;
+        const estimatedMs = Math.max(2000, (fileSizeKB / 150) * 1000);
+        let simProgress = 0.05;
+        const progressInterval = setInterval(() => {
+            const remaining = 0.95 - simProgress;
+            const increment = Math.max(0.005, remaining * 0.15);
+            simProgress = Math.min(0.95, simProgress + increment);
+            onProgress?.(simProgress);
+        }, estimatedMs / 12);
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 30000);
@@ -178,13 +205,16 @@ export const storageService = {
             body: formData,
             signal: controller.signal,
         }).catch(err => {
+            clearInterval(progressInterval);
+            clearTimeout(timeoutId);
             const domain = targetUrl.split('/')[2] || 'unknown';
             console.warn(`[StorageService] Fetch to ${targetUrl} failed:`, err);
             throw new Error(`Conn error: ${err.message} [on ${domain}]`);
         });
+        clearInterval(progressInterval);
         clearTimeout(timeoutId);
 
-        onProgress?.(0.9);
+        onProgress?.(0.97);
 
         if (!response.ok) {
             const errText = await response.text().catch(() => 'No body');
@@ -199,6 +229,7 @@ export const storageService = {
             const key = payload.key || payload.filename;
             if (key) {
                 console.log(`[StorageService] Upload confirmed with key: ${key}`);
+                onProgress?.(1);
                 return key;
             }
         }
@@ -420,9 +451,15 @@ export const storageService = {
      */
     async getSignedUrl(key: string): Promise<string | null> {
         try {
+            key = this.normalizePseudoLocalUri(key);
             if (key.startsWith('http')) {
               console.log('[StorageService] Key is already a URL, returning as is');
               return key;
+            }
+
+            if (key.startsWith('file://') || key.startsWith('content://') || key.startsWith('ph://')) {
+                const resolved = await this.resolveUri(key).catch(() => key);
+                return resolved || null;
             }
 
             const { success, data } = await safeFetchJson<{ presignedUrl: string }>(

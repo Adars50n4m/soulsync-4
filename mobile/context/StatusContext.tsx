@@ -180,6 +180,38 @@ export const StatusProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [isReady]);
 
+  // 24h auto-expiry: schedule a wake-up at the soonest expiring status so the
+  // UI drops it the instant it crosses 24h, even if the app sits open with no
+  // realtime activity. setInterval polling would either be wasteful (every
+  // minute) or sloppy; a single targeted timeout is precise and rescheduled
+  // each time the feed changes.
+  useEffect(() => {
+    if (!isReady) return;
+
+    const allStatuses = [
+      ...statusGroups.flatMap((group) => group.statuses),
+      ...myStatuses,
+    ];
+    if (allStatuses.length === 0) return;
+
+    const now = Date.now();
+    let nextExpiry = Infinity;
+    for (const status of allStatuses) {
+      const expiresAt = Number(status.expiresAt);
+      if (Number.isFinite(expiresAt) && expiresAt > now && expiresAt < nextExpiry) {
+        nextExpiry = expiresAt;
+      }
+    }
+    if (!Number.isFinite(nextExpiry)) return;
+
+    const delay = Math.max(1000, nextExpiry - now + 500);
+    const timer = setTimeout(() => {
+      void statusService.cleanupExpiredLocal().then(() => refreshStatuses());
+    }, delay);
+
+    return () => clearTimeout(timer);
+  }, [isReady, statusGroups, myStatuses, refreshStatuses]);
+
   useEffect(() => {
     if (pendingUploads.length === 0) return;
 
