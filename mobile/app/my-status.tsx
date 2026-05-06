@@ -14,6 +14,7 @@ import {
   BackHandler,
 } from 'react-native';
 import { supabase } from '../config/supabase';
+import { proxySupabaseUrl } from '../config/api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
@@ -116,7 +117,7 @@ export default function MyStatusScreen() {
   const cardDestW = screenWidth - 32;
   const hasStatuses = myStatuses.length > 0;
   const cardDestH = hasStatuses
-    ? Math.max(210, Math.min(myStatuses.length, 6) * 76 + 78)
+    ? Math.min(myStatuses.length, 6) * 76 + 90
     : 104;
 
   const heroMorphProgress = useSharedValue(hasCardMorph ? 0 : 1);
@@ -260,15 +261,15 @@ export default function MyStatusScreen() {
       return;
     }
 
-    const DISMISS_DURATION = 260;
-    const dismissEasing = Easing.bezier(0.4, 0, 0.2, 1);
+    const DISMISS_DURATION = 420;
+    const dismissEasing = Easing.bezier(0.32, 0, 0.16, 1);
 
     headerOpacity.value = withTiming(0, {
-      duration: 140,
+      duration: 200,
       easing: dismissEasing,
     });
     bgOpacity.value = withTiming(0, {
-      duration: 220,
+      duration: 360,
       easing: dismissEasing,
     });
     heroMorphProgress.value = withTiming(0, {
@@ -282,7 +283,7 @@ export default function MyStatusScreen() {
     // Safety net in case the worklet callback doesn't fire.
     setTimeout(() => {
       if (isClosingRef.current) finishDismiss();
-    }, DISMISS_DURATION + 40);
+    }, DISMISS_DURATION + 60);
   }, [bgOpacity, finishDismiss, hasCardMorph, headerOpacity, heroMorphProgress]);
 
   // Intercept hardware back + nav-stack pop so the dismiss animates instead
@@ -541,21 +542,24 @@ export default function MyStatusScreen() {
       opacityOnGestureMove
       disableRootScale
       customBackground={
-        <Animated.View style={[StyleSheet.absoluteFill, pageBackgroundStyle, { backgroundColor: '#000' }]} />
+        <Animated.View style={[StyleSheet.absoluteFill, pageBackgroundStyle]} pointerEvents="none">
+          <LinearGradient colors={['#000', '#0a0a0a']} style={StyleSheet.absoluteFill} />
+        </Animated.View>
       }
     >
       <View style={styles.container}>
-        <LinearGradient colors={['#000', '#0a0a0a']} style={StyleSheet.absoluteFill} />
         <StatusBar barStyle="light-content" />
 
         {/* Header — fades in via headerOpacity once the morph settles */}
         <Animated.View style={[styles.header, { paddingTop: insets.top + 10 }, chromeAnimatedStyle]}>
-          <Pressable onPress={() => runDismissAnimation()} style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={28} color="#fff" />
+          <Pressable onPress={() => runDismissAnimation()} style={styles.backBtn} hitSlop={10}>
+            <Ionicons name="chevron-back" size={22} color="#fff" />
           </Pressable>
-          <Text style={styles.headerTitle}>My status</Text>
-          <Pressable onPress={() => setIsMediaPickerVisible(true)} style={styles.editBtn}>
-            <Text style={styles.editText}>Add</Text>
+          <View style={styles.titlePill}>
+            <Text style={styles.headerTitle}>My status</Text>
+          </View>
+          <Pressable onPress={() => setIsMediaPickerVisible(true)} style={styles.editBtn} hitSlop={10}>
+            <Ionicons name="add" size={24} color="#fff" />
           </Pressable>
         </Animated.View>
 
@@ -585,6 +589,20 @@ export default function MyStatusScreen() {
                 style={styles.heroSourceTopGradient}
                 pointerEvents="none"
               />
+              {/* Mirror of the home pill's corner avatar (see (tabs)/index.tsx
+                  myStatusAvatarBadgeCorner). Without this, dismiss would land
+                  the morph card on a pill missing the avatar, and the avatar
+                  would pop in only after navigation.goBack — looking like a
+                  late, abrupt appearance. */}
+              <View style={styles.heroSourceAvatarCorner} pointerEvents="none">
+                <SoulAvatar
+                  uri={proxySupabaseUrl(currentUser?.avatar)}
+                  size={34}
+                  avatarType={currentUser?.avatarType as any}
+                  isOnline={false}
+                  style={styles.heroSourceAvatarGlow}
+                />
+              </View>
               <View style={styles.heroSourceLabelWrapper}>
                 <GlassView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
                 <View style={styles.heroSourceLabelContent}>
@@ -692,18 +710,45 @@ export default function MyStatusScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
-  header: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    justifyContent: 'space-between', 
-    paddingHorizontal: 20, 
-    paddingBottom: 15
+  container: { flex: 1, backgroundColor: 'transparent' },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 15,
   },
-  backBtn: { padding: 5, marginLeft: -5 },
-  editBtn: { padding: 5 },
-  editText: { color: '#fff', fontSize: 17, fontWeight: '400' },
-  headerTitle: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  backBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  titlePill: {
+    paddingHorizontal: 20,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitle: { color: '#fff', fontSize: 15, fontWeight: '700' },
   content: { flex: 1, paddingHorizontal: 16 },
   card: {
     backgroundColor: 'rgba(255,255,255,0.08)',
@@ -728,6 +773,18 @@ const styles = StyleSheet.create({
     right: 0,
     height: 60,
     zIndex: 1,
+  },
+  heroSourceAvatarCorner: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    zIndex: 10,
+  },
+  heroSourceAvatarGlow: {
+    shadowColor: '#3b82f6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 10,
   },
   heroSourceLabelWrapper: {
     position: 'absolute',

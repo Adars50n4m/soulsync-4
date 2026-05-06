@@ -4,7 +4,7 @@ import {
     ScrollView, TextInput,
     Dimensions, KeyboardAvoidingView, Platform, Keyboard
 } from 'react-native';
-import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { GestureDetector, Gesture, GestureHandlerRootView, Pressable as GHPressable } from 'react-native-gesture-handler';
 import { SoulLoader } from './ui/SoulLoader';
 import Animated, {
     useSharedValue,
@@ -24,10 +24,18 @@ import Animated, {
 } from 'react-native-reanimated';
 import { GlassView } from './ui/GlassView';
 import { MaterialIcons } from '@expo/vector-icons';
-import { getSaavnApiUrl } from '../config/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getSaavnApiBaseUrl } from '../config/api';
 import { useApp } from '../context/AppContext';
 import { Song } from '../types';
 import type { LyricLine } from '../services/LyricsService';
+
+// Cache key for the default music list. The upstream Saavn API
+// (saavn.sumit.co) is Cloudflare-fronted and rate-limits aggressively
+// (HTTP 429 / Error 1027). Caching the last-good result means a thrott-
+// led user still sees something instead of a blank "ALL MUSIC" section.
+const SONGS_CACHE_KEY = 'music-overlay-default-songs-v1';
+const SONGS_CACHE_TTL_MS = 1000 * 60 * 60 * 24; // 24h
 
 const { width, height } = Dimensions.get('window');
 
@@ -63,7 +71,7 @@ const PlayButton = ({ isPlaying, onPress, accentColor }: { isPlaying: boolean; o
     };
 
     return (
-        <Pressable
+        <GHPressable
             onPress={onPress}
             onPressIn={handlePressIn}
             onPressOut={handlePressOut}
@@ -74,7 +82,7 @@ const PlayButton = ({ isPlaying, onPress, accentColor }: { isPlaying: boolean; o
             <Animated.View style={[styles.playButton, animatedStyle]}>
                 <MaterialIcons name={isPlaying ? 'pause' : 'play-arrow'} size={44} color="#000" />
             </Animated.View>
-        </Pressable>
+        </GHPressable>
     );
 };
 
@@ -84,7 +92,7 @@ const IconButton = ({ name, size, color, onPress }: { name: any; size: number; c
     const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
     return (
-        <Pressable
+        <GHPressable
             onPress={onPress}
             onPressIn={() => { scale.value = withSpring(0.8, { damping: 15, stiffness: 400 }); }}
             onPressOut={() => { scale.value = withSpring(1, { damping: 10, stiffness: 200 }); }}
@@ -93,7 +101,7 @@ const IconButton = ({ name, size, color, onPress }: { name: any; size: number; c
             <Animated.View style={animStyle}>
                 <MaterialIcons name={name} size={size} color={color} />
             </Animated.View>
-        </Pressable>
+        </GHPressable>
     );
 };
 
@@ -190,8 +198,14 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
     const themeAccent = activeTheme?.primary || '#fff';
     const [searchResults, setSearchResults] = useState<Song[]>([]);
     const [isLoading, setIsLoading] = useState(false);
+    const [fetchError, setFetchError] = useState<'rate-limited' | 'network' | 'empty' | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [activeTab, setActiveTab] = useState<'music' | 'favorites' | 'queue'>('music');
+    const displayedSongs = activeTab === 'favorites'
+        ? musicState.favorites
+        : activeTab === 'queue'
+            ? queue
+            : searchResults;
 
     // Lyrics state lives in MusicContext now (so the chat header can subscribe).
     const lyricsScrollRef = useRef<ScrollView>(null);
@@ -214,9 +228,15 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
     const [keyboardVisible, setKeyboardVisible] = useState(false);
     const scrollViewRef = useRef<any>(null);
 
+    // Keep the modal mounted through the slide-out so the closing animation
+    // can actually play. Without this, `isOpen=false` would return null on the
+    // next render and tear the component down before the spring runs.
+    const [shouldRender, setShouldRender] = useState(isOpen);
+
     // ─── Sheet open/close animation ─────────────────────────────────────────
     useEffect(() => {
         if (isOpen) {
+            setShouldRender(true);
             // Reset scroll to top
             scrollY.value = 0;
             setTimeout(() => scrollViewRef.current?.scrollTo({ y: 0, animated: false }), 50);
@@ -230,14 +250,28 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
             });
             backdropOpacity.value = withTiming(1, { duration: 250 });
 
-            if (searchResults.length === 0) fetchSongs();
+            if (searchResults.length === 0) {
+                // Hydrate from cache immediately so the list isn't blank while
+                // the network request is in flight (or while CF is rate-limited).
+                loadCachedSongs().then((cached) => {
+                    if (cached && cached.length > 0 && searchResults.length === 0) {
+                        setSearchResults(cached);
+                    }
+                });
+                fetchSongs();
+            }
         } else {
+            backdropOpacity.value = withTiming(0, { duration: 220 });
             slideY.value = withSpring(height, {
                 damping: 28,
                 stiffness: 280,
                 mass: 0.8,
+                overshootClamping: true,
+            }, (finished) => {
+                if (finished) {
+                    runOnJS(setShouldRender)(false);
+                }
             });
-            backdropOpacity.value = withTiming(0, { duration: 220 });
         }
     }, [isOpen]);
 
@@ -262,10 +296,17 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
     });
 
     // ─── PIP interpolations (all on UI thread) ───────────────────────────────
+    // The header collapses from `expandedBaseHeight` down to the 86px mini bar.
+    // The collapse must finish at exactly `expandedBaseHeight - 86` of scroll —
+    // any other range leaves a gap (or overlap) between the mini bar and the
+    // search input below the spacer. See spacerStyle: spacer is fixed at
+    // `expandedBaseHeight`, so when scrollY = base - 86, search is visible at
+    // exactly 86px from top, which is also where the collapsed header ends.
     const headerOverlayStyle = useAnimatedStyle(() => {
-        // Collapse from current dynamic base height to just the unified mini bar (86)
-        const h = interpolate(scrollY.value, [0, 200], [expandedBaseHeight.value, 86], Extrapolation.CLAMP);
-        const bg = interpolate(scrollY.value, [0, 150], [0, 0.98], Extrapolation.CLAMP);
+        'worklet';
+        const collapseEnd = Math.max(40, expandedBaseHeight.value - 86);
+        const h = interpolate(scrollY.value, [0, collapseEnd], [expandedBaseHeight.value, 86], Extrapolation.CLAMP);
+        const bg = interpolate(scrollY.value, [0, collapseEnd * 0.75], [0, 0.98], Extrapolation.CLAMP);
         return {
             height: h,
             backgroundColor: `rgba(10,10,10,${bg})`,
@@ -273,19 +314,25 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
     });
 
     const fullPlayerStyle = useAnimatedStyle(() => {
-        const opacity = interpolate(scrollY.value, [0, 80], [1, 0], Extrapolation.CLAMP);
-        const scale = interpolate(scrollY.value, [0, 200], [1, 0.45], Extrapolation.CLAMP);
+        'worklet';
+        const collapseEnd = Math.max(40, expandedBaseHeight.value - 86);
+        const opacity = interpolate(scrollY.value, [0, collapseEnd * 0.4], [1, 0], Extrapolation.CLAMP);
+        const scale = interpolate(scrollY.value, [0, collapseEnd], [1, 0.45], Extrapolation.CLAMP);
         return { opacity, transform: [{ scale }] };
     });
 
     const miniPlayerStyle = useAnimatedStyle(() => {
-        const opacity = interpolate(scrollY.value, [100, 160], [0, 1], Extrapolation.CLAMP);
+        'worklet';
+        const collapseEnd = Math.max(40, expandedBaseHeight.value - 86);
+        const opacity = interpolate(scrollY.value, [collapseEnd * 0.5, collapseEnd * 0.8], [0, 1], Extrapolation.CLAMP);
         return { opacity };
     });
 
     // Drag handle fades OUT as mini player fades IN — they merge into one bar
     const dragHandleOpacity = useAnimatedStyle(() => {
-        const opacity = interpolate(scrollY.value, [60, 130], [1, 0], Extrapolation.CLAMP);
+        'worklet';
+        const collapseEnd = Math.max(40, expandedBaseHeight.value - 86);
+        const opacity = interpolate(scrollY.value, [collapseEnd * 0.3, collapseEnd * 0.65], [1, 0], Extrapolation.CLAMP);
         return { opacity };
     });
 
@@ -340,15 +387,101 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
         }
     }, [musicState.currentSong]);
 
+    useEffect(() => {
+        let cancelled = false;
+        const syncPosition = async () => {
+            if (!isOpen || !musicState.currentSong) return;
+            const pos = await getPlaybackPosition();
+            if (!cancelled) {
+                setPosition(pos / 1000);
+                setSeekPosition(pos / 1000);
+            }
+        };
+
+        void syncPosition();
+        return () => { cancelled = true; };
+    }, [getPlaybackPosition, isOpen, musicState.currentSong?.id]);
+
     // ─── Song fetch ──────────────────────────────────────────────────────────
-    const fetchSongs = async (query = 'Top Hits') => {
-        setIsLoading(true);
+    const loadCachedSongs = async (): Promise<Song[] | null> => {
         try {
-            const apiUrl = getSaavnApiUrl();
-            const cleanBaseUrl = apiUrl.replace(/\/$/, '');
-            const baseApiUrl = cleanBaseUrl.endsWith('/api') ? cleanBaseUrl : `${cleanBaseUrl}/api`;
-            const response = await fetch(`${baseApiUrl}/search/songs?query=${encodeURIComponent(query)}&limit=50`);
-            const data = await response.json() as any;
+            const raw = await AsyncStorage.getItem(SONGS_CACHE_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed?.songs || !Array.isArray(parsed.songs)) return null;
+            if (Date.now() - (parsed.timestamp || 0) > SONGS_CACHE_TTL_MS) return null;
+            return parsed.songs as Song[];
+        } catch {
+            return null;
+        }
+    };
+
+    const fetchSongs = async (query = 'Hindi Trending Top 20', isDefault = true) => {
+        setIsLoading(true);
+        setFetchError(null);
+        try {
+            const baseApiUrl = getSaavnApiBaseUrl();
+            if (!baseApiUrl) {
+                console.warn('[MusicPlayerOverlay] No Saavn API URL configured.');
+                setFetchError('network');
+                setSearchResults([]);
+                return;
+            }
+            const url = `${baseApiUrl}/search/songs?query=${encodeURIComponent(query)}&limit=50`;
+            // Explicit headers — saavn.sumit is Cloudflare-fronted; default RN
+            // User-Agent sometimes gets a challenge page. Even with these, CF
+            // rate limits with 429 (Error 1027) when the host is hot, which
+            // we handle explicitly below.
+            const response = await fetch(url, {
+                headers: {
+                    'Accept': 'application/json',
+                    'User-Agent': `Soul/1.0 (${Platform.OS})`,
+                },
+            });
+            const text = await response.text();
+
+            // Cloudflare 429 — fall back to cached songs so the list isn't blank.
+            if (response.status === 429) {
+                console.warn('[MusicPlayerOverlay] Saavn rate-limited (429).');
+                const cached = isDefault ? await loadCachedSongs() : null;
+                if (cached && cached.length > 0) {
+                    console.log(`[MusicPlayerOverlay] Using ${cached.length} cached songs.`);
+                    setSearchResults(cached);
+                    setFetchError(null);
+                } else {
+                    setSearchResults([]);
+                    setFetchError('rate-limited');
+                }
+                return;
+            }
+
+            if (!response.ok) {
+                console.warn(`[MusicPlayerOverlay] HTTP ${response.status} from Saavn:`, text.slice(0, 200));
+                const cached = isDefault ? await loadCachedSongs() : null;
+                if (cached && cached.length > 0) {
+                    setSearchResults(cached);
+                } else {
+                    setSearchResults([]);
+                    setFetchError('network');
+                }
+                return;
+            }
+
+            let data: any;
+            try {
+                data = JSON.parse(text);
+            } catch {
+                console.warn('[MusicPlayerOverlay] Non-JSON response (likely CF challenge):', text.slice(0, 200));
+                const cached = isDefault ? await loadCachedSongs() : null;
+                if (cached && cached.length > 0) {
+                    setSearchResults(cached);
+                } else {
+                    setSearchResults([]);
+                    setFetchError('rate-limited');
+                }
+                return;
+            }
+
             if (data?.success && data?.data?.results) {
                 const songs = data.data.results.map((s: any) => ({
                     id: s.id,
@@ -358,16 +491,36 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                     url: s.downloadUrl?.[s.downloadUrl.length - 1]?.url || '',
                     duration: s.duration || 0,
                 })).filter((s: Song) => s.url);
+                console.log(`[MusicPlayerOverlay] Loaded ${songs.length} songs for "${query}"`);
                 setSearchResults(songs);
+                if (isDefault && songs.length > 0) {
+                    AsyncStorage.setItem(SONGS_CACHE_KEY, JSON.stringify({
+                        songs,
+                        timestamp: Date.now(),
+                    })).catch((e) => console.warn('[MusicPlayerOverlay] Cache write failed:', e));
+                }
+            } else {
+                console.warn('[MusicPlayerOverlay] API returned no results. Shape:',
+                    JSON.stringify({ success: data?.success, hasData: !!data?.data, hasResults: !!data?.data?.results }));
+                setSearchResults([]);
+                setFetchError('empty');
             }
         } catch (error) {
-            console.log('Failed to fetch songs:', error);
+            console.warn('[MusicPlayerOverlay] Failed to fetch songs:', error);
+            const cached = isDefault ? await loadCachedSongs() : null;
+            if (cached && cached.length > 0) {
+                setSearchResults(cached);
+            } else {
+                setSearchResults([]);
+                setFetchError('network');
+            }
+        } finally {
+            setIsLoading(false);
         }
-        setIsLoading(false);
     };
 
     const handleSearch = () => {
-        if (searchQuery.trim()) fetchSongs(searchQuery);
+        if (searchQuery.trim()) fetchSongs(searchQuery, false);
     };
 
     const isFavorite = (song: Song) => musicState.favorites.some((s: any) => s.id === song.id);
@@ -392,23 +545,23 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
         // back while the native player completes the seek.
         setSeekPosition(targetSec);
         setPosition(targetSec);
+        
+        // Ensure shared value is also updated immediately for UI thread consistency
+        scrubPercent.value = duration > 0 ? Math.min(targetSec / duration, 1) : 0;
 
         if (seekSettleTimer.current) clearTimeout(seekSettleTimer.current);
 
-        try {
-            await seekTo(targetSec * 1000);
-        } catch (e) {
-            console.warn('[MusicPlayerOverlay] seek failed:', e);
-        }
+        // Fire and forget seek to avoid blocking UI thread
+        seekTo(targetSec * 1000).catch(e => console.warn('[MusicPlayerOverlay] seek failed:', e));
 
-        // iOS reports the old position for ~150–250ms after seekTo() resolves.
-        // Keep scrub flags up so the polling loop doesn't clobber the new value.
+        // native player takes some time to report the new position. 
+        // 800ms is safer for jittery networks/older devices.
         seekSettleTimer.current = setTimeout(() => {
             setIsScrubbing(false);
             setIsSeeking(false);
             seekSettleTimer.current = null;
-        }, 300);
-    }, [seekTo, setIsSeeking]);
+        }, 800);
+    }, [seekTo, setIsSeeking, duration]);
 
     const beginScrub = useCallback(() => {
         if (seekSettleTimer.current) {
@@ -486,12 +639,12 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
 
     const currentDisplayPosition = isScrubbing ? seekPosition : position;
 
-    if (!isOpen) return null;
+    if (!shouldRender) return null;
 
     return (
         <Modal
             transparent
-            visible={isOpen}
+            visible={shouldRender}
             animationType="none"
             onRequestClose={onClose}
             statusBarTranslucent={true}
@@ -563,9 +716,45 @@ export const MusicPlayerOverlay: React.FC<MusicPlayerOverlayProps> = ({
                                     </View>
 
                                     {isLoading ? (
-                                        <SoulLoader size={80} />
+                                        <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+                                            <SoulLoader size={80} />
+                                        </View>
+                                    ) : displayedSongs.length === 0 ? (
+                                        <View style={{ alignItems: 'center', paddingVertical: 40, paddingHorizontal: 24 }}>
+                                            <MaterialIcons
+                                                name={activeTab === 'favorites' ? 'favorite-border' : activeTab === 'queue' ? 'queue-music' : fetchError === 'rate-limited' ? 'cloud-off' : 'music-off'}
+                                                size={36}
+                                                color="rgba(255,255,255,0.18)"
+                                            />
+                                            <Text style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13, marginTop: 12, fontWeight: '600', textAlign: 'center' }}>
+                                                {activeTab === 'favorites'
+                                                    ? 'No favorites yet'
+                                                    : activeTab === 'queue'
+                                                        ? 'Queue is empty'
+                                                        : searchQuery
+                                                            ? `No results for "${searchQuery}"`
+                                                            : fetchError === 'rate-limited'
+                                                                ? 'Music service is busy'
+                                                                : fetchError === 'network'
+                                                                    ? 'Network error'
+                                                                    : 'No songs available'}
+                                            </Text>
+                                            {activeTab === 'music' && !searchQuery && fetchError === 'rate-limited' && (
+                                                <Text style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11, marginTop: 6, textAlign: 'center', lineHeight: 16 }}>
+                                                    The Saavn API is temporarily rate-limited. Try again in a minute.
+                                                </Text>
+                                            )}
+                                            {activeTab === 'music' && !searchQuery && (
+                                                <Pressable
+                                                    onPress={() => fetchSongs()}
+                                                    style={{ marginTop: 16, paddingVertical: 9, paddingHorizontal: 20, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.08)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)' }}
+                                                >
+                                                    <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700', letterSpacing: 0.5 }}>RETRY</Text>
+                                                </Pressable>
+                                            )}
+                                        </View>
                                     ) : (
-                                        (activeTab === 'queue' ? queue : searchResults).map((song: Song) => (
+                                        displayedSongs.map((song: Song) => (
                                             <SongCard
                                                 key={song.id}
                                                 song={song}
@@ -1015,11 +1204,8 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     progressBarTouchArea: {
-        // Larger tap target. marginVertical compensates so visible layout doesn't shift,
-        // but the gesture detector now claims a 36px-tall strip — defeating the
-        // play button's hit slop that sits just below.
-        height: 36,
-        marginVertical: -8,
+        height: 20, // Tighter touch target (was 36) to prevent stealing button taps
+        marginVertical: 0,
         justifyContent: 'center',
         zIndex: 50,
     },
