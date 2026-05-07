@@ -395,8 +395,6 @@ export const ChatStyles = StyleSheet.create({
         alignItems: 'center',
         paddingVertical: 14,
         paddingHorizontal: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.03)',
         gap: 14,
     },
     contextActionText: {

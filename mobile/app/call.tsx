@@ -797,16 +797,23 @@ export default function CallScreen() {
                                         </View>
                                     ) : (
                                         <View style={styles.controlsRow}>
+                                            <Pressable
+                                                style={[styles.controlBtn, showMoreOptions && styles.controlBtnActive]}
+                                                onPress={() => setShowMoreOptions(prev => !prev)}
+                                            >
+                                                <MaterialIcons name="more-vert" size={24} color={showMoreOptions ? "#000" : "white"} />
+                                            </Pressable>
+
                                             <Pressable style={[styles.controlBtn, activeCall?.isMuted && styles.controlBtnActive]} onPress={handleToggleMute}>
                                                 <Ionicons name={activeCall?.isMuted ? "mic-off" : "mic"} size={24} color={activeCall?.isMuted ? "#000" : "white"} />
                                             </Pressable>
-                                            
+
                                             <Pressable style={[styles.controlBtn, isSpeaker && styles.controlBtnActive]} onPress={handleToggleSpeaker}>
                                                 <Ionicons name={isSpeaker ? "volume-high" : "volume-low"} size={24} color={isSpeaker ? "#000" : "white"} />
                                             </Pressable>
-                                            
-                                            <Pressable 
-                                                style={[styles.controlBtn, !isVideo && { backgroundColor: 'rgba(255,255,255,0.05)' }]} 
+
+                                            <Pressable
+                                                style={[styles.controlBtn, !isVideo && { backgroundColor: 'rgba(255,255,255,0.05)' }]}
                                                 onPress={handleToggleVideo}
                                             >
                                                 <MaterialIcons name={isVideo ? (activeCall?.isVideoOff ? "videocam-off" : "videocam") : "videocam"} size={24} color="white" />
@@ -816,13 +823,6 @@ export default function CallScreen() {
                                                 <MaterialIcons name="picture-in-picture" size={24} color="white" />
                                             </Pressable>
 
-                                            <Pressable 
-                                                style={[styles.controlBtn, showMoreOptions && styles.controlBtnActive]} 
-                                                onPress={() => setShowMoreOptions(prev => !prev)}
-                                            >
-                                                <MaterialIcons name="more-vert" size={24} color={showMoreOptions ? "#000" : "white"} />
-                                            </Pressable>
-                                            
                                             <Pressable style={[styles.controlBtn, styles.endCallBtn]} onPress={handleEndCall}>
                                                 <MaterialIcons name="call-end" size={28} color="white" />
                                             </Pressable>
@@ -964,7 +964,7 @@ const styles = StyleSheet.create({
     participantNameText: { color: 'white', fontSize: 12 },
     tilePlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#1A1A20' },
     tileName: { color: 'white', marginTop: 10, fontSize: 14, opacity: 0.7 },
-    moreMenuContainer: { position: 'absolute', right: 20, width: 180, zIndex: 1000 },
+    moreMenuContainer: { position: 'absolute', left: 20, width: 180, zIndex: 1000 },
     moreMenuContent: { borderRadius: 20, overflow: 'hidden', padding: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
     moreMenuItem: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 12 },
     moreMenuIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' },

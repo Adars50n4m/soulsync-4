@@ -55,9 +55,10 @@ const MessageContextMenu = ({
     }, [visible, layout, progress]);
 
     const handleClose = () => {
-        progress.value = withTiming(0, {
-            duration: 150,
-            easing: Easing.out(Easing.quad)
+        progress.value = withSpring(0, {
+            damping: 25,
+            stiffness: 300,
+            mass: 1,
         }, (finished) => {
             if (finished && onClose) {
                 runOnJS(onClose)();
@@ -225,10 +226,27 @@ const MessageContextMenu = ({
                                         <MaterialIcons name="check-circle-outline" size={20} color="#fff" />
                                         <Text style={ChatStyles.contextActionText}>Select</Text>
                                     </Pressable>
-                                    <Pressable style={[ChatStyles.contextActionBtn, { borderBottomWidth: 0 }]} onPress={() => { onAction('delete'); handleClose(); }}>
+                                    <Pressable style={ChatStyles.contextActionBtn} onPress={() => { 
+                                        const msgTime = new Date(msg.timestamp).getTime();
+                                        const now = new Date().getTime();
+                                        const diffMinutes = (now - msgTime) / (1000 * 60);
+                                        const canDeleteForEveryone = (isMe || isAdmin) && diffMinutes <= 5;
+                                        onAction(canDeleteForEveryone ? 'delete' : 'deleteForMe'); 
+                                        handleClose(); 
+                                    }}>
                                         <MaterialIcons name="delete-outline" size={20} color="#ff4444" />
                                         <Text style={[ChatStyles.contextActionText, { color: '#ff4444' }]}>
-                                            {isMe || isAdmin ? (isGroupedMedia ? `Delete for Everyone (${mediaItems.length})` : 'Delete for Everyone') : 'Delete for Me'}
+                                            {(() => {
+                                                const msgTime = new Date(msg.timestamp).getTime();
+                                                const now = new Date().getTime();
+                                                const diffMinutes = (now - msgTime) / (1000 * 60);
+                                                const canDeleteForEveryone = (isMe || isAdmin) && diffMinutes <= 5;
+                                                
+                                                if (canDeleteForEveryone) {
+                                                    return isGroupedMedia ? `Delete for Everyone (${mediaItems.length})` : 'Delete for Everyone';
+                                                }
+                                                return 'Delete for Me';
+                                            })()}
                                         </Text>
                                     </Pressable>
                                 </ScrollView>
